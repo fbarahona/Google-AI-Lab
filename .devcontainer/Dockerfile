@@ -35,7 +35,9 @@ ENV NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/Kyndryl-SSL-Inspection.
 # -------------------------------------------------------------------
 # 2. Install pinned uv and uvx standalone binaries (multi-arch)
 # -------------------------------------------------------------------
-COPY --from=ghcr.io/astral-sh/uv:0.12.23 /uv /uvx /usr/local/bin/
+RUN python -m pip install --no-cache-dir "uv==${UV_VERSION}" \
+    && uv --version \
+    && uvx --version
 
 # -------------------------------------------------------------------
 # 3. Install system dependencies and configure repositories
