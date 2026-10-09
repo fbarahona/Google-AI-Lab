@@ -1,0 +1,80 @@
+{
+  "name": "Google AI Labs Sandbox",
+
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "..",
+    "args": {
+      "UV_VERSION": "0.12.23",
+      "NODE_MAJOR": "22",
+      "GEMINI_CLI_VERSION": "latest"
+    }
+  },
+
+  // Ensure host mount targets exist prior to bind mounting
+  "initializeCommand": "mkdir -p \"${localEnv:HOME}/.config/gcloud\" \"${localEnv:HOME}/.gemini\" && touch \"${localEnv:HOME}/.gitconfig\"",
+
+  "mounts": [
+    // Persistent cache for uv, pip and npm downloads
+    "source=vscode-ai-pkg-cache,target=/home/vscode/.cache,type=volume",
+
+    // Google Cloud CLI configuration and authentication from WSL/Host
+    "source=${localEnv:HOME}/.config/gcloud,target=/home/vscode/.config/gcloud,type=bind,consistency=cached",
+
+    // Gemini CLI configuration and authentication from WSL/Host
+    "source=${localEnv:HOME}/.gemini,target=/home/vscode/.gemini,type=bind,consistency=cached",
+
+    // Reuse host Git identity and configuration as read-only
+    "source=${localEnv:HOME}/.gitconfig,target=/home/vscode/.gitconfig,type=bind,readonly"
+  ],
+
+  "containerEnv": {
+    "CLOUDSDK_CONFIG": "/home/vscode/.config/gcloud",
+    "GOOGLE_APPLICATION_CREDENTIALS": "/home/vscode/.config/gcloud/application_default_credentials.json",
+    "PIP_CACHE_DIR": "/home/vscode/.cache/pip",
+    "UV_CACHE_DIR": "/home/vscode/.cache/uv",
+    "UV_SYSTEM_CERTS": "true",
+    "UV_LINK_MODE": "copy",
+    "npm_config_cache": "/home/vscode/.cache/npm",
+    "REQUESTS_CA_BUNDLE": "/etc/ssl/certs/ca-certificates.crt",
+    "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt"
+  },
+
+  "remoteEnv": {
+    "GEMINI_API_KEY": "${localEnv:GEMINI_API_KEY}"
+  },
+
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.terminal.activateEnvironment": false,
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "terraform.languageServer.enable": true,
+        "jupyter.askForKernelRestart": false,
+        "jupyter.interactiveWindow.textEditor.executeSelection": true,
+        "notebook.lineNumbers": "on"
+      },
+
+      "extensions": [
+        "google.google-antigravity",
+        "googlecloudtools.datacloud",
+        "HashiCorp.terraform",
+        "ms-python.debugpy",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.vscode-python-envs",
+        "ms-toolsai.jupyter",
+        "ms-toolsai.jupyter-keymap",
+        "ms-toolsai.jupyter-renderers",
+        "ms-toolsai.vscode-jupyter-cell-tags",
+        "GitHub.copilot",
+        "GitHub.copilot-chat"
+      ]
+    }
+  },
+
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+
+  "remoteUser": "vscode"
+}
