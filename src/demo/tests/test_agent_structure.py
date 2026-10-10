@@ -1,14 +1,12 @@
 """
 Unit tests for ADK Multi-Agent Architecture and Configurations.
 """
-import pytest
-from src.demo.adk_agent.agent import (
-    google_search_agent,
+from adk_agent.agent import (
     bq_investigation_agent,
-    visual_analysis_agent,
+    google_search_agent,
+    root_agent,
     soc_ticketing_agent,
-    orchestrator_agent,
-    root_agent
+    visual_analysis_agent,
 )
 
 
@@ -49,4 +47,3 @@ def test_orchestrator_subagents():
     assert root_agent.name in ["SecurityInvestigationOrchestrator", "WorkflowAgent"]
     # Check that root agent has sub-agents
     assert len(root_agent.sub_agents) >= 2
-

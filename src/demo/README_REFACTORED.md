@@ -99,6 +99,56 @@ python -m src.demo.data_generator.log_generator --mode threat --threat-type fals
 ---
 
 ### 3. Google ADK Multi-Agent Architecture (`src/demo/adk_agent/`)
+
+![ADK Multi-Agent and Tool Hierarchy](/home/vscode/.gemini/antigravity/brain/b077e7df-f593-4036-a378-4aeb4e0be421/.user_uploaded/media_1791648641516_dc6d99df.png)
+
+```mermaid
+graph TD
+    classDef orchestrator fill:#1e293b,stroke:#3b82f6,stroke-width:2px,color:#f8fafc;
+    classDef agent fill:#0f172a,stroke:#60a5fa,stroke-width:2px,color:#f8fafc;
+    classDef tool fill:#1e1e38,stroke:#94a3b8,stroke-dasharray: 4 4,stroke-width:1px,color:#cbd5e1;
+
+    Orchestrator["✦ SecurityInvestigationOrchestrator"]:::orchestrator
+    Team["✦ InvestigationTeam (ParallelOrchestrator)"]:::orchestrator
+    TicketingAgent["✦ soc_ticketing_agent"]:::agent
+
+    SearchAgent["✦ google_search_agent"]:::agent
+    BQAgent["✦ bq_investigation_agent"]:::agent
+    VisualAgent["✦ visual_analysis_agent"]:::agent
+
+    ToolSearch["🔧 google_search"]:::tool
+    ToolBQQuery["🔧 build_event_logs_query"]:::tool
+    ToolBQSet["🔧 BigQueryToolset"]:::tool
+    ToolVisAnalysis["🔧 get_visual_analysis_for_user"]:::tool
+    ToolGCSUri["🔧 get_gcs_uri_for_user"]:::tool
+    ToolSignedUrl["🔧 generate_signed_url"]:::tool
+
+    ToolDispatch["🔧 dispatch_to_soc_ticketing_system"]:::tool
+    ToolFP["🔧 log_false_positive"]:::tool
+    ToolTicketId["🔧 create_rich_ticket_id"]:::tool
+    ToolEscalate["🔧 escalate_to_human"]:::tool
+
+    Orchestrator --> Team
+    Orchestrator --> TicketingAgent
+
+    Team --> SearchAgent
+    Team --> BQAgent
+    Team --> VisualAgent
+
+    SearchAgent -.-> ToolSearch
+    BQAgent -.-> ToolBQQuery
+    BQAgent -.-> ToolBQSet
+    VisualAgent -.-> ToolVisAnalysis
+    VisualAgent -.-> ToolGCSUri
+    VisualAgent -.-> ToolSignedUrl
+
+    TicketingAgent -.-> ToolSignedUrl
+    TicketingAgent -.-> ToolDispatch
+    TicketingAgent -.-> ToolFP
+    TicketingAgent -.-> ToolTicketId
+    TicketingAgent -.-> ToolEscalate
+```
+
 Orchestrator coordinating 4 specialized sub-agents:
 1. **`google_search_agent`**
    - **Description:** *"Agent that researches IP addresses from security alerts."*
@@ -114,19 +164,19 @@ Orchestrator coordinating 4 specialized sub-agents:
    - **Function:** Executes Gemini multimodal OCR on workstation screenshots and produces secure signed preview links.
 4. **`soc_ticketing_agent`**
    - **Description:** *"Agent that consolidates findings, decides on best action to take, and passes tickets to the SOC ticketing system."*
-   - **Tools:** `dispatch_to_soc_ticketing_system`, `log_false_positive`, `create_rich_ticket_id`
+   - **Tools:** `dispatch_to_soc_ticketing_system`, `log_false_positive`, `create_rich_ticket_id`, `escalate_to_human`, `generate_signed_url`
    - **Function:** Synthesizes investigation evidence and dispatches formal tickets to the SOC ticketing system.
 
 ---
 
-### 4. BigQuery Threat Scanner Service (`src/demo/adk_agent/threat_scanner.py`)
+### 4. BigQuery Threat Scanner Service (`adk_agent/threat_scanner.py`)
 Active daemon reading BigQuery searching for new threat events:
 ```bash
 # Run a single scan:
-python -m src.demo.adk_agent.threat_scanner --once
+python -m adk_agent.threat_scanner --once
 
 # Run continuous background daemon:
-python -m src.demo.adk_agent.threat_scanner --daemon --interval 30
+python -m adk_agent.threat_scanner --daemon --interval 30
 ```
 
 ---

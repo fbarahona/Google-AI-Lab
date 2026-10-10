@@ -1,169 +1,149 @@
-# Google AI Labs Sandbox — Project Guidance & Instructions
+# Google AI Labs Sandbox — Project Guidance & Coding Agent Guide
 
 ## Project Overview
 
-**Google AI Labs Sandbox** is a dedicated development environment built for architecting, prototyping, evaluating, and deploying AI agents on Google Cloud. It combines the **Google Agent Development Kit (ADK)** and **Google Agents CLI (`agents-cli`)** with **Gemini API / Vertex AI**, containerized inside a Debian-based devcontainer preconfigured for enterprise environments.
+**Google AI Labs Sandbox** is a development environment for architecting, prototyping, evaluating, and deploying AI agents on Google Cloud. It combines the **Google Agent Development Kit (ADK)** and **Google Agents CLI (`agents-cli`)** with **Gemini models on Vertex AI / Gemini API**, containerized inside an enterprise devcontainer.
 
-### Core Technologies
-- **Python Runtime:** Python 3.12 (Debian Bookworm) managed via `uv` (v0.12+)
-- **Google Agent Development Kit (`google-adk` >= 2.11.0):** Framework for defining multi-agent systems, tools, memory, and orchestration workflows.
-- **Google Agents CLI (`google-agents-cli` ~= 1.9.0):** CLI (`agents-cli`) supporting the full agent lifecycle (scaffolding, testing, LLM-as-judge evaluation, deployment, and publishing).
-- **Google Gen AI SDK (`google-genai` >= 2.23.0):** Next-gen client for Gemini models on Google Cloud Vertex AI and Gemini Developer API.
-- **Google Auth (`google-auth` >= 2.58.0):** Application Default Credentials (ADC) and IAM integration.
-- **Interactive Notebooks & Jupyter:** `ipykernel` (>= 6.29.0) and `ipywidgets` (>= 8.1.0) with preconfigured VS Code Jupyter integration and pre-registered kernel spec (`Python 3.12 (Google AI Sandbox)`).
-- **Unit Testing Framework:** `pytest` (>= 8.0.0) for deterministic tool and schema testing.
-- **Infrastructure & Cloud Tooling:** `terraform` (v1.16+), `gcloud` (Google Cloud SDK), `nodejs` (v22), `@google/gemini-cli`.
-- **Enterprise Network Support:** Kyndryl corporate root CA integration for SSL inspection across OS, Node.js, Python, and `uv`.
-
----
-
-## Environment Setup & Authentication
-
-The project runs within a Visual Studio Code Dev Container (`.devcontainer/devcontainer.json`).
-
-### 1. Credentials & Authentication
-The devcontainer automatically mounts host credentials into the container with host-safety protections (`initializeCommand` prevents directory creation for missing files):
-- **Google Cloud ADC:** `${HOME}/.config/gcloud` mounted to `/home/vscode/.config/gcloud`
-- **Gemini CLI Config:** `${HOME}/.gemini` mounted to `/home/vscode/.gemini`
-- **Git Config:** `${HOME}/.gitconfig` mounted read-only
-
-If credentials need refreshing or initial authentication:
-```bash
-# Authenticate Google Cloud and generate Application Default Credentials
-gcloud auth login
-gcloud auth application-default login
-
-# Set default GCP project
-gcloud config set project <PROJECT_ID>
-```
-
-Ensure `GEMINI_API_KEY` is exported if calling the Gemini Developer API directly outside Vertex AI:
-```bash
-export GEMINI_API_KEY="<your-api-key>"
-```
-
-### 2. Corporate CA Certificate Handling & Performance
-Enterprise SSL inspection uses `/usr/local/share/ca-certificates/Kyndryl-SSL-Inspection.crt`.
-- `UV_SYSTEM_CERTS=true` is set in the container environment.
-- `UV_LINK_MODE=copy` is configured to ensure optimal package copying across the cache volume and container filesystem boundaries.
-- Non-root user `vscode` owns `/usr/local`, allowing passwordless `uv pip install --system`.
-- Always include `--system-certs` when invoking standalone `uvx` commands:
-  ```bash
-  uvx --system-certs google-agents-cli setup
-  ```
+### Featured Demonstration: Real-Time Cyber Security AI
+The project features an end-to-end near real-time cybersecurity threat detection, multi-agent AI investigation, and SOC response system:
+- **ADK Multi-Agent Team (`adk_agent/`):** Autonomous multi-agent orchestrator coordinating 4 specialized agents:
+  1. `google_search_agent`: OSINT threat intel on external public IPs.
+  2. `bq_investigation_agent`: 24-hour behavioral profile queries in BigQuery.
+  3. `visual_analysis_agent`: Gemini multimodal vision OCR on user desktop screenshots.
+  4. `soc_ticketing_agent`: Incident synthesis and dispatch to SOC ticketing.
+- **Threat Scanner (`adk_agent/threat_scanner.py`):** Background daemon scanning BigQuery for newly emerging threat events and triggering agent investigations.
+- **Synthetic Log Generator (`src/demo/data_generator/`):** Generates access and network logs with ad-hoc threat injection.
+- **Data Engineering Pipelines (`src/demo/data_pipeline/`):** Ingestion pipelines, GCS loader, and BigQuery Continuous Queries.
+- **SOC Ticketing System & Console (`src/demo/soc_ticketing/`):** Persistent incident queue and interactive Streamlit console for analyst triage.
+- **Zero-Cloud Local Runner (`src/demo/local_runner.py`):** End-to-end local simulation without requiring cloud infrastructure.
+- **Terraform IaC (`src/demo/terraform/`):** Infrastructure templates for Google Cloud (project `oso-ai-503519`).
 
 ---
 
-## Common Development Commands
-
-### Dependency Management (uv & pip)
-Always use `uv` for fast, deterministic dependency resolution:
-```bash
-# Install dependencies from requirements.txt to system environment
-uv pip install --system --system-certs -r requirements.txt
-
-# Run Python scripts with uv
-uv run python <script.py>
-
-# Verify Python package integrity
-python -m pip check
-```
-
-### Interactive Notebooks (Jupyter in VS Code)
-The container includes complete out-of-the-box support for Jupyter notebooks (`.ipynb`):
-- **Kernel Selection:** When opening a notebook in VS Code, select the kernel named **`Python 3.12 (Google AI Sandbox)`** (or `/usr/local/bin/python`).
-- **Interactive Widgets:** `ipywidgets` is pre-installed for rich progress bars (`tqdm`), interactive parameter widgets, and ADK tool visualization.
-- **Re-registering Kernel (if needed):**
-  ```bash
-  python -m ipykernel install --user --name "google-ai-sandbox" --display-name "Python 3.12 (Google AI Sandbox)"
-  ```
-
-### Unit Testing
-Run deterministic tests via `pytest`:
-```bash
-uv run pytest
-# or
-pytest
-```
-
-### Google Agents CLI (`agents-cli`) Workflow
-
-The primary development interface for ADK agents is `agents-cli`:
-
-| Task | Command | Description |
-|------|---------|-------------|
-| **Inspect Setup** | `agents-cli info` | Shows CLI version, install path, and active configuration |
-| **Scaffold Project** | `agents-cli scaffold create <agent_name>` | Generates a new agent project with eval and deployment scaffolding |
-| **Enhance Code** | `agents-cli scaffold enhance .` | Adds agents-cli config, eval boilerplate, or deployment targets to an existing folder |
-| **Smoke Test** | `agents-cli run "Your test prompt"` | Executes a prompt through the local agent in terminal |
-| **Interactive Test** | `agents-cli playground` | Launches a local web playground for interactive chat and debugging |
-| **Evaluate Behavior**| `agents-cli eval run` | Runs LLM-as-judge evaluation against test datasets |
-| **Deploy Agent** | `agents-cli deploy` | Deploys agent to configured target (Agent Runtime, Cloud Run, GKE) |
-| **Publish Agent** | `agents-cli publish gemini-enterprise` | Registers agent with Gemini Enterprise |
-
-### Infrastructure as Code (Terraform)
-For recipes and agents utilizing custom Google Cloud infrastructure (e.g., Cloud SQL, Cloud Storage, Agent Platform):
-```bash
-terraform init
-terraform plan
-terraform apply
-```
-
----
-
-## Agent Development Lifecycle & Architecture Guidelines
-
-When developing agents in this workspace, follow the standardized 7-phase lifecycle:
-
-### Phase 0: Design & Specification
-- Define core agent goals, required external APIs/tools, and safety guardrails.
-- Write or inspect `.agents-cli-spec.md` before generating code.
-
-### Phase 1: Reference Recipes
-- Before implementing custom features (retrieval/RAG, isolated sandboxes, cross-session memory, human-in-the-loop approval gates), inspect ADK recipes. Avoid reinventing complex patterns already available in ADK reference implementations.
-
-### Phase 2: Scaffolding
-- Always use `agents-cli scaffold create <name>` or `agents-cli scaffold enhance .` before writing custom agent files. Scaffolding sets up standard configs, evaluation suites, and CI/CD targets.
-
-### Phase 3: Building (ADK Patterns)
-- Use `google-adk` agents, tools, and callbacks.
-- **Code Preservation:** Surgically modify only the targeted functions or prompts requested by the user. Do not alter surrounding configurations, model names, or comments unintentionally.
-- **Model Selection:**
-  - Never alter existing agent model specifications unless requested.
-  - When querying model availability on Vertex AI:
-    ```bash
-    uv run --with google-genai python -c "
-    from google import genai
-    client = genai.Client(vertexai=True, location='global')
-    for m in client.models.list(): print(m.name)
-    "
-    ```
-
-### Phase 4: Evaluation vs. Unit Testing
-- **Unit Tests (`pytest`):** Strictly test deterministic code (tools, helper functions, schemas, API contracts, data parsing).
-  ```bash
-  uv run pytest
-  ```
-- **Agent Behavioral Testing (`agents-cli eval`):** Never write unit tests that assert non-deterministic LLM strings or phrasing. Behavioral checks, safety boundaries, persona stability, and tool trajectories belong in evaluation datasets graded by `agents-cli eval run`.
-
-### Phase 5 & Beyond: Deployment & Observability
-- Configure deployment targets (Agent Runtime, Cloud Run, GKE) using `agents-cli scaffold enhance . --deployment-target <target>`.
-- Use Cloud Trace and BigQuery Agent Analytics for production observability.
-
----
-
-## Directory Structure
+## Project Structure
 
 ```
 /workspaces/Google/
-├── .devcontainer/              # Dev container definition & provisioning
-│   ├── Dockerfile              # Python 3.12, Node 22, Terraform, gcloud, certificates
-│   ├── devcontainer.json       # Extensions, mounts, environment variables
-│   ├── post-create.sh          # Post-creation setup (caches, pip install, agents-cli)
-│   └── Kyndryl-SSL-Inspection.cer # Enterprise CA certificate
-├── .env                        # Local environment variables (ignored by git)
-├── .gitignore                  # Git ignore rules
-├── requirements.txt            # Base Python dependencies (ADK, agents-cli, Jupyter, pytest)
-├── GEMINI.md                   # Agent and project context instructions
-└── README.md                   # Project documentation
+├── adk_agent/                      # Canonical ADK Multi-Agent package
+│   ├── agent.py                    # Multi-agent orchestrator & 4 sub-agents
+│   ├── tools.py                    # Tools (BigQuery, OSINT, Vision OCR, SOC ticketing)
+│   ├── threat_scanner.py           # BigQuery active anomaly scanning daemon
+│   ├── logging_utils.py            # Structured logging utilities
+│   ├── fast_api_app.py             # FastAPI backend server
+│   └── app_utils/                  # A2A and service helpers
+├── src/
+│   └── demo/                       # Cybersecurity AI & Cloud Architecture demo
+│       ├── data_generator/         # Synthetic log generator & threat scenarios
+│       ├── data_pipeline/          # BigQuery Continuous Queries & Dataflow pipelines
+│       ├── soc_ticketing/          # SOC ticketing service & Streamlit analyst console
+│       ├── terraform/              # GCP Terraform IaC modules
+│       ├── tests/                  # Demo unit tests (agent structure, tools, logs, SOC)
+│       ├── user_screenshots/       # Forensic desktop screenshots for vision agent
+│       ├── local_runner.py         # Zero-cloud end-to-end demo runner
+│       └── other_code/             # Supporting SQL queries and analyst scripts
+├── tests/
+│   ├── unit/                       # Project unit tests (model config, dummy tests)
+│   ├── integration/                # Agent integration tests
+│   └── eval/                       # agents-cli evaluation datasets and configs
+├── agents-cli-manifest.yaml        # agents-cli configuration (agent_directory: adk_agent)
+├── pyproject.toml                  # Python package configuration & dependencies
+├── pytest.ini                      # Pytest runner configuration
+├── requirements.txt                # System Python dependencies
+├── .env.example                    # Template environment variables
+├── .env                            # Local environment variables (not committed)
+├── GEMINI.md                       # Workspace guidance and agent instructions
+└── README.md                       # Project documentation
 ```
+
+---
+
+## Environment Setup & Model Configuration
+
+### 1. Environment Variables & Credentials (`.env`)
+Environment variables are loaded automatically at startup via `python-dotenv`:
+- `GOOGLE_GENAI_USE_ENTERPRISE=true`: Uses Vertex AI endpoint.
+- `GOOGLE_CLOUD_PROJECT=oso-ai-503519`: Target GCP project.
+- `GOOGLE_CLOUD_LOCATION=us-east1` (or `global`): Model and service region.
+- `GEMINI_MODEL=gemini-3.8-flash`: Configures the Gemini model.
+
+### 2. Model Configuration
+- **Model Setting:** The agent dynamically reads `os.getenv("GEMINI_MODEL", "gemini-3.8-flash")`.
+- **Default Model:** `gemini-3.8-flash` is the standard active model across all agents and tools.
+- **Model Override:** Change `GEMINI_MODEL` in `.env` to switch models without modifying agent source code.
+
+### 3. Corporate CA Certificate Handling (Kyndryl Network)
+- SSL inspection uses `/usr/local/share/ca-certificates/Kyndryl-SSL-Inspection.crt`.
+- `UV_SYSTEM_CERTS=true` is enabled in the devcontainer.
+- Always include `--system-certs` when invoking standalone `uvx` commands (e.g. `uvx --system-certs google-agents-cli setup`).
+
+---
+
+## Development & Testing Commands
+
+### 1. Automated Tests
+Run unit tests, agent structure tests, and demo tests with `uv`:
+```bash
+# Run all unit and demo test suites
+uv run pytest src/demo/tests/ tests/unit/
+
+# Run integration tests (requires cloud credentials/ADC)
+uv run pytest tests/integration/
+```
+
+### 2. Interactive Agent Testing (agents-cli)
+```bash
+# Inspect agents-cli project configuration
+agents-cli info
+
+# Launch local ADK Web Playground
+LOCAL_MODE=true agents-cli playground
+
+# Run single prompt evaluation in terminal
+agents-cli run "Investigate security alert for user u.lewis"
+```
+
+### 3. Zero-Cloud Local Demo Pipeline
+Run the complete end-to-end cybersecurity pipeline locally (synthetic log generation, BigQuery Continuous Query simulation, multi-agent triage, and local SOC dispatch):
+```bash
+# Malicious APT attack scenario (User: u.lewis, Lazarus Group IP, Mimikatz)
+python -m src.demo.local_runner --threat malicious
+
+# Benign False Positive scenario (User: l.taylor, Admin backup script)
+python -m src.demo.local_runner --threat false_positive
+```
+
+### 4. Interactive SOC Analyst Console (Streamlit)
+```bash
+LOCAL_MODE=true streamlit run src/demo/soc_ticketing/streamlit_soc_console.py
+```
+Open `http://localhost:8501` to view incident queues, inspect desktop screenshot evidence, review ADK investigative reports, and adjudicate tickets.
+
+### 5. BigQuery Threat Scanner Service
+```bash
+# Run single scan:
+python -m adk_agent.threat_scanner --once
+
+# Run continuous background daemon:
+python -m adk_agent.threat_scanner --daemon --interval 30
+```
+
+---
+
+## Agent Development Lifecycle (`agents-cli`)
+
+1. **Understand Requirements:** Identify tools, constraints, and success criteria.
+2. **Build and Implement:** Implement agent logic in `adk_agent/`. Use `agents-cli playground` for interactive validation.
+3. **Evaluation Loop:** Run `agents-cli eval run` against datasets in `tests/eval/`. Inspect cluster failures with `agents-cli eval analyze` and auto-tune with `agents-cli eval optimize`.
+4. **Pre-Deployment Tests:** Run `uv run pytest src/demo/tests/ tests/unit/`.
+5. **Deploy:** Run `agents-cli deploy` only after human approval.
+
+---
+
+## Operational Guidelines for Coding Agents
+
+- **Canonical Agent Location:** Always work within `adk_agent/` at repository root. Do not re-create subfolder duplicates or nested agent packages.
+- **Code Preservation:** Only modify code directly targeted by the request. Preserve surrounding functions, comments, and configurations.
+- **Model Configuration:** Read the model from `os.getenv("GEMINI_MODEL", "gemini-3.8-flash")` and load environment variables with `dotenv.load_dotenv()`. NEVER hardcode deprecated models.
+- **Tool Imports:** Import tool instances rather than modules (e.g., `from google.adk.tools import google_search`).
+- **Python Execution:** Always execute Python commands and tests with `uv run` (e.g., `uv run pytest`).
+- **Verify All Changes:** Always run `uv run pytest src/demo/tests/ tests/unit/` after modifying code to confirm zero regressions.

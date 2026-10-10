@@ -1,0 +1,31 @@
+{
+  "ticket_id": "SOC-TICKET-g.harris-1791600100",
+  "created_at": "2026-10-08T12:28:48.999247+00:00",
+  "user_id": "g.harris",
+  "device_id": "ws-hr-05",
+  "source_ip": "175.45.176.10",
+  "threat_score": 2400,
+  "severity": "CRITICAL",
+  "status": "RESOLVED",
+  "category": "Malware",
+  "sla_status": "Within SLA",
+  "geo_country": "North Korea",
+  "geo_lat": 39.0392,
+  "geo_lon": 125.7625,
+  "agent_decision": "PERCEIVED_THREAT",
+  "agent_reason": "C2 beaconing and unauthorized PowerShell script execution detected from known Lazarus Group IP.",
+  "mitre_tactics": [
+    "Command and Control",
+    "Execution",
+    "Initial Access"
+  ],
+  "indicators_of_compromise": [
+    "175.45.176.10",
+    "c2-server-1.xyz"
+  ],
+  "screenshot_url": "src/demo/user_screenshots/g.harris.png",
+  "structured_report": "### Security Incident Report\n* **User:** g.harris\n* **Verdict:** Genuine Threat\n* **Evidence:** Visual terminal confirmed Mimikatz execution.",
+  "human_decision": "Genuine Threat",
+  "human_comment": "Confirmed credential theft and lateral movement attempt. Workstation isolated and credentials revoked.",
+  "adjudicated_at": "2026-10-08T13:28:48.999247+00:00"
+}

@@ -1,0 +1,31 @@
+{
+  "ticket_id": "SOC-TICKET-u.lewis-1791646592",
+  "created_at": "2026-10-10T15:36:32.967603+00:00",
+  "user_id": "u.lewis",
+  "device_id": "ws-hr-05",
+  "source_ip": "175.45.176.10",
+  "threat_score": 1850,
+  "severity": "CRITICAL",
+  "status": "RESOLVED",
+  "category": "Risky Domain/URL",
+  "sla_status": "Within SLA",
+  "geo_country": null,
+  "geo_lat": null,
+  "geo_lon": null,
+  "agent_decision": "GENUINE_THREAT",
+  "agent_reason": "Confirmed APT credential compromise, unauthorized Mimikatz execution, and North Korean C2 communication.",
+  "mitre_tactics": [
+    "Initial Access",
+    "Command and Control",
+    "Credential Access"
+  ],
+  "indicators_of_compromise": [
+    "175.45.176.10",
+    "c2-server-1.xyz"
+  ],
+  "screenshot_url": "file:///workspaces/Google/src/demo/user_screenshots/u.lewis.png",
+  "structured_report": "### Security Incident Report\n**1. Alert Overview**\n* **Ticket ID:** `SOC-TICKET-u.lewis-1791646592`\n* **Entity / User:** `u.lewis`\n* **Endpoint / Device:** `ws-hr-05`\n* **Originating IP:** `175.45.176.10`\n* **Anomaly Threat Score:** `1850`\n* **Autonomous ADK Verdict:** `GENUINE_THREAT`\n\n**2. Behavioral Analysis (BigQuery)**\n* 24h Profile for 'u.lewis': 35 login failures (brute force password spray) followed by successful VPN login from foreign IP 175.45.176.10. Correlated subsequent commands executed: mimikatz, powershell -enc downloadstring, and C2 DNS beaconing to 'c2-server-1.xyz'.\n\n**3. Visual Forensic Analysis**\n* OCR and visual inspection of 'src/demo/user_screenshots/u.lewis.png' confirms active PowerShell terminal executing exploit script: 'Invoke-Mimikatz' with elevated admin prompt visible. Visual evidence directly corroborates genuine threat.\n\n**4. External Threat Intelligence (OSINT)**\n* Public IP 175.45.176.10 traces to Ryugyong-dong, Pyongyang, North Korea (AS131279 Star JV). Threat intel feeds associate this netblock with APT38 / Lazarus Group operations.\n",
+  "human_decision": "Genuine Threat",
+  "human_comment": "genuine threat, this needs to be investigated further, escalating to SOC 3",
+  "adjudicated_at": "2026-10-10T15:41:14.342587+00:00"
+}

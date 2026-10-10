@@ -1,0 +1,28 @@
+{
+  "ticket_id": "SOC-TICKET-c.wilson-1791510400",
+  "created_at": "2026-10-04T07:28:48.999247+00:00",
+  "user_id": "c.wilson",
+  "device_id": "ws-finance-03",
+  "source_ip": "74.125.10.15",
+  "threat_score": 280,
+  "severity": "MEDIUM",
+  "status": "RESOLVED",
+  "category": "Data Leak",
+  "sla_status": "Approaching SLA",
+  "geo_country": "United States",
+  "geo_lat": 40.7128,
+  "geo_lon": -74.006,
+  "agent_decision": "FALSE_POSITIVE",
+  "agent_reason": "Elevated outbound file transfer volume during quarter-end financial reconciliation.",
+  "mitre_tactics": [
+    "Collection"
+  ],
+  "indicators_of_compromise": [
+    "74.125.10.15"
+  ],
+  "screenshot_url": "src/demo/user_screenshots/c.wilson.png",
+  "structured_report": "### Security Incident Report\n* **User:** c.wilson\n* **Type:** Financial data transfer",
+  "human_decision": "False Positive",
+  "human_comment": "Approved quarterly financial ledger sync with authorized external auditor.",
+  "adjudicated_at": "2026-10-04T11:28:48.999247+00:00"
+}

@@ -1,0 +1,30 @@
+{
+  "ticket_id": "SOC-TICKET-r.patel-1791550180",
+  "created_at": "2026-10-06T14:28:48.999247+00:00",
+  "user_id": "r.patel",
+  "device_id": "srv-web-prod-02",
+  "source_ip": "194.26.135.68",
+  "threat_score": 1950,
+  "severity": "CRITICAL",
+  "status": "RESOLVED",
+  "category": "Risky Domain/URL",
+  "sla_status": "Within SLA",
+  "geo_country": "Russia",
+  "geo_lat": 55.7558,
+  "geo_lon": 37.6173,
+  "agent_decision": "PERCEIVED_THREAT",
+  "agent_reason": "High-risk domain connection to 'my-payload-downloader.ru' and multiple login failures.",
+  "mitre_tactics": [
+    "Initial Access",
+    "Command and Control"
+  ],
+  "indicators_of_compromise": [
+    "194.26.135.68",
+    "my-payload-downloader.ru"
+  ],
+  "screenshot_url": "src/demo/user_screenshots/r.patel.png",
+  "structured_report": "### Security Incident Report\n* **User:** r.patel\n* **Origin:** Moscow, Russia\n* **Domain:** my-payload-downloader.ru",
+  "human_decision": "Genuine Threat",
+  "human_comment": "Blocked external IP at perimeter firewall. Domain sinkholed.",
+  "adjudicated_at": "2026-10-06T15:28:48.999247+00:00"
+}

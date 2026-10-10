@@ -1,0 +1,28 @@
+{
+  "ticket_id": "SOC-TICKET-l.taylor-1791646650",
+  "created_at": "2026-10-10T15:37:30.392458+00:00",
+  "user_id": "l.taylor",
+  "device_id": "ws-hr-01",
+  "source_ip": "74.125.6.130",
+  "threat_score": 120,
+  "severity": "LOW",
+  "status": "RESOLVED",
+  "category": "Risky Domain/URL",
+  "sla_status": "Within SLA",
+  "geo_country": null,
+  "geo_lat": null,
+  "geo_lon": null,
+  "agent_decision": "FALSE_POSITIVE",
+  "agent_reason": "Benign administrative automation routine; no hostile IPs or malware identified.",
+  "mitre_tactics": [
+    "Discovery"
+  ],
+  "indicators_of_compromise": [
+    "74.125.6.130"
+  ],
+  "screenshot_url": "file:///workspaces/Google/src/demo/user_screenshots/l.taylor.png",
+  "structured_report": "### Security Incident Report\n**1. Alert Overview**\n* **Ticket ID:** `SOC-TICKET-l.taylor-1791646650`\n* **Entity / User:** `l.taylor`\n* **Endpoint / Device:** `ws-hr-01`\n* **Originating IP:** `74.125.6.130`\n* **Anomaly Threat Score:** `120`\n* **Autonomous ADK Verdict:** `FALSE_POSITIVE`\n\n**2. Behavioral Analysis (BigQuery)**\n* 24h Profile for 'l.taylor': Normal corporate single sign-on activity. Automated maintenance script executed benign commands (ipconfig, ping, df -h) with user privileges. No foreign IPs, no privilege escalation.\n\n**3. Visual Forensic Analysis**\n* OCR inspection of 'src/demo/user_screenshots/l.taylor.png' displays a benign internal BigQuery console and standard browser tabs. No suspicious terminal prompts or malicious tooling detected.\n\n**4. External Threat Intelligence (OSINT)**\n* Public IP 74.125.6.130 resolves to standard corporate ISP / enterprise VPN range. No malicious reputation or abuse reports found.\n",
+  "human_decision": "False Positive",
+  "human_comment": "confirmed false possitive",
+  "adjudicated_at": "2026-10-10T15:40:20.941885+00:00"
+}

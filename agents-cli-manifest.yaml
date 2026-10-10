@@ -1,0 +1,14 @@
+name: cymbal-cyber-agent
+acli_version: 1.9.0
+agent_directory: adk_agent
+region: us-east1
+base_template: adk
+language: python
+framework: google-adk
+create_params:
+  root_agent_name: root_agent
+  deployment_target: none
+  session_type: none
+  cicd_runner: skip
+  agent_gateway: false
+  agent_guidance_filename: GEMINI.md

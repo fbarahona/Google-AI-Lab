@@ -1,145 +1,86 @@
-# Google AI Labs Sandbox
+# Real-Time Cyber Security AI & Google ADK Multi-Agent Sandbox
 
-**Google AI Labs Sandbox** is an enterprise-grade development environment built for architecting, prototyping, evaluating, and deploying AI agents on Google Cloud. It integrates the **Google Agent Development Kit (ADK)** and **Google Agents CLI (`agents-cli`)** with the **Google Gen AI SDK / Vertex AI**, preconfigured in a Debian-based Visual Studio Code Dev Container.
-
----
-
-## 🚀 Key Features & Tech Stack
-
-- **Python Runtime:** Python 3.12 (Debian Bookworm) with high-performance dependency management via [uv](https://docs.astral.sh/uv/).
-- **Google Agent Development Kit (`google-adk`):** Framework for multi-agent systems, tool integration, orchestration patterns, and state/memory management.
-- **Google Agents CLI (`google-agents-cli`):** Unified lifecycle CLI (`agents-cli`) for scaffolding, playground debugging, LLM-as-judge evaluations, deployment, and Gemini Enterprise publishing.
-- **Google Gen AI SDK (`google-genai`):** Next-generation Python SDK for Gemini models on Google Cloud Vertex AI and Gemini Developer API.
-- **Jupyter Notebooks in VS Code:** Preconfigured `ipykernel` and `ipywidgets` with auto-registered kernel `Python 3.12 (Google AI Sandbox)`.
-- **Testing Suite:** `pytest` for deterministic schema/tool testing alongside `agents-cli eval run` for LLM behavioral evaluations.
-- **Cloud & IaC Tooling:** Google Cloud SDK (`gcloud`), Terraform (v1.16+), Node.js (v22), and `@google/gemini-cli`.
-- **Enterprise Network Security:** Corporate Root CA SSL inspection integration across OS, Python, `uv`, and Node.js.
+An enterprise-grade platform demonstrating real-time cybersecurity threat detection, autonomous multi-agent AI forensic investigation, and human-in-the-loop Security Operations Center (SOC) triage built on **Google Cloud Platform (project `oso-ai-503519`)**, **Google Agent Development Kit (ADK)**, and **Google Agents CLI (`agents-cli`)**.
 
 ---
 
-## 🛠️ Getting Started
+## 🏛️ Architecture Overview
 
-### 1. Prerequisites
-- **Docker Desktop** (or Rancher Desktop / Podman) running on host or WSL2.
-- **Visual Studio Code** with the **Dev Containers** (`ms-vscode-remote.remote-containers`) extension.
-- Google Cloud credentials on host (`gcloud`) or a Gemini API key.
-
-### 2. Opening in Dev Container
-1. Open this repository in Visual Studio Code.
-2. When prompted, click **Reopen in Container** (or run `Dev Containers: Reopen in Container` from the Command Palette `F1` / `Ctrl+Shift+P`).
-3. The container will build and run `post-create.sh` to initialize persistent caches, sync dependencies, register the Jupyter kernel, and configure `agents-cli`.
-
----
-
-## 🔐 Authentication & Configuration
-
-The container is configured to bind-mount host credentials into the container with path guards:
-
-### Google Cloud (Vertex AI)
-To refresh credentials or authenticate inside the container:
-```bash
-# Authenticate with Google Cloud
-gcloud auth login
-gcloud auth application-default login
-
-# Set your target project
-gcloud config set project <PROJECT_ID>
 ```
-
-### Gemini Developer API
-Set your API key in `.env` (or pass it via host environment variable `GEMINI_API_KEY`):
-```bash
-export GEMINI_API_KEY="your-api-key-here"
-```
-
----
-
-## 📓 Working with Jupyter Notebooks
-
-Jupyter support is enabled out-of-the-box:
-
-1. Create or open any `.ipynb` notebook file in VS Code.
-2. In the top right corner of the notebook editor, click **Select Kernel** -> **Python Environments...**
-3. Choose **`Python 3.12 (Google AI Sandbox)`** (or `/usr/local/bin/python`).
-4. Interactive outputs, `ipywidgets`, and progress bars will render natively in VS Code.
-
-If you ever need to re-register the kernel:
-```bash
-python -m ipykernel install --user --name "google-ai-sandbox" --display-name "Python 3.12 (Google AI Sandbox)"
+                                  ┌───────────────────────────┐
+                                  │ Synthetic Log Generator   │
+                                  │ CLI & Threat Injection    │
+                                  └─────────────┬─────────────┘
+                                                │
+                 ┌──────────────────────────────┼──────────────────────────────┐
+                 ▼                              ▼                              ▼
+    ┌─────────────────────────┐   ┌─────────────────────────┐   ┌─────────────────────────┐
+    │  Google Cloud Storage   │   │     Cloud Pub/Sub       │   │  Direct BQ Streaming    │
+    │  gs://cymbal-cyber-     │   │  cymbal_cyber_raw_logs  │   │     Storage Write API   │
+    │  raw-logs_oso-ai-503519 │   └─────────────┬───────────┘   └─────────────┬───────────┘
+    └────────────┬────────────┘                 │                             │
+                 │ (GCS Loader)                 │ (Dataflow Streaming)        │
+                 └──────────────────────┐       ▼                             │
+                                        ▼─────────────────────────────────────┘
+                                   BigQuery Tables (Cymbal_Cyber)
+                                   ├── user_access_events
+                                   ├── network_events
+                                   ├── adk_threat_assessment
+                                   └── soc_tickets
+                                                │
+                         ┌──────────────────────┴──────────────────────┐
+                         ▼                                             ▼
+            BigQuery Continuous Query                      BigQuery Threat Scanner
+            (Exports alerts >= 100 to Pub/Sub)             (Active daemon reading BQ)
+                         │                                             │
+                         └──────────────────────┬──────────────────────┘
+                                                ▼
+                               ┌─────────────────────────────────┐
+                               │   ADK Multi-Agent Orchestrator  │
+                               │           (adk_agent/)          │
+                               └────────────────┬────────────────┘
+                                                │
+         ┌──────────────────────────────┬───────┴──────────────────────┬──────────────────────────────┐
+         ▼                              ▼                              ▼                              ▼
+┌──────────────────┐           ┌──────────────────┐           ┌──────────────────┐           ┌──────────────────┐
+│google_search_    │           │bq_investigation_ │           │visual_analysis_  │           │soc_ticketing_    │
+│agent             │           │agent             │           │agent             │           │agent             │
+│                  │           │                  │           │                  │           │                  │
+│Tool:             │           │Tools:            │           │Tools:            │           │Tools:            │
+│google_search     │           │BigQueryToolset,  │           │Vision OCR,       │           │Dispatch Ticket,  │
+│(OSINT IP Lookup) │           │behavioral queries│           │Signed GCS URL    │           │False Positive BQ │
+└──────────────────┘           └──────────────────┘           └──────────────────┘           └─────────┬────────┘
+                                                                                                       │
+                                                                                                       ▼
+                                                                                      ┌─────────────────────────────────┐
+                                                                                      │      SOC Ticketing System       │
+                                                                                      │  - Incident Queue & BigQuery    │
+                                                                                      │  - Webhook Dispatcher           │
+                                                                                      │  - Streamlit Analyst Console    │
+                                                                                      └─────────────────────────────────┘
 ```
 
 ---
 
-## 📦 Dependency Management (`uv`)
+## 🚀 Key Features
 
-Dependencies are managed using `uv` for ultra-fast, deterministic resolution:
-
-```bash
-# Install / sync requirements to container environment
-uv pip install --system --system-certs -r requirements.txt
-
-# Run Python scripts with uv
-uv run python my_script.py
-
-# Run unit tests
-uv run pytest
-```
-
----
-
-## 🤖 Google Agents CLI Workflow
-
-Use `agents-cli` for the end-to-end agent development lifecycle:
-
-| Action | Command | Purpose |
-|---|---|---|
-| **Inspect Environment** | `agents-cli info` | Displays CLI version, active paths, and registered skills |
-| **Scaffold Agent** | `agents-cli scaffold create <name>` | Bootstraps a new agent with ADK patterns and eval configs |
-| **Enhance Project** | `agents-cli scaffold enhance .` | Adds CI/CD and deployment targets to existing projects |
-| **Interactive Test** | `agents-cli playground` | Launches a local web playground for chat and prompt testing |
-| **Terminal Test** | `agents-cli run "Prompt"` | Runs a prompt through the local agent in terminal |
-| **Evaluate** | `agents-cli eval run` | Runs LLM-as-judge automated evaluations against test cases |
-| **Deploy** | `agents-cli deploy` | Deploys agent to Agent Runtime, Cloud Run, or GKE |
-| **Publish** | `agents-cli publish gemini-enterprise` | Registers the agent with Gemini Enterprise |
-
----
-
-## 🏗️ Dev Container Architecture & Optimizations
-
-The container incorporates several enterprise optimizations:
-- **Fast Build via Standalone uv:** Binaries are copied directly from Astral's official container image (`ghcr.io/astral-sh/uv`), eliminating `pip` bootstrap overhead.
-- **Cross-Filesystem Cache:** Named volume `vscode-ai-pkg-cache` caches packages at `/home/vscode/.cache`. `UV_LINK_MODE=copy` is enabled to eliminate filesystem hardlink warnings.
-- **Non-Root Permissions:** `/usr/local` is owned by `vscode:vscode`, allowing developers to run `uv pip install --system` without `sudo`.
-- **Host Mount Safety:** Dev container `initializeCommand` ensures host `.config/gcloud`, `.gemini`, and `.gitconfig` files exist prior to Docker bind mounting, preventing Docker from mistakenly creating `.gitconfig` as a directory.
-
----
-
-## 🛡️ Featured Demonstration: Real-Time Cyber Security AI (`src/demo`)
-
-Located under [`src/demo`](src/demo), this project demonstrates an end-to-end event-driven cybersecurity threat detection, multi-agent AI investigation, and SOC response system:
-
-- **Synthetic Log Generator (`src/demo/data_generator`):** Replaces legacy Colab notebooks with a modular Python CLI and API simulating access logs (`user_access_events`) and network logs (`network_events`) with ad-hoc threat injection (`malicious` attacks vs `false_positive` anomalies). Supports sinks to GCS, Pub/Sub, BigQuery, or local files.
-- **Data Engineering Pipelines (`src/demo/data_pipeline`):** Ingestion pathways including Pub/Sub -> Dataflow streaming, GCS batch loading, and BigQuery Continuous Queries.
-- **Google ADK Multi-Agent Team (`src/demo/adk_agent`):** Orchestrator coordinating 4 specialized agents:
-  1. `google_search_agent`: OSINT threat intel on external public IPs.
-  2. `bq_investigation_agent`: 24-hour behavioral profile queries in BigQuery.
-  3. `visual_analysis_agent`: Gemini multimodal vision OCR on user desktop screenshots.
-  4. `soc_ticketing_agent`: Incident synthesis and dispatch to SOC ticketing.
-- **BigQuery Threat Scanner (`src/demo/adk_agent/threat_scanner.py`):** Active daemon reading BigQuery for new anomalies and triggering agent investigations.
-- **SOC Ticketing System & Console (`src/demo/soc_ticketing`):** Human-in-the-loop Streamlit analyst console with dual-mode support (cloud GCS + local file queue).
-- **Terraform Templates (`src/demo/terraform`):** Production IaC deploying all GCP resources under project `oso-ai-503519`.
-
-### Quick Test Commands
-```bash
-# 1. Run full demo locally (Zero cloud required):
-python -m src.demo.local_runner --threat malicious
-
-# 2. Launch interactive SOC Analyst Console:
-LOCAL_MODE=true streamlit run src/demo/soc_ticketing/streamlit_soc_console.py
-
-# 3. Run automated test suite:
-python -m pytest
-```
+1. **Google ADK Multi-Agent Team (`adk_agent/`)**:
+   - **`google_search_agent`**: Autonomous OSINT IP reputation investigation on external public IP addresses.
+   - **`bq_investigation_agent`**: 24-hour behavioral profiling querying BigQuery (`user_access_events` and `network_events`).
+   - **`visual_analysis_agent`**: Multimodal Gemini vision analysis and OCR inspecting user desktop forensic screenshots.
+   - **`soc_ticketing_agent`**: Consolidates forensic findings into a structured Security Incident Report and dispatches formal incident tickets.
+2. **BigQuery Threat Scanner (`adk_agent/threat_scanner.py`)**:
+   - Background daemon monitoring the BigQuery dataset for anomalous security alerts and activating the ADK orchestrator.
+3. **Synthetic Log Generator (`src/demo/data_generator/`)**:
+   - High-fidelity synthetic event generator simulating access and network logs with ad-hoc threat injection (both APT attacks and benign administrative false positives).
+4. **Data Engineering Pipelines (`src/demo/data_pipeline/`)**:
+   - Stream and batch ingestion pathways via BigQuery Continuous Queries, Pub/Sub to Dataflow, and GCS batch loading.
+5. **Interactive SOC Analyst Console (`src/demo/soc_ticketing/`)**:
+   - Full-featured Streamlit console supporting queue management, visual screenshot preview, ADK forensic report inspection, and analyst triage.
+6. **Zero-Cloud Local Runner (`src/demo/local_runner.py`)**:
+   - Test and demonstrate the full cybersecurity pipeline locally without deploying any cloud resources.
+7. **Terraform Infrastructure as Code (`src/demo/terraform/`)**:
+   - Modular IaC templates provisioning BigQuery datasets, tables, Pub/Sub topics, subscriptions, and GCS buckets.
 
 ---
 
@@ -147,25 +88,109 @@ python -m pytest
 
 ```text
 /workspaces/Google/
-├── .devcontainer/                  # Dev container configuration
-│   ├── Dockerfile                  # Python 3.12, Node 22, Terraform, gcloud, certificates
-│   ├── devcontainer.json           # Extensions, mounts, environment variables, settings
-│   ├── post-create.sh              # Container initialization hook
-│   └── Kyndryl-SSL-Inspection.cer  # Enterprise CA certificate
+├── adk_agent/                      # Canonical ADK Multi-Agent package
+│   ├── agent.py                    # Multi-agent orchestrator & 4 sub-agents
+│   ├── tools.py                    # Tools (BigQuery, OSINT, Vision OCR, SOC ticketing)
+│   ├── threat_scanner.py           # BigQuery active anomaly scanning daemon
+│   ├── logging_utils.py            # Structured logging utilities
+│   ├── fast_api_app.py             # FastAPI backend server
+│   └── app_utils/                  # A2A and service helpers
 ├── src/
-│   └── demo/                       # Cybersecurity AI & Cloud Architecture Demo
-│       ├── data_generator/         # Synthetic log generator & threat injection
-│       ├── data_pipeline/          # Pub/Sub, Dataflow & BigQuery pipelines
-│       ├── adk_agent/              # ADK multi-agent orchestrator & 4 sub-agents
-│       ├── soc_ticketing/          # SOC ticketing service & Streamlit console
-│       ├── terraform/              # Terraform templates for oso-ai-503519
-│       ├── tests/                  # Automated pytest suite (17 tests)
-│       ├── local_runner.py         # Zero-cloud local test harness
-│       └── README.md               # Demo technical guide & architecture
-├── .env                            # Local environment variables (git-ignored)
-├── .gitignore                      # Git ignore patterns
-├── pytest.ini                      # Pytest configuration
-├── requirements.txt                # Python dependencies (ADK, BigQuery, GenAI, Streamlit)
+│   └── demo/                       # Cybersecurity AI & Cloud Architecture demo
+│       ├── data_generator/         # Synthetic log generator & threat scenarios
+│       ├── data_pipeline/          # BigQuery Continuous Queries & Dataflow pipelines
+│       ├── soc_ticketing/          # SOC ticketing service & Streamlit analyst console
+│       ├── terraform/              # GCP Terraform IaC modules
+│       ├── tests/                  # Demo unit tests (agent structure, tools, logs, SOC)
+│       ├── user_screenshots/       # Forensic desktop screenshots for vision agent
+│       ├── local_runner.py         # Zero-cloud end-to-end demo runner
+│       └── other_code/             # Supporting SQL queries and analyst scripts
+├── tests/
+│   ├── unit/                       # Project unit tests (model config, dummy tests)
+│   ├── integration/                # Agent integration tests
+│   └── eval/                       # agents-cli evaluation datasets and configs
+├── agents-cli-manifest.yaml        # agents-cli configuration (agent_directory: adk_agent)
+├── pyproject.toml                  # Python package configuration & dependencies
+├── pytest.ini                      # Pytest runner configuration
+├── requirements.txt                # System Python dependencies
+├── .env.example                    # Template environment variables
+├── .env                            # Local environment variables (not committed)
 ├── GEMINI.md                       # Comprehensive agent development & lifecycle instructions
 └── README.md                       # Workspace documentation & quickstart
 ```
+
+---
+
+## 🛠️ Quickstart: Running the Applications
+
+### 1. Zero-Cloud Local Demo Pipeline
+Run the end-to-end pipeline locally (generates synthetic logs, simulates Continuous Query correlation, activates ADK investigation, and dispatches the ticket):
+```bash
+# Scenario A: Malicious APT attack (User: u.lewis, Lazarus Group IP, Mimikatz)
+python -m src.demo.local_runner --threat malicious
+
+# Scenario B: Benign False Positive (User: l.taylor, Admin backup script)
+python -m src.demo.local_runner --threat false_positive
+```
+
+### 2. Launch the Interactive SOC Analyst Console
+Launch the Streamlit console to inspect tickets, view desktop evidence, and adjudicate alerts:
+```bash
+LOCAL_MODE=true streamlit run src/demo/soc_ticketing/streamlit_soc_console.py
+```
+Open `http://localhost:8501` in your browser.
+
+### 3. Launch the ADK Agent Playground
+Run the interactive web playground to chat with and debug the ADK agents:
+```bash
+LOCAL_MODE=true agents-cli playground
+```
+
+### 4. Run the BigQuery Threat Scanner
+```bash
+# Run a single scan pass:
+python -m adk_agent.threat_scanner --once
+
+# Run continuous background daemon:
+python -m adk_agent.threat_scanner --daemon --interval 30
+```
+
+### 5. Run Automated Tests
+```bash
+# Run all unit and demo test suites
+uv run pytest src/demo/tests/ tests/unit/
+```
+
+---
+
+## 🔐 Configuration & Environment Variables
+
+Copy `.env.example` to `.env` to configure your environment:
+
+```bash
+cp .env.example .env
+```
+
+| Variable | Description | Default |
+|---|---|---|
+| `GEMINI_MODEL` | Active Gemini model for agents and vision | `gemini-3.8-flash` |
+| `GOOGLE_GENAI_USE_ENTERPRISE` | Route requests through Vertex AI | `true` |
+| `GOOGLE_CLOUD_PROJECT` | GCP Project ID | `oso-ai-503519` |
+| `GOOGLE_CLOUD_LOCATION` | GCP location / region | `us-east1` (or `global`) |
+| `BIGQUERY_DATASET` | Target BigQuery dataset | `Cymbal_Cyber` |
+| `GEMINI_API_KEY` | Optional: Gemini Developer API key (if not using ADC) | `""` |
+
+---
+
+## 🤖 Google Agents CLI (`agents-cli`)
+
+This project is configured with `agents-cli` for managing the agent development lifecycle:
+
+| Command | Purpose |
+|---|---|
+| `agents-cli info` | Inspect project configuration and paths |
+| `agents-cli playground` | Launch local ADK Web Playground |
+| `agents-cli run "<prompt>"` | Smoke test agent behavior in terminal |
+| `agents-cli eval run` | Run LLM-as-judge automated evaluation |
+| `agents-cli deploy` | Deploy agent to configured target |
+| `agents-cli lint` | Run code quality checks |

@@ -138,38 +138,91 @@ python -m src.demo.data_generator.log_generator --mode threat --threat-type fals
 
 ---
 
-### 3. Google ADK Multi-Agent Framework (`src/demo/adk_agent/`)
-Configured in [`agent.py`](adk_agent/agent.py) with the following agents:
+### 3. Google ADK Multi-Agent Framework (`adk_agent/`)
+Configured in [`agent.py`](../../adk_agent/agent.py) with the following agents:
 
 1. **`google_search_agent`**
-   - **Description:** *"Agent that researches IP addresses from security alerts."*
-   - **Tool:** `google_search`
-   - **Purpose:** Extracts public IPs and researches origin country, ASN, reputation, and threat intel.
-2. **`bq_investigation_agent`**
-   - **Description:** *"Agent that answers questions about BigQuery data by executing SQL queries."*
-   - **Tools:** `build_event_logs_query`, `BigQueryToolset`
-   - **Purpose:** Queries 24-hour behavioral history in BigQuery dataset `Cymbal_Cyber`.
-3. **`visual_analysis_agent`**
-   - **Description:** *"Agent that analyzes user desktop screenshots using multi-modal AI to uncover forensic visual evidence."*
-   - **Tools:** `get_visual_analysis_for_user`, `get_gcs_uri_for_user`, `generate_signed_url`
-   - **Purpose:** Multimodal Gemini vision OCR on user desktop screenshots and signed URL generation.
-4. **`soc_ticketing_agent`**
-   - **Description:** *"Agent that consolidates findings, decides on best action to take, and passes tickets to the SOC ticketing system."*
-   - **Tools:** `dispatch_to_soc_ticketing_system`, `log_false_positive`, `create_rich_ticket_id`
-   - **Purpose:** Generates comprehensive Security Incident Report and passes tickets to the SOC ticketing system.
+### 3. Google ADK Multi-Agent Architecture (`src/demo/adk_agent/`)
+
+![ADK Multi-Agent and Tool Hierarchy](/home/vscode/.gemini/antigravity/brain/b077e7df-f593-4036-a378-4aeb4e0be421/.user_uploaded/media_1791648641516_dc6d99df.png)
+
+```mermaid
+graph TD
+    classDef orchestrator fill:#1e293b,stroke:#3b82f6,stroke-width:2px,color:#f8fafc;
+    classDef agent fill:#0f172a,stroke:#60a5fa,stroke-width:2px,color:#f8fafc;
+    classDef tool fill:#1e1e38,stroke:#94a3b8,stroke-dasharray: 4 4,stroke-width:1px,color:#cbd5e1;
+
+    Orchestrator["✦ SecurityInvestigationOrchestrator"]:::orchestrator
+    Team["✦ InvestigationTeam (ParallelOrchestrator)"]:::orchestrator
+    TicketingAgent["✦ soc_ticketing_agent"]:::agent
+
+    SearchAgent["✦ google_search_agent"]:::agent
+    BQAgent["✦ bq_investigation_agent"]:::agent
+    VisualAgent["✦ visual_analysis_agent"]:::agent
+
+    ToolSearch["🔧 google_search"]:::tool
+    ToolBQQuery["🔧 build_event_logs_query"]:::tool
+    ToolBQSet["🔧 BigQueryToolset"]:::tool
+    ToolVisAnalysis["🔧 get_visual_analysis_for_user"]:::tool
+    ToolGCSUri["🔧 get_gcs_uri_for_user"]:::tool
+    ToolSignedUrl["🔧 generate_signed_url"]:::tool
+
+    ToolDispatch["🔧 dispatch_to_soc_ticketing_system"]:::tool
+    ToolFP["🔧 log_false_positive"]:::tool
+    ToolTicketId["🔧 create_rich_ticket_id"]:::tool
+    ToolEscalate["🔧 escalate_to_human"]:::tool
+
+    Orchestrator --> Team
+    Orchestrator --> TicketingAgent
+
+    Team --> SearchAgent
+    Team --> BQAgent
+    Team --> VisualAgent
+
+    SearchAgent -.-> ToolSearch
+    BQAgent -.-> ToolBQQuery
+    BQAgent -.-> ToolBQSet
+    VisualAgent -.-> ToolVisAnalysis
+    VisualAgent -.-> ToolGCSUri
+    VisualAgent -.-> ToolSignedUrl
+
+    TicketingAgent -.-> ToolSignedUrl
+    TicketingAgent -.-> ToolDispatch
+    TicketingAgent -.-> ToolFP
+    TicketingAgent -.-> ToolTicketId
+    TicketingAgent -.-> ToolEscalate
+```
+
 - **Orchestrator (`SecurityInvestigationOrchestrator`):**
   Coordinates parallel intelligence gathering from Google Search, BigQuery, and visual forensics before passing to the ticketing agent.
+- **Sub-Agents & Tools:**
+  1. **`google_search_agent`**
+     - **Description:** *"Agent that researches IP addresses from security alerts."*
+     - **Tool:** `google_search`
+     - **Purpose:** Extracts public IPs and researches origin country, ASN, reputation, and threat intel.
+  2. **`bq_investigation_agent`**
+     - **Description:** *"Agent that answers questions about BigQuery data by executing SQL queries."*
+     - **Tools:** `build_event_logs_query`, `BigQueryToolset`
+     - **Purpose:** Queries 24-hour behavioral history in BigQuery dataset `Cymbal_Cyber`.
+  3. **`visual_analysis_agent`**
+     - **Description:** *"Agent that analyzes user desktop screenshots using multi-modal AI to uncover forensic visual evidence."*
+     - **Tools:** `get_visual_analysis_for_user`, `get_gcs_uri_for_user`, `generate_signed_url`
+     - **Purpose:** Multimodal Gemini vision OCR on user desktop screenshots and signed URL generation.
+  4. **`soc_ticketing_agent`**
+     - **Description:** *"Agent that consolidates findings, decides on best action to take, and passes tickets to the SOC ticketing system."*
+     - **Tools:** `dispatch_to_soc_ticketing_system`, `log_false_positive`, `create_rich_ticket_id`, `escalate_to_human`, `generate_signed_url`
+     - **Purpose:** Generates comprehensive Security Incident Report and passes tickets to the SOC ticketing system.
 
 ---
 
-### 4. BigQuery Threat Scanner (`src/demo/adk_agent/threat_scanner.py`)
+### 4. BigQuery Threat Scanner (`adk_agent/threat_scanner.py`)
 Monitors BigQuery for correlated anomalies and triggers the multi-agent investigation:
 ```bash
 # Single scan:
-python -m src.demo.adk_agent.threat_scanner --once
+python -m adk_agent.threat_scanner --once
 
 # Continuous daemon:
-python -m src.demo.adk_agent.threat_scanner --daemon --interval 30
+python -m adk_agent.threat_scanner --daemon --interval 30
 ```
 
 ---

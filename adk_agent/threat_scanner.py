@@ -6,8 +6,8 @@ extracts anomalies, and invokes the ADK Agent Orchestrator to investigate
 and pass confirmed threats to the SOC Ticketing System.
 
 Usage:
-  python -m src.demo.adk_agent.threat_scanner --once
-  python -m src.demo.adk_agent.threat_scanner --daemon --interval 30
+  python -m adk_agent.threat_scanner --once
+  python -m adk_agent.threat_scanner --daemon --interval 30
 """
 
 import os

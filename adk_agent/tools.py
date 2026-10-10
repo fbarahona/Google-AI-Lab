@@ -24,8 +24,20 @@ try:
 except ImportError:
     from google.adk.tools.bigquery import BigQueryToolset
 
-from ..soc_ticketing.models import SocTicket
-from ..soc_ticketing.ticketing_service import SocTicketingService
+try:
+    from ..soc_ticketing.models import SocTicket
+    from ..soc_ticketing.ticketing_service import SocTicketingService
+except (ImportError, ValueError):
+    try:
+        from soc_ticketing.models import SocTicket
+        from soc_ticketing.ticketing_service import SocTicketingService
+    except ImportError:
+        from src.demo.soc_ticketing.models import SocTicket
+        from src.demo.soc_ticketing.ticketing_service import SocTicketingService
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +45,7 @@ logger = logging.getLogger(__name__)
 PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "oso-ai-503519")
 LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-east1")
 DATASET_ID = os.getenv("BIGQUERY_DATASET", "Cymbal_Cyber")
-MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 BIGQUERY_ADK_THREAT_ASSESSMENT = f"{PROJECT_ID}.{DATASET_ID}.adk_threat_assessment"
 GCS_ESCALATION_BUCKET = os.getenv(
     "ESCALATION_BUCKET",

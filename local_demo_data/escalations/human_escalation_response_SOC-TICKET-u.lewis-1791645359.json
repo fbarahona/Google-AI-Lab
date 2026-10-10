@@ -1,0 +1,6 @@
+{
+  "ticket_id": "SOC-TICKET-u.lewis-1791645359",
+  "human_decision": "Genuine Threat",
+  "human_comment": "confirmed compromise, isolate the workload and notify user",
+  "timestamp": 1791645454.6845803
+}

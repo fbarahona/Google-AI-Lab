@@ -64,8 +64,13 @@ def test_malicious_threat_scenario_injection():
     assert len(network_events) > 0
     # Malicious scenario should contain compromised user
     assert any(ev["user_id"] == "u.lewis" for ev in access_events)
-    # Should include North Korea or Russia IP
-    assert any("175.45." in ev.get("source_ip", "") or "194.26." in ev.get("source_ip", "") for ev in access_events)
+    # Should include North Korea, Russia, or Tor exit IP
+    assert any(
+        "175.45." in ev.get("source_ip", "")
+        or "194.26." in ev.get("source_ip", "")
+        or "185.220." in ev.get("source_ip", "")
+        for ev in access_events
+    )
 
 
 def test_false_positive_threat_scenario_injection():

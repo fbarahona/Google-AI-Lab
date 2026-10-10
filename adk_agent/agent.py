@@ -19,32 +19,62 @@ from typing import Dict, Any, Optional
 from google.adk.agents import Agent, SequentialAgent, ParallelAgent
 from google.adk.tools import BaseTool, ToolContext, google_search
 from google.adk.apps import App
+from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.agents.callback_context import CallbackContext
 
 try:
     from google.adk.plugins.bigquery_agent_analytics_plugin import BigQueryAgentAnalyticsPlugin
     HAS_ANALYTICS = True
 except Exception:
+    BigQueryAgentAnalyticsPlugin = None
     HAS_ANALYTICS = False
 
+import sys
+from pathlib import Path
+
+# Add directories to sys.path to support adk web / agents-cli execution
+_CURRENT_DIR = Path(__file__).resolve().parent
+_SRC_DIR = _CURRENT_DIR.parent.parent
+for _p in [str(_CURRENT_DIR), str(_SRC_DIR), str(_CURRENT_DIR.parent)]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 # --- Local Imports ---
-from .logging_utils import setup_logging, log_agent_event
-from .tools import (
-    build_event_logs_query,
-    get_visual_analysis_for_user,
-    get_gcs_uri_for_user,
-    generate_signed_url,
-    dispatch_to_soc_ticketing_system,
-    log_false_positive,
-    create_rich_ticket_id,
-    escalate_to_human,
-    bigquery_toolset
-)
+try:
+    from .logging_utils import setup_logging, log_agent_event
+    from .tools import (
+        build_event_logs_query,
+        get_visual_analysis_for_user,
+        get_gcs_uri_for_user,
+        generate_signed_url,
+        dispatch_to_soc_ticketing_system,
+        log_false_positive,
+        create_rich_ticket_id,
+        escalate_to_human,
+        bigquery_toolset
+    )
+except ImportError:
+    from logging_utils import setup_logging, log_agent_event
+    from tools import (
+        build_event_logs_query,
+        get_visual_analysis_for_user,
+        get_gcs_uri_for_user,
+        generate_signed_url,
+        dispatch_to_soc_ticketing_system,
+        log_false_positive,
+        create_rich_ticket_id,
+        escalate_to_human,
+        bigquery_toolset
+    )
 
 # --- Configuration ---
+from dotenv import load_dotenv
+
+load_dotenv()
+
 PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "oso-ai-503519")
 DATASET_ID = os.getenv("BIGQUERY_DATASET", "Cymbal_Cyber")
-MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 
 warnings.filterwarnings("ignore", category=UserWarning, module="vertexai")
 warnings.filterwarnings("ignore", category=UserWarning, module="google.adk")
@@ -53,7 +83,7 @@ setup_logging()
 
 # --- Initialize BigQuery Analytics Plugin ---
 bq_analytics_plugin = None
-if HAS_ANALYTICS:
+if HAS_ANALYTICS and BigQueryAgentAnalyticsPlugin is not None:
     try:
         bq_analytics_plugin = BigQueryAgentAnalyticsPlugin(
             project_id=PROJECT_ID,
@@ -262,7 +292,7 @@ decision_agent = soc_ticketing_agent
 investigation_agent = investigation_team
 
 # --- App Definition ---
-app_plugins = [bq_analytics_plugin] if bq_analytics_plugin else []
+app_plugins: list[BasePlugin] = [bq_analytics_plugin] if bq_analytics_plugin else []
 app = App(
     name="CymbalCyberSecurityAgent",
     root_agent=root_agent,

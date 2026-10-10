@@ -2,13 +2,13 @@
 Unit tests for ADK Agent tools and safety callbacks.
 """
 from unittest.mock import MagicMock
-import pytest
-from src.demo.adk_agent.tools import (
+
+from adk_agent.agent import forbidden_dml_check
+from adk_agent.tools import (
+    _parse_alert_payload_to_row,
     build_event_logs_query,
     create_rich_ticket_id,
-    _parse_alert_payload_to_row
 )
-from src.demo.adk_agent.agent import forbidden_dml_check
 
 
 def test_build_event_logs_query():
@@ -55,4 +55,3 @@ def test_forbidden_dml_check():
     # Allow SELECT
     result_select = forbidden_dml_check(mock_tool, {"query": "SELECT * FROM Cymbal_Cyber.network_events LIMIT 10"}, mock_context)
     assert result_select is None
-

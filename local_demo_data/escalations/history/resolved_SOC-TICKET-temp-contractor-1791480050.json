@@ -1,0 +1,28 @@
+{
+  "ticket_id": "SOC-TICKET-temp-contractor-1791480050",
+  "created_at": "2026-10-02T13:28:48.999247+00:00",
+  "user_id": "temp_contractor",
+  "device_id": "ws-dev-11",
+  "source_ip": "185.220.101.5",
+  "threat_score": 1400,
+  "severity": "HIGH",
+  "status": "RESOLVED",
+  "category": "Botnet",
+  "sla_status": "Within SLA",
+  "geo_country": "Germany",
+  "geo_lat": 52.52,
+  "geo_lon": 13.405,
+  "agent_decision": "PERCEIVED_THREAT",
+  "agent_reason": "Connection originating from known Tor exit node with port scanning activity.",
+  "mitre_tactics": [
+    "Reconnaissance"
+  ],
+  "indicators_of_compromise": [
+    "185.220.101.5"
+  ],
+  "screenshot_url": "src/demo/user_screenshots/temp_contractor.png",
+  "structured_report": "### Security Incident Report\n* **User:** temp_contractor\n* **IP:** Tor exit node",
+  "human_decision": "Genuine Threat",
+  "human_comment": "Contractor VPN session terminated. Tor IP added to dynamic blocklist.",
+  "adjudicated_at": "2026-10-02T14:28:48.999247+00:00"
+}
