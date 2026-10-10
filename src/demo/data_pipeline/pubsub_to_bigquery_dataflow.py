@@ -43,8 +43,8 @@ def parse_and_route_record(message_bytes: bytes) -> Tuple[str, Dict[str, Any]]:
 
 
 def build_pipeline_runner(
-    project_id: str = "oso-ai-503519",
-    input_subscription: str = "projects/oso-ai-503519/subscriptions/raw_logs_to_bq_sub",
+    project_id: Optional[str] = None,
+    input_subscription: Optional[str] = None,
     dataset_id: str = "Cymbal_Cyber",
     runner: str = "DirectRunner"
 ):
@@ -52,6 +52,8 @@ def build_pipeline_runner(
     Configures and returns the Apache Beam pipeline definition.
     Compatible with DirectRunner (local development) and DataflowRunner (GCP managed).
     """
+    project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo")
+    input_subscription = input_subscription or f"projects/{project_id}/subscriptions/raw_logs_to_bq_sub"
     try:
         import apache_beam as beam
         from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions, GoogleCloudOptions
@@ -114,10 +116,11 @@ def build_pipeline_runner(
 
 
 if __name__ == "__main__":
+    _default_proj = os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo")
     parser = argparse.ArgumentParser(description="Pub/Sub to BigQuery Streaming Dataflow Job")
-    parser.add_argument("--project-id", default="oso-ai-503519")
+    parser.add_argument("--project-id", default=_default_proj)
     parser.add_argument("--dataset", default="Cymbal_Cyber")
-    parser.add_argument("--subscription", default="projects/oso-ai-503519/subscriptions/raw_logs_to_bq_sub")
+    parser.add_argument("--subscription", default=f"projects/{_default_proj}/subscriptions/raw_logs_to_bq_sub")
     parser.add_argument("--runner", default="DirectRunner", choices=["DirectRunner", "DataflowRunner"])
     args = parser.parse_args()
 

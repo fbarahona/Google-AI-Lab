@@ -8,7 +8,7 @@ Usage Examples:
   python -m src.demo.data_generator.log_generator --mode benign --rate 50 --destination bigquery
 
   # 2. Upload batch benign logs to Google Cloud Storage:
-  python -m src.demo.data_generator.log_generator --mode benign --batch-size 200 --destination gcs --bucket cymbal-cyber-raw-logs_oso-ai-503519
+  python -m src.demo.data_generator.log_generator --mode benign --batch-size 200 --destination gcs --bucket cymbal-cyber-raw-logs_<PROJECT_ID>
 
   # 3. Inject an ad-hoc MALICIOUS threat scenario:
   python -m src.demo.data_generator.log_generator --mode threat --threat-type malicious --user u.lewis --destination bigquery
@@ -77,8 +77,8 @@ BENIGN_COMMANDS = ["ipconfig /all", "ping 8.8.8.8", "ls -la /home", "df -h", "ho
 class SyntheticLogEngine:
     """Core simulation engine for generating enterprise user and device activity."""
 
-    def __init__(self, project_id: str = "oso-ai-503519", dataset_id: str = "Cymbal_Cyber"):
-        self.project_id = project_id
+    def __init__(self, project_id: Optional[str] = None, dataset_id: str = "Cymbal_Cyber"):
+        self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo")
         self.dataset_id = dataset_id
         self.user_profiles: Dict[str, Dict[str, Any]] = {}
         self.available_internal_ips: Set[str] = set()
@@ -256,7 +256,7 @@ def main():
                         help="Number of iterations or events to generate in batch mode.")
     parser.add_argument("--destination", choices=["bigquery", "gcs", "pubsub", "local"], default="local",
                         help="Destination sink for generated logs.")
-    parser.add_argument("--project-id", type=str, default=os.getenv("GOOGLE_CLOUD_PROJECT", "oso-ai-503519"),
+    parser.add_argument("--project-id", type=str, default=os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo"),
                         help="GCP Project ID.")
     parser.add_argument("--dataset", type=str, default="Cymbal_Cyber",
                         help="BigQuery dataset name.")

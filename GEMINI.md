@@ -16,7 +16,7 @@ The project features an end-to-end near real-time cybersecurity threat detection
 - **Data Engineering Pipelines (`src/demo/data_pipeline/`):** Ingestion pipelines, GCS loader, and BigQuery Continuous Queries.
 - **SOC Ticketing System & Console (`src/demo/soc_ticketing/`):** Persistent incident queue and interactive Streamlit console for analyst triage.
 - **Zero-Cloud Local Runner (`src/demo/local_runner.py`):** End-to-end local simulation without requiring cloud infrastructure.
-- **Terraform IaC (`src/demo/terraform/`):** Infrastructure templates for Google Cloud (project `oso-ai-503519`).
+- **Terraform IaC (`src/demo/terraform/`):** Infrastructure templates for Google Cloud (project `<project_name>`).
 
 ---
 
@@ -62,7 +62,7 @@ The project features an end-to-end near real-time cybersecurity threat detection
 ### 1. Environment Variables & Credentials (`.env`)
 Environment variables are loaded automatically at startup via `python-dotenv`:
 - `GOOGLE_GENAI_USE_ENTERPRISE=true`: Uses Vertex AI endpoint.
-- `GOOGLE_CLOUD_PROJECT=oso-ai-503519`: Target GCP project.
+- `GOOGLE_CLOUD_PROJECT=<project_name>`: Target GCP project.
 - `GOOGLE_CLOUD_LOCATION=us-east1` (or `global`): Model and service region.
 - `GEMINI_MODEL=gemini-3.8-flash`: Configures the Gemini model.
 

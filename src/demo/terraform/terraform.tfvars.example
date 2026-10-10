@@ -1,11 +1,11 @@
-# Terraform variable values for project oso-ai-503519
+# Terraform variable values
 
-project_id          = "oso-ai-503519"
+project_id          = "your-gcp-project-id"
 region              = "us-east1"
 bigquery_location   = "US"
 dataset_id          = "Cymbal_Cyber"
 service_account_id  = "bq-continuous-query-sa"
 disable_on_destroy  = false
 
-# Optional: populate after deploying ADK into Vertex AI Agent Engine
-# agent_push_endpoint = "https://us-east1-aiplatform.googleapis.com/v1/projects/oso-ai-503519/locations/us-east1/reasoningEngines/<ENGINE_ID>:streamQuery"
+# Optional: populate after deploying ADK into Vertex AI Agent Runtime
+# agent_push_endpoint = "https://us-east1-aiplatform.googleapis.com/v1/projects/<PROJECT_ID>/locations/us-east1/reasoningEngines/<ENGINE_ID>:streamQuery"

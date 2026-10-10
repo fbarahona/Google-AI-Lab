@@ -1,6 +1,6 @@
 /* =================================================================================
  * Cymbal Cyber - BigQuery Continuous Query for Real-Time Threat Correlation
- * Target Project: oso-ai-503519
+ * Target Project: <PROJECT_ID>
  * Target Dataset: Cymbal_Cyber
  * Target Pub/Sub Topic: cymbal_cyber_alerts
  * =================================================================================
@@ -9,7 +9,7 @@
 EXPORT DATA
 OPTIONS (
   format = CLOUD_PUBSUB,
-  uri = "https://pubsub.googleapis.com/projects/oso-ai-503519/topics/cymbal_cyber_alerts"
+  uri = "https://pubsub.googleapis.com/projects/<PROJECT_ID>/topics/cymbal_cyber_alerts"
 )
 AS (
   /* CTE 1: Correlate Access and Network Events using streaming APPENDS read */

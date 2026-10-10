@@ -30,12 +30,12 @@ LOCAL_HISTORY_DIR = os.path.join(LOCAL_QUEUE_DIR, "history")
 class SocTicketingService:
     def __init__(
         self,
-        project_id: str = "oso-ai-503519",
+        project_id: Optional[str] = None,
         dataset_id: str = "Cymbal_Cyber",
         escalation_bucket: Optional[str] = None,
         webhook_url: Optional[str] = None
     ):
-        self.project_id = project_id
+        self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo")
         self.dataset_id = dataset_id
         self.escalation_bucket_name = (
             escalation_bucket

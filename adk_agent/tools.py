@@ -42,7 +42,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Project configuration
-PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "oso-ai-503519")
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo")
 LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-east1")
 DATASET_ID = os.getenv("BIGQUERY_DATASET", "Cymbal_Cyber")
 MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")

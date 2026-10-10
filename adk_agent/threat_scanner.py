@@ -31,7 +31,7 @@ from .logging_utils import setup_logging, log_agent_event
 
 logger = logging.getLogger("BigQueryThreatScanner")
 
-PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "oso-ai-503519")
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo")
 DATASET_ID = os.getenv("BIGQUERY_DATASET", "Cymbal_Cyber")
 SCAN_INTERVAL_SECONDS = 30
 

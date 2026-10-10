@@ -16,8 +16,8 @@ logger = logging.getLogger("GcsToBigQueryLoader")
 
 
 class GcsToBigQueryLoader:
-    def __init__(self, project_id: str = "oso-ai-503519", dataset_id: str = "Cymbal_Cyber"):
-        self.project_id = project_id
+    def __init__(self, project_id: Optional[str] = None, dataset_id: str = "Cymbal_Cyber"):
+        self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo")
         self.dataset_id = dataset_id
         self.client = bigquery.Client(project=project_id)
 
@@ -61,10 +61,11 @@ class GcsToBigQueryLoader:
 
 
 if __name__ == "__main__":
+    _default_proj = os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo")
     parser = argparse.ArgumentParser(description="Load raw logs from GCS into BigQuery tables.")
-    parser.add_argument("--project-id", default=os.getenv("GOOGLE_CLOUD_PROJECT", "oso-ai-503519"))
+    parser.add_argument("--project-id", default=_default_proj)
     parser.add_argument("--dataset", default="Cymbal_Cyber")
-    parser.add_argument("--bucket", default="cymbal-cyber-raw-logs_oso-ai-503519")
+    parser.add_argument("--bucket", default=os.getenv("RAW_LOGS_BUCKET", f"cymbal-cyber-raw-logs_{_default_proj}"))
     args = parser.parse_args()
 
     loader = GcsToBigQueryLoader(project_id=args.project_id, dataset_id=args.dataset)

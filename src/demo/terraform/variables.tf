@@ -1,7 +1,6 @@
 variable "project_id" {
   description = "Google Cloud project ID where all resources will be provisioned."
   type        = string
-  default     = "oso-ai-503519"
 }
 
 variable "region" {

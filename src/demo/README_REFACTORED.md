@@ -1,6 +1,6 @@
 # Real-Time Cybersecurity AI: Cloud Architecture, Data Engineering, ADK & SOC
 
-This repository provides an enterprise-grade demonstration of **Cloud Architecture, Data Engineering, AI, and Cybersecurity** on Google Cloud Platform, configured for project `oso-ai-503519`.
+This repository provides an enterprise-grade demonstration of **Cloud Architecture, Data Engineering, AI, and Cybersecurity** on Google Cloud Platform, configured for project `<PROJECT_ID>`.
 
 ---
 
@@ -17,7 +17,7 @@ This repository provides an enterprise-grade demonstration of **Cloud Architectu
     ┌─────────────────────────┐   ┌─────────────────────────┐   ┌─────────────────────────┐
     │  Google Cloud Storage   │   │     Cloud Pub/Sub       │   │  Direct BQ Streaming    │
     │  gs://cymbal-cyber-     │   │  cymbal_cyber_raw_logs  │   │     Storage Write API   │
-    │  raw-logs_oso-ai-503519 │   └─────────────┬───────────┘   └─────────────┬───────────┘
+    │  raw-logs_<PROJECT_ID> │   └─────────────┬───────────┘   └─────────────┬───────────┘
     └────────────┬────────────┘                 │                             │
                  │ (GCS Loader)                 │ (Dataflow Streaming)        │
                  └──────────────────────┐       ▼                             │
@@ -80,7 +80,7 @@ python -m src.demo.data_generator.log_generator --mode benign --batch-size 100 -
 python -m src.demo.data_generator.log_generator --mode continuous --rate 50 --destination bigquery
 
 # Upload logs to Google Cloud Storage:
-python -m src.demo.data_generator.log_generator --mode benign --batch-size 250 --destination gcs --bucket cymbal-cyber-raw-logs_oso-ai-503519
+python -m src.demo.data_generator.log_generator --mode benign --batch-size 250 --destination gcs --bucket cymbal-cyber-raw-logs_<PROJECT_ID>
 
 # Inject ad-hoc MALICIOUS threat scenario:
 python -m src.demo.data_generator.log_generator --mode threat --threat-type malicious --user u.lewis --destination bigquery
@@ -191,14 +191,14 @@ streamlit run src/demo/soc_ticketing/streamlit_soc_console.py
 ---
 
 ### 6. Terraform Deployment (`src/demo/terraform/`)
-Comprehensive Terraform templates configured for GCP project `oso-ai-503519`:
+Comprehensive Terraform templates configured for GCP project `<PROJECT_ID>`:
 - **APIs:** Enables BigQuery, Vertex AI, Pub/Sub, Storage, Dataflow, Cloud Resource Manager, IAM Credentials.
 - **IAM:** Dedicated Service Account `bq-continuous-query-sa` with least-privilege roles and self-token-creation.
 - **Storage:** 4 GCS Buckets:
-  - `cymbal_cyber_adk_staging_bucket_oso-ai-503519`
-  - `cymbal-cyber-adk-escalations-bucket_oso-ai-503519`
-  - `cymbal-cyber-screenshots_oso-ai-503519`
-  - `cymbal-cyber-raw-logs_oso-ai-503519`
+  - `cymbal_cyber_adk_staging_bucket_<PROJECT_ID>`
+  - `cymbal-cyber-adk-escalations-bucket_<PROJECT_ID>`
+  - `cymbal-cyber-screenshots_<PROJECT_ID>`
+  - `cymbal-cyber-raw-logs_<PROJECT_ID>`
 - **BigQuery:** Dataset `Cymbal_Cyber`, partitioned & clustered tables (`user_access_events`, `network_events`, `adk_threat_assessment`, `soc_tickets`, `agent_events`), connection `continuous-query-vertex-ai-connection`, and screenshots view.
 - **Pub/Sub:** Topics `cymbal_cyber_alerts`, `cymbal_cyber_raw_logs` and subscriptions.
 
@@ -206,8 +206,8 @@ Comprehensive Terraform templates configured for GCP project `oso-ai-503519`:
 ```bash
 cd src/demo/terraform
 terraform init
-terraform plan -var="project_id=oso-ai-503519"
-terraform apply -var="project_id=oso-ai-503519" -auto-approve
+terraform plan -var="project_id=<PROJECT_ID>"
+terraform apply -var="project_id=<PROJECT_ID>" -auto-approve
 ```
 
 ---

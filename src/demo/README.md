@@ -1,6 +1,6 @@
 # Real-time Cyber Security AI with BigQuery Continuous Queries, ADK & SOC
 
-This repository contains an end-to-end demonstration of a near real-time cybersecurity threat detection, multi-agent AI investigation, and SOC response system built on Google Cloud Platform (configured for project `oso-ai-503519`).
+This repository contains an end-to-end demonstration of a near real-time cybersecurity threat detection, multi-agent AI investigation, and SOC response system built on Google Cloud Platform (configured for project `<PROJECT_ID>`).
 
 It integrates **Cloud Architecture**, **Data Engineering**, **Agentic AI**, and **Cybersecurity Operations**:
 - **Synthetic Log Generator:** Modular Python tool generating access and network logs with ad-hoc threat injection (both malicious attacks and benign false positives).
@@ -13,7 +13,7 @@ It integrates **Cloud Architecture**, **Data Engineering**, **Agentic AI**, and 
   3. `visual_analysis_agent`: Performs multimodal visual analysis and OCR on user desktop screenshots.
   4. `soc_ticketing_agent`: Consolidates forensic findings and passes incident tickets to the SOC ticketing system.
 - **SOC Ticketing System & Console:** Persistent incident queue and interactive Streamlit console for human-in-the-loop triage.
-- **Terraform Infrastructure as Code:** Modular Terraform templates provisioning all GCP resources in project `oso-ai-503519`.
+- **Terraform Infrastructure as Code:** Modular Terraform templates provisioning all GCP resources in project `<PROJECT_ID>`.
 - **Zero-Cloud Local Testing:** Ability to run the complete pipeline locally on your workstation with no cloud deployment required.
 
 ---
@@ -31,7 +31,7 @@ It integrates **Cloud Architecture**, **Data Engineering**, **Agentic AI**, and 
     ┌─────────────────────────┐   ┌─────────────────────────┐   ┌─────────────────────────┐
     │  Google Cloud Storage   │   │     Cloud Pub/Sub       │   │  Direct BQ Streaming    │
     │  gs://cymbal-cyber-     │   │  cymbal_cyber_raw_logs  │   │     Storage Write API   │
-    │  raw-logs_oso-ai-503519 │   └─────────────┬───────────┘   └─────────────┬───────────┘
+    │  raw-logs_<PROJECT_ID> │   └─────────────┬───────────┘   └─────────────┬───────────┘
     └────────────┬────────────┘                 │                             │
                  │ (GCS Loader)                 │ (Dataflow Streaming)        │
                  └──────────────────────┐       ▼                             │
@@ -117,7 +117,7 @@ python -m src.demo.data_generator.log_generator --mode benign --batch-size 100 -
 python -m src.demo.data_generator.log_generator --mode continuous --rate 50 --destination bigquery
 
 # Upload batch logs to Cloud Storage:
-python -m src.demo.data_generator.log_generator --mode benign --batch-size 250 --destination gcs --bucket cymbal-cyber-raw-logs_oso-ai-503519
+python -m src.demo.data_generator.log_generator --mode benign --batch-size 250 --destination gcs --bucket cymbal-cyber-raw-logs_<PROJECT_ID>
 
 # Inject ad-hoc MALICIOUS threat scenario:
 python -m src.demo.data_generator.log_generator --mode threat --threat-type malicious --user u.lewis --destination bigquery
@@ -234,22 +234,22 @@ python -m adk_agent.threat_scanner --daemon --interval 30
 ---
 
 ### 6. Cloud Deployment with Terraform (`src/demo/terraform/`)
-Full Google Cloud infrastructure provisioning under project `oso-ai-503519`:
+Full Google Cloud infrastructure provisioning under project `<PROJECT_ID>`:
 
 ```bash
 cd src/demo/terraform
 terraform init
-terraform plan -var="project_id=oso-ai-503519"
-terraform apply -var="project_id=oso-ai-503519" -auto-approve
+terraform plan -var="project_id=<PROJECT_ID>"
+terraform apply -var="project_id=<PROJECT_ID>" -auto-approve
 ```
 
 **Resources provisioned:**
 - **APIs:** BigQuery, Vertex AI, Pub/Sub, Storage, Dataflow, IAM Credentials, Resource Manager.
 - **IAM:** Service Account `bq-continuous-query-sa` with least-privilege roles and self-token-creation.
 - **Storage:** 4 GCS Buckets:
-  - `cymbal_cyber_adk_staging_bucket_oso-ai-503519`
-  - `cymbal-cyber-adk-escalations-bucket_oso-ai-503519`
-  - `cymbal-cyber-screenshots_oso-ai-503519`
-  - `cymbal-cyber-raw-logs_oso-ai-503519`
+  - `cymbal_cyber_adk_staging_bucket_<PROJECT_ID>`
+  - `cymbal-cyber-adk-escalations-bucket_<PROJECT_ID>`
+  - `cymbal-cyber-screenshots_<PROJECT_ID>`
+  - `cymbal-cyber-raw-logs_<PROJECT_ID>`
 - **BigQuery:** Dataset `Cymbal_Cyber`, partitioned & clustered tables (`user_access_events`, `network_events`, `adk_threat_assessment`, `soc_tickets`, `agent_events`), connection `continuous-query-vertex-ai-connection`, and screenshots view.
 - **Pub/Sub:** Topics `cymbal_cyber_alerts` and `cymbal_cyber_raw_logs` with subscriptions.

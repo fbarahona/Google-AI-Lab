@@ -1,6 +1,6 @@
 """
 Script to generate System Architecture Diagram as both SVG and PNG image files.
-Based on src/demo/README_REFACTORED.md for Google Cloud Platform (oso-ai-503519).
+Based on src/demo/README_REFACTORED.md for Google Cloud Platform (<PROJECT_ID>).
 """
 
 import os
@@ -139,7 +139,7 @@ def create_svg():
     <rect x="-10" y="-8" width="56" height="56" rx="14" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
     <text x="5" y="28" font-size="28">🛡️</text>
     <text x="65" y="20" class="title">Enterprise Real-Time Cybersecurity AI: Cloud Architecture &amp; ADK SOC</text>
-    <text x="65" y="42" class="subtitle">Google Cloud Platform (<tspan fill="#38bdf8" font-weight="700">oso-ai-503519</tspan>) • BigQuery Continuous Lakehouse • Google ADK Multi-Agent System • Gemini Vision</text>
+    <text x="65" y="42" class="subtitle">Google Cloud Platform (<tspan fill="#38bdf8" font-weight="700"><PROJECT_ID></tspan>) • BigQuery Continuous Lakehouse • Google ADK Multi-Agent System • Gemini Vision</text>
   </g>
 
   <!-- ==================== 1. SYNTHETIC LOG GENERATOR LAYER ==================== -->
@@ -176,7 +176,7 @@ def create_svg():
   <g transform="translate(100, 270)" filter="url(#shadow)">
     <rect width="380" height="100" rx="14" fill="url(#pipelineGrad)" stroke="#38bdf8" stroke-width="1.8"/>
     <text x="20" y="30" class="card-title">🗄️ Google Cloud Storage</text>
-    <text x="20" y="52" class="card-mono">gs://cymbal-cyber-raw-logs_oso-ai-503519</text>
+    <text x="20" y="52" class="card-mono">gs://cymbal-cyber-raw-logs_<PROJECT_ID></text>
     <rect x="20" y="65" width="340" height="24" rx="6" fill="#082f49" stroke="#0284c7" stroke-width="1"/>
     <text x="30" y="81" class="card-sub" fill="#7dd3fc">⚡ Batch Loader: <tspan class="card-mono" fill="#bae6fd">gcs_to_bigquery_loader.py</tspan></text>
   </g>
@@ -411,7 +411,7 @@ def create_png():
     draw.rounded_rectangle([(60, 35), (120, 85)], radius=12, fill=(30, 41, 59), outline=(56, 189, 248), width=2)
     draw.text((72, 47), "SOC", fill=(56, 189, 248), font=ImageFont.truetype(font_bold, 18))
     draw.text((140, 38), "Enterprise Real-Time Cybersecurity AI: Cloud Architecture & ADK SOC", fill=(248, 250, 252), font=title_font)
-    draw.text((140, 68), "Google Cloud Platform (oso-ai-503519) | BigQuery Lakehouse | Google ADK Multi-Agent System | Gemini Vision", fill=(148, 163, 184), font=sub_font)
+    draw.text((140, 68), "Google Cloud Platform (<PROJECT_ID>) | BigQuery Lakehouse | Google ADK Multi-Agent System | Gemini Vision", fill=(148, 163, 184), font=sub_font)
 
     # 1. Synthetic Log Generator Layer
     draw.rounded_rectangle([(520, 115), (1040, 210)], radius=16, fill=(30, 27, 75), outline=(168, 85, 247), width=2)
@@ -442,7 +442,7 @@ def create_png():
     # GCS
     draw.rounded_rectangle([(100, 270), (480, 370)], radius=14, fill=(15, 23, 42), outline=(56, 189, 248), width=2)
     draw.text((120, 282), "Google Cloud Storage", fill=(255, 255, 255), font=card_title_font)
-    draw.text((120, 308), "gs://cymbal-cyber-raw-logs_oso-ai-503519", fill=(147, 197, 253), font=card_mono_font)
+    draw.text((120, 308), "gs://cymbal-cyber-raw-logs_<PROJECT_ID>", fill=(147, 197, 253), font=card_mono_font)
     draw.rounded_rectangle([(120, 332), (460, 356)], radius=6, fill=(8, 47, 73), outline=(2, 132, 199), width=1)
     draw.text((130, 337), "Batch Loader: gcs_to_bigquery_loader.py", fill=(186, 230, 253), font=card_mono_font)
 
