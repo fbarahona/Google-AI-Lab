@@ -114,6 +114,35 @@ The container incorporates several enterprise optimizations:
 
 ---
 
+## 🛡️ Featured Demonstration: Real-Time Cyber Security AI (`src/demo`)
+
+Located under [`src/demo`](src/demo), this project demonstrates an end-to-end event-driven cybersecurity threat detection, multi-agent AI investigation, and SOC response system:
+
+- **Synthetic Log Generator (`src/demo/data_generator`):** Replaces legacy Colab notebooks with a modular Python CLI and API simulating access logs (`user_access_events`) and network logs (`network_events`) with ad-hoc threat injection (`malicious` attacks vs `false_positive` anomalies). Supports sinks to GCS, Pub/Sub, BigQuery, or local files.
+- **Data Engineering Pipelines (`src/demo/data_pipeline`):** Ingestion pathways including Pub/Sub -> Dataflow streaming, GCS batch loading, and BigQuery Continuous Queries.
+- **Google ADK Multi-Agent Team (`src/demo/adk_agent`):** Orchestrator coordinating 4 specialized agents:
+  1. `google_search_agent`: OSINT threat intel on external public IPs.
+  2. `bq_investigation_agent`: 24-hour behavioral profile queries in BigQuery.
+  3. `visual_analysis_agent`: Gemini multimodal vision OCR on user desktop screenshots.
+  4. `soc_ticketing_agent`: Incident synthesis and dispatch to SOC ticketing.
+- **BigQuery Threat Scanner (`src/demo/adk_agent/threat_scanner.py`):** Active daemon reading BigQuery for new anomalies and triggering agent investigations.
+- **SOC Ticketing System & Console (`src/demo/soc_ticketing`):** Human-in-the-loop Streamlit analyst console with dual-mode support (cloud GCS + local file queue).
+- **Terraform Templates (`src/demo/terraform`):** Production IaC deploying all GCP resources under project `oso-ai-503519`.
+
+### Quick Test Commands
+```bash
+# 1. Run full demo locally (Zero cloud required):
+python -m src.demo.local_runner --threat malicious
+
+# 2. Launch interactive SOC Analyst Console:
+LOCAL_MODE=true streamlit run src/demo/soc_ticketing/streamlit_soc_console.py
+
+# 3. Run automated test suite:
+python -m pytest
+```
+
+---
+
 ## 📂 Project Structure
 
 ```text
@@ -123,9 +152,20 @@ The container incorporates several enterprise optimizations:
 │   ├── devcontainer.json           # Extensions, mounts, environment variables, settings
 │   ├── post-create.sh              # Container initialization hook
 │   └── Kyndryl-SSL-Inspection.cer  # Enterprise CA certificate
+├── src/
+│   └── demo/                       # Cybersecurity AI & Cloud Architecture Demo
+│       ├── data_generator/         # Synthetic log generator & threat injection
+│       ├── data_pipeline/          # Pub/Sub, Dataflow & BigQuery pipelines
+│       ├── adk_agent/              # ADK multi-agent orchestrator & 4 sub-agents
+│       ├── soc_ticketing/          # SOC ticketing service & Streamlit console
+│       ├── terraform/              # Terraform templates for oso-ai-503519
+│       ├── tests/                  # Automated pytest suite (17 tests)
+│       ├── local_runner.py         # Zero-cloud local test harness
+│       └── README.md               # Demo technical guide & architecture
 ├── .env                            # Local environment variables (git-ignored)
 ├── .gitignore                      # Git ignore patterns
-├── requirements.txt                # Python dependencies (ADK, agents-cli, Jupyter, pytest)
+├── pytest.ini                      # Pytest configuration
+├── requirements.txt                # Python dependencies (ADK, BigQuery, GenAI, Streamlit)
 ├── GEMINI.md                       # Comprehensive agent development & lifecycle instructions
 └── README.md                       # Workspace documentation & quickstart
 ```

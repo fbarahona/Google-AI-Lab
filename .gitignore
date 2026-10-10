@@ -89,3 +89,7 @@ Thumbs.db
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
+
+# Local Demo Data & Logs
+local_demo_data/
+output_logs/
