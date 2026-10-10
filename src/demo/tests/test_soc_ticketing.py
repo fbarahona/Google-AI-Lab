@@ -1,7 +1,7 @@
 """
 Unit tests for SOC Ticketing System models and operations.
 """
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 import pytest
 from src.demo.soc_ticketing.models import SocTicket
 from src.demo.soc_ticketing.ticketing_service import SocTicketingService
@@ -16,6 +16,8 @@ def test_soc_ticket_validation():
         threat_score=2500,
         severity="CRITICAL",
         status="ESCALATED",
+        category="Malware",
+        sla_status="Within SLA",
         agent_decision="PERCEIVED_THREAT",
         agent_reason="High volume of suspicious PowerShell and external IP connections.",
         mitre_tactics=["Command and Control", "Execution"],
@@ -24,6 +26,7 @@ def test_soc_ticket_validation():
     )
     assert ticket.ticket_id == "SOC-TICKET-u.lewis-1718000000"
     assert ticket.severity == "CRITICAL"
+    assert ticket.category == "Malware"
     assert len(ticket.mitre_tactics) == 2
 
 
@@ -60,3 +63,35 @@ def test_soc_ticketing_service_dispatch():
     assert mock_blob.upload_from_string.called
     assert mock_bq.insert_rows_json.called
 
+
+def test_soc_ticketing_fetch_historic_and_verdict():
+    service = SocTicketingService(project_id="test-project", dataset_id="Test_Dataset")
+    
+    # 1. Fetch historic tickets (should return seeded + archived records)
+    historic = service.fetch_historic_tickets()
+    assert len(historic) >= 5
+    assert any(t.get("human_decision") == "Genuine Threat" for t in historic)
+    assert any(t.get("human_decision") == "False Positive" for t in historic)
+
+    # 2. Record verdict for a ticket
+    test_id = "SOC-TICKET-test-verdict-99"
+    ticket = SocTicket(
+        ticket_id=test_id,
+        user_id="test_user",
+        device_id="ws-01",
+        source_ip="10.1.1.1",
+        threat_score=100,
+        severity="LOW",
+        status="ESCALATED",
+        agent_decision="PERCEIVED_THREAT",
+        agent_reason="Escalated for test",
+        structured_report="Test report"
+    )
+    service.create_and_dispatch_ticket(ticket)
+
+    success = service.record_human_verdict(test_id, "False Positive", "Test resolution notes")
+    assert success is True
+
+    # Check updated in history
+    updated_hist = service.fetch_historic_tickets()
+    assert any(t.get("ticket_id") == test_id and t.get("human_decision") == "False Positive" for t in updated_hist)

@@ -25,6 +25,25 @@ class SocTicket(BaseModel):
         "OPEN",
         description="Lifecycle status in SOC ticketing system."
     )
+    category: Literal[
+        "Risky Domain/URL",
+        "Malware",
+        "Data Leak",
+        "Botnet",
+        "PUP",
+        "Recon",
+        "Policy Violation"
+    ] = Field(
+        "Risky Domain/URL",
+        description="Incident category classification."
+    )
+    sla_status: Literal["Within SLA", "Approaching SLA", "Breached SLA"] = Field(
+        "Within SLA",
+        description="Service Level Agreement deadline status."
+    )
+    geo_country: Optional[str] = Field(None, description="Country of origin detected via OSINT/GeoIP.")
+    geo_lat: Optional[float] = Field(None, description="Latitude for threat mapping.")
+    geo_lon: Optional[float] = Field(None, description="Longitude for threat mapping.")
     agent_decision: str = Field(..., description="Autonomous assessment by ADK agents.")
     agent_reason: str = Field(..., description="Detailed rationale provided by ADK.")
     mitre_tactics: List[str] = Field(default_factory=list, description="Associated MITRE ATT&CK tactics.")
@@ -34,4 +53,3 @@ class SocTicket(BaseModel):
     human_decision: Optional[str] = Field(None, description="Adjudication verdict by human SOC analyst.")
     human_comment: Optional[str] = Field(None, description="Analyst review notes.")
     adjudicated_at: Optional[str] = Field(None, description="Timestamp of human resolution.")
-

@@ -168,4 +168,3 @@ Run the automated test suite:
 python -m pytest
 ```
 All 17 tests validate models, agent configurations, security DML guards, threat generators, and ticketing operations.
-

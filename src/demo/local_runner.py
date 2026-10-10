@@ -273,27 +273,11 @@ def step_4_dispatch_ticket_locally(ticket: SocTicket):
     print(f"\n=======================================================")
     print(f"[STEP 4] Dispatching Ticket to Local SOC Ticketing Queue")
     print(f"=======================================================")
-    os.makedirs(ESCALATIONS_DIR, exist_ok=True)
+    service = SocTicketingService(project_id="local-demo")
+    msg = service.create_and_dispatch_ticket(ticket)
     ticket_file = os.path.join(ESCALATIONS_DIR, f"human_escalation_information_{ticket.ticket_id}.json")
 
-    payload = {
-        "timestamp": ticket.created_at,
-        "ticket_id": ticket.ticket_id,
-        "user_id": ticket.user_id,
-        "device_id": ticket.device_id,
-        "severity": ticket.severity,
-        "threat_score": ticket.threat_score,
-        "context_for_human": ticket.structured_report,
-        "agent_reason_for_escalation": ticket.agent_reason,
-        "screenshot_url": ticket.screenshot_url,
-        "mitre_tactics": ticket.mitre_tactics,
-        "indicators_of_compromise": ticket.indicators_of_compromise
-    }
-
-    with open(ticket_file, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
-
-    print(f"  -> Ticket dispatched successfully!")
+    print(f"  -> {msg}")
     print(f"  -> File Queue: {ticket_file}")
     print(f"\n-------------------------------------------------------")
     print(f"🎉 LOCAL DEMO EXECUTION COMPLETE!")
