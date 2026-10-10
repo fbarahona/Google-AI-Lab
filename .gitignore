@@ -55,6 +55,10 @@ yarn-error.log*
 .env.*
 !.env.example
 !.env.template
+*.cer
+*.crt
+*.pem
+*.key
 
 # Terraform local state & credentials
 **/.terraform/
