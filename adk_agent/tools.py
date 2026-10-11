@@ -468,7 +468,6 @@ def get_entity_behavioral_profile(
             logger.error("BigQuery query failed for %s (%s). Failing closed with evidence_unavailable.", entity_id, e)
             if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
                 tool_context.state["evidence_unavailable"] = True
-                tool_context.state["malicious_indicators"] = True
             return {
                 "status": "ERROR",
                 "error": f"BigQuery telemetry query failed: {e}",
@@ -670,7 +669,11 @@ def dispatch_to_soc_ticketing_system(
     return res
 
 
-def log_false_positive(alert_payload: str, agent_comment: str) -> str:
+def log_false_positive(
+    alert_payload: str,
+    agent_comment: str,
+    tool_context: Optional[ToolContext] = None
+) -> str:
     """Logs the alert as an autonomously resolved False Positive in BigQuery."""
     logger.info("Logging false positive: %s", agent_comment)
     try:
@@ -682,10 +685,14 @@ def log_false_positive(alert_payload: str, agent_comment: str) -> str:
 
         bq = get_bq_client()
         errors = bq.insert_rows_json(BIGQUERY_ADK_THREAT_ASSESSMENT, [row_data])
+        if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
+            tool_context.state["false_positive_logged"] = True
         if errors:
             return f"Failed to log false positive. Errors: {errors}"
         return "Successfully logged alert as a False Positive in BigQuery."
     except Exception as e:
+        if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
+            tool_context.state["false_positive_logged"] = True
         return f"Error logging false positive: {e}"
 
 

@@ -180,50 +180,94 @@ def log_agent_completion(callback_context: CallbackContext):
     log_agent_event(f"Completed execution. Output summary: {str(output)[:150]}...", callback_context.agent_name)
 
 
+def before_orchestrator_starts(callback_context: CallbackContext):
+    """
+    Initializes and seeds session state for the orchestrator workflow:
+    1. Resets invocation flags to prevent cross-alert state bleeding across invocations.
+    2. Parses incoming alert JSON payload into state (user_id, device_id, source_ip, score)
+       if not already present.
+    """
+    log_agent_event(f"Investigation session started: {callback_context.agent_name}")
+    state = getattr(callback_context, "state", None)
+    if state is not None:
+        # Reset invocation flags
+        state["prompt_injection_detected"] = False
+        state["malicious_indicators"] = False
+        state["evidence_unavailable"] = False
+        state["ticket_dispatched"] = False
+        state["escalation_dispatched"] = False
+        state["false_positive_logged"] = False
+
+        # Seed alert fields from user_content if missing
+        user_content = getattr(callback_context, "user_content", None)
+        raw_text = ""
+        if user_content:
+            parts = getattr(user_content, "parts", []) if hasattr(user_content, "parts") else (user_content if isinstance(user_content, list) else [])
+            for p in parts:
+                p_text = getattr(p, "text", "") if hasattr(p, "text") else str(p)
+                if p_text:
+                    raw_text += p_text
+
+        if raw_text:
+            try:
+                match = re.search(r"(\{.*\})", raw_text, re.DOTALL)
+                if match:
+                    data = json.loads(match.group(1))
+                    if isinstance(data, dict):
+                        if not state.get("user_id") and data.get("user_id"):
+                            state["user_id"] = data["user_id"]
+                        if not state.get("device_id") and data.get("device_id"):
+                            state["device_id"] = data["device_id"]
+                        if not state.get("source_ip") and data.get("source_ip"):
+                            state["source_ip"] = data["source_ip"]
+                        if not state.get("threat_score") and data.get("total_2_min_threat_score"):
+                            state["threat_score"] = data["total_2_min_threat_score"]
+            except Exception:
+                pass
+
+
 def default_deny_soc_callback(callback_context: CallbackContext):
     """
     Default-Deny safety enforcement callback running after soc_ticketing_agent finishes.
-    If risk flags (prompt injection, malicious indicators, or missing evidence) are set,
-    and neither ticket dispatch nor escalation tool was executed, this callback
-    deterministically escalates the alert so it can never be dropped silently.
+    Ensures that every investigated alert has an active adjudication. If the model finished
+    without resolving the alert through a permitted tool action (dispatch, escalation, or
+    false positive logging), this callback deterministically escalates the alert to human review.
     """
     log_agent_completion(callback_context)
     state = getattr(callback_context, "state", None)
     if state is None:
         return
 
-    has_risk = (
-        state.get("prompt_injection_detected")
-        or state.get("malicious_indicators")
-        or state.get("evidence_unavailable")
+    ticket_resolved = (
+        state.get("ticket_dispatched")
+        or state.get("escalation_dispatched")
+        or state.get("false_positive_logged")
     )
-    ticket_resolved = state.get("ticket_dispatched") or state.get("escalation_dispatched")
 
-    if has_risk and not ticket_resolved:
-        log_agent_event("DEFAULT-DENY ENFORCEMENT: Model finished without dispatching ticket for high-risk alert. Executing deterministic human escalation.")
+    if not ticket_resolved:
+        log_agent_event("DEFAULT-DENY ENFORCEMENT: Model finished without invoking a resolution tool. Executing deterministic human escalation.")
         try:
-            from .tools import get_soc_service
-            from .soc_ticketing.models import SocTicket
+            from .tools import get_soc_service, SocTicket
         except (ImportError, ValueError):
             try:
-                from tools import get_soc_service
-                from soc_ticketing.models import SocTicket
+                from tools import get_soc_service, SocTicket
             except ImportError:
                 from src.demo.soc_ticketing.models import SocTicket
                 from adk_agent.tools import get_soc_service
 
         soc_service = get_soc_service()
-        ticket_id = f"SOC-TICKET-AUTO-ESCALATED-{int(time.time())}"
+        user_id = state.get("user_id") or "unresolved_user"
+        ticket_id = f"SOC-TICKET-AUTO-ESCALATED-{user_id}-{int(time.time())}"
         ticket = SocTicket(
             ticket_id=ticket_id,
-            user_id=state.get("user_id", "unresolved_user"),
-            device_id=state.get("device_id", "unknown_device"),
-            source_ip=state.get("source_ip", "unknown_ip"),
-            threat_score=state.get("threat_score", 100),
+            user_id=user_id,
+            device_id=state.get("device_id") or "unknown_device",
+            source_ip=state.get("source_ip") or "unknown_ip",
+            threat_score=state.get("threat_score") or 100,
             severity="HIGH",
             status="ESCALATED",
             agent_decision="AUTO_ESCALATED_DEFAULT_DENY",
-            agent_reason="Deterministic Default-Deny: Alert exhibited risk flags (injection, malicious indicators, or missing evidence) but no ticket was dispatched by agent.",
+            agent_reason="Deterministic Default-Deny: Model terminated turn without resolving alert through a permitted tool action.",
             structured_report="Auto-escalated by security platform default-deny guardrail."
         )
         soc_service.create_and_dispatch_ticket(ticket)
@@ -394,7 +438,7 @@ orchestrator_agent = OrchestratorAgent(
     sub_agents=[investigation_team, soc_ticketing_agent],
     description="Orchestrates full security investigation workflow and dispatches tickets to the SOC ticketing system.",
     instruction="Coordinate investigation team and pass final incident to SOC ticketing system.",
-    before_agent_callback=before_sub_agent_starts
+    before_agent_callback=before_orchestrator_starts
 )
 
 # Backward Compatibility Aliases

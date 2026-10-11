@@ -117,7 +117,20 @@ class BigQueryThreatScanner:
             app_name=app_name,
             user_id=user_id,
             session_id=session_id,
-            state={"ticket_id": f"SOC-TICKET-{user_id}-{int(time.time())}"}
+            state={
+                "ticket_id": f"SOC-TICKET-{user_id}-{int(time.time())}",
+                "user_id": threat_payload.get("user_id"),
+                "device_id": threat_payload.get("device_id"),
+                "source_ip": threat_payload.get("source_ip"),
+                "threat_score": threat_payload.get("total_2_min_threat_score", 100),
+                "alert_payload": payload_json,
+                "prompt_injection_detected": False,
+                "malicious_indicators": False,
+                "evidence_unavailable": False,
+                "ticket_dispatched": False,
+                "escalation_dispatched": False,
+                "false_positive_logged": False
+            }
         )
 
         plugins: List[BasePlugin] = [bq_analytics_plugin] if bq_analytics_plugin else []

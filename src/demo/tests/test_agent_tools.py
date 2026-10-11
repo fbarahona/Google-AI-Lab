@@ -8,7 +8,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 from google.adk.sessions.state import State
 
-from adk_agent.agent import default_deny_soc_callback, forbidden_dml_check, security_gate_callback
+from adk_agent.agent import (
+    before_orchestrator_starts,
+    default_deny_soc_callback,
+    forbidden_dml_check,
+    security_gate_callback,
+)
 from adk_agent.tools import (
     _parse_alert_payload_to_row,
     build_event_logs_query,
@@ -307,8 +312,41 @@ def test_security_gate_permits_incident_dispatch():
     assert res is None
 
 
+def test_before_orchestrator_starts_resets_flags_and_seeds_state():
+    """Verify that before_orchestrator_starts resets invocation flags and seeds state from payload."""
+    callback_ctx = MagicMock()
+    # Leftover flags from a prior invocation
+    state_obj = State({
+        "prompt_injection_detected": True,
+        "ticket_dispatched": True,
+        "malicious_indicators": True,
+        "false_positive_logged": True
+    }, {})
+    callback_ctx.state = state_obj
+    part = MagicMock()
+    part.text = 'Investigate alert: {"user_id": "c.wilson", "device_id": "ws-dev-10", "source_ip": "194.26.135.68", "total_2_min_threat_score": 1850}'
+    content = MagicMock()
+    content.parts = [part]
+    callback_ctx.user_content = content
+    callback_ctx.agent_name = "SecurityInvestigationOrchestrator"
+
+    before_orchestrator_starts(callback_ctx)
+
+    # 1. Verification of flag reset (no leftover state leakage)
+    assert state_obj.get("prompt_injection_detected") is False
+    assert state_obj.get("malicious_indicators") is False
+    assert state_obj.get("ticket_dispatched") is False
+    assert state_obj.get("false_positive_logged") is False
+
+    # 2. Verification of alert metadata seeding
+    assert state_obj.get("user_id") == "c.wilson"
+    assert state_obj.get("device_id") == "ws-dev-10"
+    assert state_obj.get("source_ip") == "194.26.135.68"
+    assert state_obj.get("threat_score") == 1850
+
+
 def test_default_deny_callback_escalates_when_unresolved():
-    """Verify that default_deny_soc_callback escalates high-risk alerts if no ticket was dispatched."""
+    """Verify that default_deny_soc_callback escalates unresolved alerts using seeded user metadata."""
     callback_ctx = MagicMock()
     state_obj = State({}, {})
     state_obj["prompt_injection_detected"] = True
@@ -320,9 +358,20 @@ def test_default_deny_callback_escalates_when_unresolved():
     assert state_obj.get("escalation_dispatched") is True
 
 
+def test_default_deny_callback_permits_clean_false_positive():
+    """Verify that default_deny_soc_callback does not trigger when false_positive_logged is True."""
+    callback_ctx = MagicMock()
+    state_obj = State({}, {})
+    state_obj["false_positive_logged"] = True
+    callback_ctx.state = state_obj
+
+    default_deny_soc_callback(callback_ctx)
+    assert state_obj.get("escalation_dispatched") is not True
+
+
 @patch("adk_agent.tools.get_bq_client")
 def test_get_entity_behavioral_profile_cloud_mode_fails_closed(mock_get_bq):
-    """Verify that in cloud mode (LOCAL_MODE=false), BigQuery failure returns ERROR and sets evidence_unavailable."""
+    """Verify that in cloud mode (LOCAL_MODE=false), BigQuery failure returns ERROR and sets evidence_unavailable only."""
     mock_get_bq.side_effect = Exception("BigQuery 403 Forbidden: Missing roles/bigquery.user")
     mock_ctx = MagicMock()
     mock_ctx.state = State({}, {})
@@ -332,6 +381,8 @@ def test_get_entity_behavioral_profile_cloud_mode_fails_closed(mock_get_bq):
         assert res["status"] == "ERROR"
         assert "BigQuery telemetry query failed" in res["error"]
         assert mock_ctx.state.get("evidence_unavailable") is True
+        # Must NOT falsely claim malicious indicators were confirmed when data was missing
+        assert mock_ctx.state.get("malicious_indicators") is not True
 
 
 def test_get_entity_behavioral_profile_local_mode_schema_parity():

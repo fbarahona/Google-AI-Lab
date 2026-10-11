@@ -245,18 +245,23 @@ def step_3_run_agent_investigation(alert: Dict[str, Any], threat_type: str) -> D
     print(f"  [4] soc_ticketing_agent (Consolidation & Decision Gating):")
     ticket_id = f"SOC-TICKET-{user_id}-{int(time.time())}"
 
-    # Demonstrate deterministic Security Gate verification
-    from unittest.mock import MagicMock
+    # Demonstrate deterministic Security Gate verification using real ADK State
+    from google.adk.sessions.state import State
     from adk_agent.agent import security_gate_callback
-    mock_fp_tool = MagicMock()
-    mock_fp_tool.name = "log_false_positive"
-    mock_ctx = MagicMock()
-    mock_ctx.state = {
+
+    class _LocalTool:
+        name = "log_false_positive"
+
+    class _LocalToolContext:
+        def __init__(self, state: State):
+            self.state = state
+
+    demo_state = State({
         "prompt_injection_detected": prompt_injection_detected,
         "malicious_indicators": mal_cmds > 0 or risky_files > 0,
         "evidence_unavailable": False
-    }
-    gate_block = security_gate_callback(mock_fp_tool, {}, mock_ctx)
+    }, {})
+    gate_block = security_gate_callback(_LocalTool(), {}, _LocalToolContext(demo_state))
     if gate_block:
         print(f"      [🛡️ SECURITY GATE ENFORCED]: Attempted false-positive closure BLOCKED: {gate_block.get('reason')[:80]}...")
 
