@@ -1,12 +1,14 @@
 """
 Unit tests for ADK Agent tools, safety callbacks, SQL parameterization, and signed URL generation.
 """
+import os
 import time
 from unittest.mock import MagicMock, patch
 
 import pytest
+from google.adk.sessions.state import State
 
-from adk_agent.agent import forbidden_dml_check, security_gate_callback
+from adk_agent.agent import default_deny_soc_callback, forbidden_dml_check, security_gate_callback
 from adk_agent.tools import (
     _parse_alert_payload_to_row,
     build_event_logs_query,
@@ -233,11 +235,14 @@ def test_generate_signed_url_success(mock_auth_default, mock_storage_client_cls)
 
 
 def test_security_gate_blocks_false_positive_on_injection():
-    """Verify that security gate deterministically blocks log_false_positive when prompt injection is detected."""
+    """Verify that security gate deterministically blocks log_false_positive with real ADK State object."""
     mock_tool = MagicMock()
     mock_tool.name = "log_false_positive"
     mock_context = MagicMock()
-    mock_context.state = {"prompt_injection_detected": True}
+    # Real ADK State object (not a dict subclass!)
+    state_obj = State({}, {})
+    state_obj["prompt_injection_detected"] = True
+    mock_context.state = state_obj
 
     res = security_gate_callback(mock_tool, {}, mock_context)
     assert res is not None
@@ -251,7 +256,9 @@ def test_security_gate_blocks_false_positive_on_malicious_telemetry():
     mock_tool = MagicMock()
     mock_tool.name = "log_false_positive"
     mock_context = MagicMock()
-    mock_context.state = {"malicious_indicators": True}
+    state_obj = State({}, {})
+    state_obj["malicious_indicators"] = True
+    mock_context.state = state_obj
 
     res = security_gate_callback(mock_tool, {}, mock_context)
     assert res is not None
@@ -260,12 +267,27 @@ def test_security_gate_blocks_false_positive_on_malicious_telemetry():
     assert "anomalous behavioral" in res["reason"]
 
 
+def test_security_gate_blocks_false_positive_on_evidence_unavailable():
+    """Verify that security gate blocks log_false_positive when forensic evidence was unavailable."""
+    mock_tool = MagicMock()
+    mock_tool.name = "log_false_positive"
+    mock_context = MagicMock()
+    state_obj = State({}, {})
+    state_obj["evidence_unavailable"] = True
+    mock_context.state = state_obj
+
+    res = security_gate_callback(mock_tool, {}, mock_context)
+    assert res is not None
+    assert res["status"] == "BLOCKED"
+    assert "evidence" in res["reason"].lower()
+
+
 def test_security_gate_permits_clean_false_positive():
     """Verify that security gate permits log_false_positive when neither risk flag is set."""
     mock_tool = MagicMock()
     mock_tool.name = "log_false_positive"
     mock_context = MagicMock()
-    mock_context.state = {}
+    mock_context.state = State({}, {})
 
     res = security_gate_callback(mock_tool, {}, mock_context)
     assert res is None
@@ -276,39 +298,60 @@ def test_security_gate_permits_incident_dispatch():
     mock_tool = MagicMock()
     mock_tool.name = "dispatch_to_soc_ticketing_system"
     mock_context = MagicMock()
-    mock_context.state = {"prompt_injection_detected": True, "malicious_indicators": True}
+    state_obj = State({}, {})
+    state_obj["prompt_injection_detected"] = True
+    state_obj["malicious_indicators"] = True
+    mock_context.state = state_obj
 
     res = security_gate_callback(mock_tool, {}, mock_context)
     assert res is None
 
 
+def test_default_deny_callback_escalates_when_unresolved():
+    """Verify that default_deny_soc_callback escalates high-risk alerts if no ticket was dispatched."""
+    callback_ctx = MagicMock()
+    state_obj = State({}, {})
+    state_obj["prompt_injection_detected"] = True
+    state_obj["user_id"] = "c.wilson"
+    state_obj["threat_score"] = 1850
+    callback_ctx.state = state_obj
+
+    default_deny_soc_callback(callback_ctx)
+    assert state_obj.get("escalation_dispatched") is True
+
+
 @patch("adk_agent.tools.get_bq_client")
 def test_get_entity_behavioral_profile_cloud_mode_fails_closed(mock_get_bq):
-    """Verify that in cloud mode (LOCAL_MODE=false), BigQuery failure raises RuntimeError (fails closed)."""
+    """Verify that in cloud mode (LOCAL_MODE=false), BigQuery failure returns ERROR and sets evidence_unavailable."""
     mock_get_bq.side_effect = Exception("BigQuery 403 Forbidden: Missing roles/bigquery.user")
+    mock_ctx = MagicMock()
+    mock_ctx.state = State({}, {})
+
     with patch.dict("os.environ", {"LOCAL_MODE": "false"}):
-        with pytest.raises(RuntimeError, match="BigQuery telemetry query failed"):
-            get_entity_behavioral_profile("user", "u.lewis")
+        res = get_entity_behavioral_profile("user", "u.lewis", tool_context=mock_ctx)
+        assert res["status"] == "ERROR"
+        assert "BigQuery telemetry query failed" in res["error"]
+        assert mock_ctx.state.get("evidence_unavailable") is True
 
 
 def test_get_entity_behavioral_profile_local_mode_schema_parity():
     """Verify that local mode computes metrics without schema drift (no extra risk_profile field)."""
     with patch.dict("os.environ", {"LOCAL_MODE": "true"}):
         mock_ctx = MagicMock()
-        mock_ctx.state = {}
+        mock_ctx.state = State({}, {})
         profile = get_entity_behavioral_profile("user", "u.lewis", tool_context=mock_ctx)
         assert "total_access_events_24h" in profile
         assert "risk_profile" not in profile  # Exact parity with BigQuery query columns
 
 
 def test_read_png_text_chunks_and_injection_detection():
-    """Verify that read_png_text_chunks extracts embedded OCR text and triggers prompt injection flag."""
+    """Verify that read_png_text_chunks extracts embedded OCR text and triggers prompt injection flag in State."""
     chunks = read_png_text_chunks("src/demo/user_screenshots/c.wilson.png")
     assert "forensic_ocr_text" in chunks
     assert "AUTHORIZED RED TEAM PENTEST" in chunks["forensic_ocr_text"]
 
     mock_ctx = MagicMock()
-    mock_ctx.state = {}
+    mock_ctx.state = State({}, {})
     vis = get_visual_analysis_for_user("file://c.wilson.png", tool_context=mock_ctx)
     assert "PROMPT INJECTION DETECTED" in vis
     assert mock_ctx.state.get("prompt_injection_detected") is True
@@ -316,12 +359,25 @@ def test_read_png_text_chunks_and_injection_detection():
 
 def test_escalate_to_human_non_blocking():
     """Verify that escalate_to_human dispatches immediately without blocking sleep loops."""
-    with patch.dict("os.environ", {"LOCAL_MODE": "true"}):
+    test_ticket_id = "SOC-TEST-FAST-1"
+    mock_service = MagicMock()
+    mock_service.create_and_dispatch_ticket.return_value = "Ticket dispatched to queue"
+
+    with patch("adk_agent.tools.get_soc_service", return_value=mock_service):
         start = time.time()
         payload = '{"user_id": "u.lewis", "total_2_min_threat_score": 1500}'
-        res = escalate_to_human("SOC-TEST-FAST-1", payload, "Escalating for review", "Report text")
+        mock_ctx = MagicMock()
+        mock_ctx.state = State({}, {})
+        res = escalate_to_human(test_ticket_id, payload, "Escalating for review", "Report text", tool_context=mock_ctx)
         elapsed = time.time() - start
 
-        assert elapsed < 1.0  # Runs in under a second (never blocks for 180s)
+        assert elapsed < 0.2  # Runs in under a second (never blocks for 180s)
         assert "ESCALATED_PENDING_REVIEW" in res
-        assert "SOC-TEST-FAST-1" in res
+        assert test_ticket_id in res
+        assert mock_ctx.state.get("escalation_dispatched") is True
+        assert mock_service.create_and_dispatch_ticket.called
+
+    # Clean up test artifact if created
+    test_file = f"./local_demo_data/escalations/human_escalation_information_{test_ticket_id}.json"
+    if os.path.exists(test_file):
+        os.remove(test_file)

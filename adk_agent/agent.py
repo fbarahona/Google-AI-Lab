@@ -12,6 +12,7 @@ Defines the structure and orchestration logic of the ADK multi-agent system:
 import os
 import re
 import json
+import time
 import warnings
 from typing import Dict, Any, Optional
 
@@ -126,12 +127,13 @@ def security_gate_callback(tool: BaseTool, args: Dict[str, Any], tool_context: T
     """
     Deterministic security gate callback on soc_ticketing_agent.
     Enforces that the LLM cannot execute log_false_positive if:
-    1. Prompt injection was detected in visual forensic evidence (tool_context.state['prompt_injection_detected'] is True), OR
-    2. High-risk behavioral indicators were recorded in telemetry (tool_context.state['malicious_indicators'] is True).
+    1. Prompt injection was detected in visual forensic evidence, OR
+    2. High-risk behavioral indicators were recorded in telemetry, OR
+    3. Essential forensic evidence was unavailable.
     """
     if tool.name == "log_false_positive":
-        state = getattr(tool_context, "state", {}) if tool_context else {}
-        if isinstance(state, dict):
+        state = getattr(tool_context, "state", None)
+        if state is not None:
             if state.get("prompt_injection_detected"):
                 log_agent_event("SECURITY GATE TRIGGERED: Blocked log_false_positive due to visual prompt injection.")
                 return {
@@ -153,6 +155,17 @@ def security_gate_callback(tool: BaseTool, args: Dict[str, Any], tool_context: T
                         "You MUST dispatch an incident ticket or escalate to a human analyst."
                     )
                 }
+            if state.get("evidence_unavailable"):
+                log_agent_event("SECURITY GATE TRIGGERED: Blocked log_false_positive due to missing/failed forensic evidence.")
+                return {
+                    "error": "SECURITY_GATE_VIOLATION",
+                    "status": "BLOCKED",
+                    "reason": (
+                        "Security Gate Violation: Cannot classify alert as FALSE POSITIVE because critical forensic "
+                        "evidence (visual screenshot or BigQuery telemetry) was unavailable. "
+                        "You MUST invoke escalate_to_human for manual analyst adjudication."
+                    )
+                }
     return None
 
 
@@ -165,6 +178,56 @@ def log_agent_completion(callback_context: CallbackContext):
     """Logs completion status of sub-agents."""
     output = getattr(callback_context, "output", None) or getattr(callback_context, "result", None)
     log_agent_event(f"Completed execution. Output summary: {str(output)[:150]}...", callback_context.agent_name)
+
+
+def default_deny_soc_callback(callback_context: CallbackContext):
+    """
+    Default-Deny safety enforcement callback running after soc_ticketing_agent finishes.
+    If risk flags (prompt injection, malicious indicators, or missing evidence) are set,
+    and neither ticket dispatch nor escalation tool was executed, this callback
+    deterministically escalates the alert so it can never be dropped silently.
+    """
+    log_agent_completion(callback_context)
+    state = getattr(callback_context, "state", None)
+    if state is None:
+        return
+
+    has_risk = (
+        state.get("prompt_injection_detected")
+        or state.get("malicious_indicators")
+        or state.get("evidence_unavailable")
+    )
+    ticket_resolved = state.get("ticket_dispatched") or state.get("escalation_dispatched")
+
+    if has_risk and not ticket_resolved:
+        log_agent_event("DEFAULT-DENY ENFORCEMENT: Model finished without dispatching ticket for high-risk alert. Executing deterministic human escalation.")
+        try:
+            from .tools import get_soc_service
+            from .soc_ticketing.models import SocTicket
+        except (ImportError, ValueError):
+            try:
+                from tools import get_soc_service
+                from soc_ticketing.models import SocTicket
+            except ImportError:
+                from src.demo.soc_ticketing.models import SocTicket
+                from adk_agent.tools import get_soc_service
+
+        soc_service = get_soc_service()
+        ticket_id = f"SOC-TICKET-AUTO-ESCALATED-{int(time.time())}"
+        ticket = SocTicket(
+            ticket_id=ticket_id,
+            user_id=state.get("user_id", "unresolved_user"),
+            device_id=state.get("device_id", "unknown_device"),
+            source_ip=state.get("source_ip", "unknown_ip"),
+            threat_score=state.get("threat_score", 100),
+            severity="HIGH",
+            status="ESCALATED",
+            agent_decision="AUTO_ESCALATED_DEFAULT_DENY",
+            agent_reason="Deterministic Default-Deny: Alert exhibited risk flags (injection, malicious indicators, or missing evidence) but no ticket was dispatched by agent.",
+            structured_report="Auto-escalated by security platform default-deny guardrail."
+        )
+        soc_service.create_and_dispatch_ticket(ticket)
+        state["escalation_dispatched"] = True
 
 
 # ==============================================================================
@@ -309,7 +372,7 @@ soc_ticketing_agent = Agent(
     ],
     before_tool_callback=security_gate_callback,
     before_agent_callback=before_sub_agent_starts,
-    after_agent_callback=log_agent_completion
+    after_agent_callback=default_deny_soc_callback
 )
 
 

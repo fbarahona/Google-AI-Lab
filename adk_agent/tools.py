@@ -17,6 +17,7 @@ from google.auth import impersonated_credentials
 from google.cloud import bigquery, storage
 from google import genai
 from google.genai import types
+from google.adk.tools import ToolContext
 
 # Integrations fallback
 try:
@@ -416,7 +417,7 @@ def get_entity_behavioral_profile(
     entity_type: str,
     entity_id: str,
     window_to_investigate: str = "24 HOUR",
-    tool_context: Optional[Any] = None
+    tool_context: Optional[ToolContext] = None
 ) -> dict[str, Any]:
     """
     Retrieves the 24-hour behavioral profile and correlated anomaly metrics for an entity
@@ -464,8 +465,19 @@ def get_entity_behavioral_profile(
                     "distinct_files_transferred_24h": 0
                 }
         except Exception as e:
-            logger.error("BigQuery query failed for %s (%s). Failing closed.", entity_id, e)
-            raise RuntimeError(f"BigQuery telemetry query failed: {e}") from e
+            logger.error("BigQuery query failed for %s (%s). Failing closed with evidence_unavailable.", entity_id, e)
+            if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
+                tool_context.state["evidence_unavailable"] = True
+                tool_context.state["malicious_indicators"] = True
+            return {
+                "status": "ERROR",
+                "error": f"BigQuery telemetry query failed: {e}",
+                "message": (
+                    "CRITICAL INFRASTRUCTURE FAILURE: BigQuery telemetry unavailable. "
+                    "Evidence cannot be verified. Security policy prohibits closing alert as FALSE POSITIVE. "
+                    "You MUST invoke escalate_to_human immediately."
+                )
+            }
 
     # Update state flag on malicious indicators to enforce deterministic security gate
     if (
@@ -475,20 +487,22 @@ def get_entity_behavioral_profile(
         res.get("malicious_dns_queries_24h", 0) > 0
     ):
         logger.info("Setting state['malicious_indicators'] = True for entity: %s", entity_id)
-        if tool_context and hasattr(tool_context, "state") and isinstance(tool_context.state, dict):
+        if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
             tool_context.state["malicious_indicators"] = True
 
     return res
 
 
-def get_visual_analysis_for_user(gcs_uri: str, tool_context: Optional[Any] = None) -> str:
+def get_visual_analysis_for_user(gcs_uri: str, tool_context: Optional[ToolContext] = None) -> str:
     """
     Performs multimodal inspection of a desktop screenshot using Gemini.
     Performs OCR on terminals, identifies command prompts, and evaluates suspicious UI activity.
     Detects adversarial prompt injection attempts and sets state['prompt_injection_detected'].
     """
     if not gcs_uri or (not gcs_uri.startswith("gs://") and not gcs_uri.startswith("file://")):
-        return f"Cannot perform visual analysis. Invalid or missing GCS URI: {gcs_uri}"
+        if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
+            tool_context.state["evidence_unavailable"] = True
+        return f"Cannot perform visual analysis. Invalid or missing GCS URI: {gcs_uri}. Visual evidence unavailable."
 
     logger.info("Sending screenshot %s to visual analysis...", gcs_uri)
     prompt_text = """
@@ -524,14 +538,10 @@ def get_visual_analysis_for_user(gcs_uri: str, tool_context: Optional[Any] = Non
             )
             visual_text = (response.text or "").strip()
         except Exception as e:
-            logger.warning("Multimodal API unavailable (%s), inspecting local screenshot...", e)
-            filename = gcs_uri.split("/")[-1].replace(".png", "")
-            local_path = os.path.join(os.getcwd(), "src", "demo", "user_screenshots", f"{filename}.png")
-            ocr_chunks = read_png_text_chunks(local_path)
-            if "forensic_ocr_text" in ocr_chunks:
-                visual_text = f"Forensic Desktop OCR Output:\n{ocr_chunks['forensic_ocr_text']}"
-            else:
-                return f"An error occurred during the visual analysis: {e}"
+            logger.error("Error during multimodal visual analysis for %s: %s", gcs_uri, e)
+            if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
+                tool_context.state["evidence_unavailable"] = True
+            return f"Error: Multimodal visual analysis service unavailable for {gcs_uri}: {e}. Visual evidence unavailable."
 
     # Deterministic Prompt Injection Keyword Scanner
     INJECTION_KEYWORDS = [
@@ -541,7 +551,7 @@ def get_visual_analysis_for_user(gcs_uri: str, tool_context: Optional[Any] = Non
     ]
     if any(kw in visual_text.lower() for kw in INJECTION_KEYWORDS):
         logger.warning("PROMPT INJECTION DETECTED in visual evidence for %s", gcs_uri)
-        if tool_context and hasattr(tool_context, "state") and isinstance(tool_context.state, dict):
+        if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
             tool_context.state["prompt_injection_detected"] = True
         visual_text = f"[SECURITY ALERT: PROMPT INJECTION DETECTED IN DESKTOP SCREENSHOT]\n{visual_text}"
 
@@ -624,7 +634,8 @@ def dispatch_to_soc_ticketing_system(
     agent_reason: str,
     structured_report: str,
     severity: str = "HIGH",
-    screenshot_url: str = ""
+    screenshot_url: str = "",
+    tool_context: Optional[ToolContext] = None
 ) -> str:
     """
     Passes a confirmed or suspected threat incident ticket directly to the SOC Ticketing System.
@@ -653,7 +664,10 @@ def dispatch_to_soc_ticketing_system(
     )
 
     soc_service = get_soc_service()
-    return soc_service.create_and_dispatch_ticket(ticket)
+    res = soc_service.create_and_dispatch_ticket(ticket)
+    if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
+        tool_context.state["ticket_dispatched"] = True
+    return res
 
 
 def log_false_positive(alert_payload: str, agent_comment: str) -> str:
@@ -679,7 +693,8 @@ def escalate_to_human(
     ticket_id: str,
     alert_payload: str,
     agent_reason_for_escalation: str,
-    context_data: str
+    context_data: str,
+    tool_context: Optional[ToolContext] = None
 ) -> str:
     """
     Dispatches the incident ticket to the SOC ticketing queue for human analyst adjudication.
@@ -701,6 +716,8 @@ def escalate_to_human(
         structured_report=context_data
     )
     result = soc_service.create_and_dispatch_ticket(ticket)
+    if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
+        tool_context.state["escalation_dispatched"] = True
     logger.info("Escalated ticket %s to human analyst: %s", ticket_id, agent_reason_for_escalation)
     return (
         f"Incident successfully escalated to Human SOC Analyst: Ticket ID '{ticket_id}'. "
