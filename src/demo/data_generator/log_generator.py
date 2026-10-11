@@ -32,7 +32,8 @@ from typing import List, Dict, Any, Optional, Tuple, Set
 from .models import UserAccessEvent, NetworkEvent
 from .threat_scenarios import (
     generate_malicious_threat_scenario,
-    generate_false_positive_threat_scenario
+    generate_false_positive_threat_scenario,
+    generate_prompt_injection_threat_scenario
 )
 from .sinks import (
     BaseSink,
@@ -218,8 +219,12 @@ class SyntheticLogEngine:
             target = user_id or "l.taylor"
             logger.info("Injecting BENIGN FALSE POSITIVE scenario targeting %s...", target)
             return generate_false_positive_threat_scenario(target_user=target)
+        elif threat_type == "injection":
+            target = user_id or "c.wilson"
+            logger.info("Injecting PROMPT INJECTION attack scenario targeting %s...", target)
+            return generate_prompt_injection_threat_scenario(target_user=target)
         else:
-            raise ValueError(f"Unknown threat type '{threat_type}'. Must be 'malicious' or 'false_positive'.")
+            raise ValueError(f"Unknown threat type '{threat_type}'. Must be 'malicious', 'false_positive', or 'injection'.")
 
 
 def create_sink(args: argparse.Namespace) -> BaseSink:
@@ -246,8 +251,8 @@ def main():
     parser = argparse.ArgumentParser(description="Synthetic Cybersecurity Event Generator & Threat Injector")
     parser.add_argument("--mode", choices=["benign", "threat", "continuous"], default="benign",
                         help="Operating mode: benign batch, continuous stream, or ad-hoc threat injection.")
-    parser.add_argument("--threat-type", choices=["malicious", "false_positive"], default="malicious",
-                        help="Threat scenario type when mode is 'threat'.")
+    parser.add_argument("--threat-type", choices=["malicious", "false_positive", "injection"], default="malicious",
+                        help="Threat scenario type when mode is 'threat' (malicious, false_positive, or injection).")
     parser.add_argument("--user", type=str, default=None,
                         help="Target user ID for threat injection (e.g. u.lewis, g.harris, l.taylor).")
     parser.add_argument("--rate", type=int, default=50,

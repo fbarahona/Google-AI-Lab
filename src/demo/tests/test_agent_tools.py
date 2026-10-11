@@ -11,9 +11,31 @@ from adk_agent.tools import (
     build_event_logs_query,
     create_rich_ticket_id,
     generate_signed_url,
+    get_entity_behavioral_profile,
     get_gcs_uri_for_user,
     sanitize_entity_value,
 )
+
+
+def test_get_entity_behavioral_profile():
+    """Verify that get_entity_behavioral_profile returns structured metrics and blocks injection."""
+    # 1. Malicious entity profile
+    profile_mal = get_entity_behavioral_profile("user", "u.lewis")
+    assert profile_mal["entity_id"] == "u.lewis"
+    assert profile_mal["total_login_failures_24h"] > 0
+    assert profile_mal["risky_file_transfers_24h"] > 0
+
+    # 2. Benign baseline profile
+    profile_benign = get_entity_behavioral_profile("user", "l.taylor")
+    assert profile_benign["entity_id"] == "l.taylor"
+    assert profile_benign["total_login_failures_24h"] == 0
+
+    # 3. Injection blocked at validation
+    with pytest.raises(ValueError, match=r"SQL Injection|invalid|illegal"):
+        get_entity_behavioral_profile("user", "u.lewis' OR '1'='1")
+
+    with pytest.raises(ValueError, match=r"Invalid entity_type"):
+        get_entity_behavioral_profile("hacker_type", "u.lewis")
 
 
 def test_build_event_logs_query():

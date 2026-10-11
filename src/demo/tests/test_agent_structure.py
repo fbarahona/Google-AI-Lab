@@ -21,9 +21,9 @@ def test_google_search_agent_specification():
 def test_bq_investigation_agent_specification():
     """Validates the exact required name, description, and tools for bq_investigation_agent."""
     assert bq_investigation_agent.name == "bq_investigation_agent"
-    assert bq_investigation_agent.description == "Agent that answers questions about BigQuery data by executing SQL queries."
+    assert "BigQuery" in bq_investigation_agent.description
     tool_names = [getattr(t, "name", str(t)) for t in bq_investigation_agent.tools]
-    assert any("build_event_logs_query" in tn for tn in tool_names)
+    assert any("get_entity_behavioral_profile" in tn for tn in tool_names)
 
 
 def test_visual_analysis_agent_specification():

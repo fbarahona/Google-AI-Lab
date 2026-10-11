@@ -12,13 +12,11 @@ locals {
   sa_roles = toset([
     "roles/bigquery.connectionUser",
     "roles/bigquery.dataEditor",
-    "roles/bigquery.dataViewer",
     "roles/bigquery.user",
     "roles/logging.logWriter",
     "roles/pubsub.publisher",
     "roles/pubsub.viewer",
     "roles/pubsub.subscriber",
-    "roles/iam.serviceAccountTokenCreator",
     "roles/serviceusage.serviceUsageConsumer",
     "roles/storage.objectUser",
     "roles/aiplatform.user",

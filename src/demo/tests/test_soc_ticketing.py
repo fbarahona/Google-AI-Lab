@@ -61,7 +61,10 @@ def test_soc_ticketing_service_dispatch():
     result = service.create_and_dispatch_ticket(ticket)
     assert "Successfully dispatched ticket SOC-TICKET-test-123" in result
     assert mock_blob.upload_from_string.called
-    assert mock_bq.insert_rows_json.called
+    assert mock_bq.insert_rows_json.call_count == 2
+    called_tables = [call[0][0] for call in mock_bq.insert_rows_json.call_args_list]
+    assert any("soc_tickets" in t for t in called_tables)
+    assert any("adk_threat_assessment" in t for t in called_tables)
 
 
 def test_soc_ticketing_fetch_historic_and_verdict():

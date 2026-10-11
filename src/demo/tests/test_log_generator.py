@@ -84,6 +84,20 @@ def test_false_positive_threat_scenario_injection():
     assert all(ev["user_id"] == "l.taylor" for ev in access_events)
 
 
+def test_prompt_injection_threat_scenario_injection():
+    engine = SyntheticLogEngine(project_id="test-project")
+    access_events, network_events = engine.inject_threat(
+        threat_type="injection",
+        user_id="c.wilson"
+    )
+    assert len(access_events) > 0
+    assert len(network_events) > 0
+    assert any(ev["user_id"] == "c.wilson" for ev in access_events)
+    # Verify injection command and malicious process
+    assert any("AUTHORIZED PENTEST" in (ev.get("command_line") or "") for ev in network_events)
+    assert any("powershell.exe" == ev.get("source_process_name") for ev in network_events)
+
+
 def test_local_sink(tmp_path):
     sink = LocalSink(output_dir=str(tmp_path), print_stdout=False)
     acc = [{"user_id": "test_user", "event_type": "login_success"}]

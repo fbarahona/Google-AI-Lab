@@ -111,8 +111,28 @@ class SocTicketingService:
             try:
                 soc_table_id = f"{self.project_id}.{self.dataset_id}.soc_tickets"
                 self.bq_client.insert_rows_json(soc_table_id, [payload])
+                logger.info("Persisted ticket %s to %s", ticket.ticket_id, soc_table_id)
             except Exception as e:
-                logger.warning("Could not persist ticket to BigQuery: %s", e)
+                logger.warning("Could not persist ticket to BigQuery soc_tickets: %s", e)
+
+            try:
+                assessment_table_id = f"{self.project_id}.{self.dataset_id}.adk_threat_assessment"
+                assessment_row = {
+                    "transaction_window_end": datetime.now(timezone.utc).isoformat(),
+                    "user_id": ticket.user_id,
+                    "device_id": ticket.device_id,
+                    "source_ip": ticket.source_ip,
+                    "total_2_min_threat_score": ticket.threat_score,
+                    "agent_decision": ticket.agent_decision or "GENUINE_THREAT",
+                    "agent_reason": ticket.agent_reason,
+                    "human_decision": None,
+                    "human_reason": None,
+                    "alert_payload": json.dumps(payload)
+                }
+                self.bq_client.insert_rows_json(assessment_table_id, [assessment_row])
+                logger.info("Persisted assessment for user %s to %s", ticket.user_id, assessment_table_id)
+            except Exception as e:
+                logger.warning("Could not persist ticket to BigQuery adk_threat_assessment: %s", e)
 
         return f"Successfully dispatched ticket {ticket.ticket_id} to SOC ticketing system with severity {ticket.severity}."
 

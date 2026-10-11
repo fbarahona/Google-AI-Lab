@@ -4,7 +4,8 @@ resource "google_storage_bucket" "adk_staging" {
   name                        = "cymbal_cyber_adk_staging_bucket_${var.project_id}"
   location                    = var.region
   uniform_bucket_level_access = true
-  force_destroy               = false
+  public_access_prevention    = "enforced"
+  force_destroy               = true
 
   versioning {
     enabled = true
@@ -19,11 +20,12 @@ resource "google_storage_bucket" "escalations" {
   name                        = "cymbal-cyber-adk-escalations-bucket_${var.project_id}"
   location                    = var.region
   uniform_bucket_level_access = true
-  force_destroy               = false
+  public_access_prevention    = "enforced"
+  force_destroy               = true
 
   cors {
     origin          = ["*"]
-    method          = ["GET", "POST", "PUT", "HEAD", "OPTIONS"]
+    method          = ["GET", "HEAD"]
     response_header = ["*"]
     max_age_seconds = 3600
   }
@@ -37,7 +39,8 @@ resource "google_storage_bucket" "screenshots" {
   name                        = "cymbal-cyber-screenshots_${var.project_id}"
   location                    = var.region
   uniform_bucket_level_access = true
-  force_destroy               = false
+  public_access_prevention    = "enforced"
+  force_destroy               = true
 
   cors {
     origin          = ["*"]
@@ -55,7 +58,8 @@ resource "google_storage_bucket" "raw_logs" {
   name                        = "cymbal-cyber-raw-logs_${var.project_id}"
   location                    = var.region
   uniform_bucket_level_access = true
-  force_destroy               = false
+  public_access_prevention    = "enforced"
+  force_destroy               = true
 
   lifecycle_rule {
     action {
@@ -68,4 +72,3 @@ resource "google_storage_bucket" "raw_logs" {
 
   depends_on = [google_project_service.required]
 }
-
