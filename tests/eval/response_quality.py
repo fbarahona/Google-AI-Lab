@@ -60,6 +60,6 @@ def evaluate(instance):
         ),
     )
     verdict = response.parsed
-    if verdict is None:  # model returned nothing usable
+    if not isinstance(verdict, _Verdict):  # model returned nothing usable
         return {"score": 0, "explanation": response.text or ""}
     return {"score": max(1, min(5, verdict.score)), "explanation": verdict.explanation}

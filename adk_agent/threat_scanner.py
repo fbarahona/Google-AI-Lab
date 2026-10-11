@@ -25,6 +25,7 @@ from google.cloud import bigquery
 from google.genai import types
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
+from google.adk.plugins.base_plugin import BasePlugin
 
 from .agent import root_agent, bq_analytics_plugin
 from .logging_utils import setup_logging, log_agent_event
@@ -119,7 +120,7 @@ class BigQueryThreatScanner:
             state={"ticket_id": f"SOC-TICKET-{user_id}-{int(time.time())}"}
         )
 
-        plugins = [bq_analytics_plugin] if bq_analytics_plugin else []
+        plugins: List[BasePlugin] = [bq_analytics_plugin] if bq_analytics_plugin else []
         runner = Runner(
             agent=root_agent,
             app_name=app_name,
@@ -135,10 +136,11 @@ class BigQueryThreatScanner:
             session_id=session_id,
             new_message=content
         ):
-            if event.is_final_response():
-                if event.content and event.content.parts:
-                    final_response = event.content.parts[0].text
-                    logger.info("ADK Agent Orchestrator Response:\n%s", final_response)
+            if event.is_final_response() and event.content and event.content.parts:
+                part = event.content.parts[0]
+                response_text = part.text if part.text is not None else ""
+                final_response = response_text
+                logger.info("ADK Agent Orchestrator Response:\n%s", final_response)
 
         return final_response
 

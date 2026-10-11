@@ -8,8 +8,8 @@ import hashlib
 from datetime import datetime, timezone, timedelta
 from typing import List, Tuple, Dict, Any
 
-MALICIOUS_USERS = ["u.lewis", "g.harris"]
-MALICIOUS_DEVICE = "ws-hr-05"
+MALICIOUS_USERS = ["u.lewis", "g.harris", "a.smith", "m.jones", "k.brown", "t.wilson"]
+MALICIOUS_DEVICE = ["ws-hr-05"]
 
 MALICIOUS_PUBLIC_IPS = [
     "175.45.176.10",   # North Korea
@@ -45,7 +45,7 @@ MALICIOUS_COMMANDS = [
 
 def generate_malicious_threat_scenario(
     target_user: str = "u.lewis",
-    device_id: str = MALICIOUS_DEVICE,
+    device_id: str = MALICIOUS_DEVICE[0],
     num_correlated_pairs: int = 15,
     num_brute_force_attempts: int = 35
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
