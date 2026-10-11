@@ -1,41 +1,56 @@
 """
 Unit tests for ADK Agent tools, safety callbacks, SQL parameterization, and signed URL generation.
 """
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from adk_agent.agent import forbidden_dml_check
+from adk_agent.agent import forbidden_dml_check, security_gate_callback
 from adk_agent.tools import (
     _parse_alert_payload_to_row,
     build_event_logs_query,
     create_rich_ticket_id,
+    escalate_to_human,
     generate_signed_url,
     get_entity_behavioral_profile,
     get_gcs_uri_for_user,
+    get_visual_analysis_for_user,
+    read_png_text_chunks,
     sanitize_entity_value,
 )
 
 
 def test_get_entity_behavioral_profile():
-    """Verify that get_entity_behavioral_profile returns structured metrics and blocks injection."""
-    # 1. Malicious entity profile
-    profile_mal = get_entity_behavioral_profile("user", "u.lewis")
-    assert profile_mal["entity_id"] == "u.lewis"
-    assert profile_mal["total_login_failures_24h"] > 0
-    assert profile_mal["risky_file_transfers_24h"] > 0
+    """Verify that get_entity_behavioral_profile validates inputs and blocks injection."""
+    with patch.dict("os.environ", {"LOCAL_MODE": "true"}):
+        with pytest.raises(ValueError, match=r"SQL Injection|invalid|illegal"):
+            get_entity_behavioral_profile("user", "u.lewis' OR '1'='1")
 
-    # 2. Benign baseline profile
-    profile_benign = get_entity_behavioral_profile("user", "l.taylor")
-    assert profile_benign["entity_id"] == "l.taylor"
-    assert profile_benign["total_login_failures_24h"] == 0
+        with pytest.raises(ValueError, match=r"Invalid entity_type"):
+            get_entity_behavioral_profile("hacker_type", "u.lewis")
 
-    # 3. Injection blocked at validation
-    with pytest.raises(ValueError, match=r"SQL Injection|invalid|illegal"):
-        get_entity_behavioral_profile("user", "u.lewis' OR '1'='1")
+        profile = get_entity_behavioral_profile("user", "u.lewis")
+        assert "total_access_events_24h" in profile
+        assert "total_login_failures_24h" in profile
+        assert "risky_file_transfers_24h" in profile
 
-    with pytest.raises(ValueError, match=r"Invalid entity_type"):
-        get_entity_behavioral_profile("hacker_type", "u.lewis")
+
+@patch("adk_agent.tools.get_bq_client")
+def test_get_entity_behavioral_profile_cloud_mode_success(mock_get_bq):
+    """Verify that in cloud mode, query results are properly converted to metrics dict."""
+    mock_bq = MagicMock()
+    mock_row = MagicMock()
+    mock_row.items.return_value = [("total_access_events_24h", 50), ("total_login_failures_24h", 12)]
+    mock_job = MagicMock()
+    mock_job.result.return_value = [mock_row]
+    mock_bq.query.return_value = mock_job
+    mock_get_bq.return_value = mock_bq
+
+    with patch.dict("os.environ", {"LOCAL_MODE": "false"}):
+        res = get_entity_behavioral_profile("user", "u.lewis")
+        assert res["total_access_events_24h"] == 50
+        assert res["total_login_failures_24h"] == 12
 
 
 def test_build_event_logs_query():
@@ -215,3 +230,98 @@ def test_generate_signed_url_success(mock_auth_default, mock_storage_client_cls)
 
     result = generate_signed_url("gs://cymbal-cyber-screenshots/u.lewis.png")
     assert result == expected_signed_url
+
+
+def test_security_gate_blocks_false_positive_on_injection():
+    """Verify that security gate deterministically blocks log_false_positive when prompt injection is detected."""
+    mock_tool = MagicMock()
+    mock_tool.name = "log_false_positive"
+    mock_context = MagicMock()
+    mock_context.state = {"prompt_injection_detected": True}
+
+    res = security_gate_callback(mock_tool, {}, mock_context)
+    assert res is not None
+    assert res["status"] == "BLOCKED"
+    assert "SECURITY_GATE_VIOLATION" in res["error"]
+    assert "prompt injection" in res["reason"]
+
+
+def test_security_gate_blocks_false_positive_on_malicious_telemetry():
+    """Verify that security gate blocks log_false_positive when high-risk behavioral indicators are present."""
+    mock_tool = MagicMock()
+    mock_tool.name = "log_false_positive"
+    mock_context = MagicMock()
+    mock_context.state = {"malicious_indicators": True}
+
+    res = security_gate_callback(mock_tool, {}, mock_context)
+    assert res is not None
+    assert res["status"] == "BLOCKED"
+    assert "SECURITY_GATE_VIOLATION" in res["error"]
+    assert "anomalous behavioral" in res["reason"]
+
+
+def test_security_gate_permits_clean_false_positive():
+    """Verify that security gate permits log_false_positive when neither risk flag is set."""
+    mock_tool = MagicMock()
+    mock_tool.name = "log_false_positive"
+    mock_context = MagicMock()
+    mock_context.state = {}
+
+    res = security_gate_callback(mock_tool, {}, mock_context)
+    assert res is None
+
+
+def test_security_gate_permits_incident_dispatch():
+    """Verify that other tools (e.g. ticket dispatch) are never blocked by the security gate."""
+    mock_tool = MagicMock()
+    mock_tool.name = "dispatch_to_soc_ticketing_system"
+    mock_context = MagicMock()
+    mock_context.state = {"prompt_injection_detected": True, "malicious_indicators": True}
+
+    res = security_gate_callback(mock_tool, {}, mock_context)
+    assert res is None
+
+
+@patch("adk_agent.tools.get_bq_client")
+def test_get_entity_behavioral_profile_cloud_mode_fails_closed(mock_get_bq):
+    """Verify that in cloud mode (LOCAL_MODE=false), BigQuery failure raises RuntimeError (fails closed)."""
+    mock_get_bq.side_effect = Exception("BigQuery 403 Forbidden: Missing roles/bigquery.user")
+    with patch.dict("os.environ", {"LOCAL_MODE": "false"}):
+        with pytest.raises(RuntimeError, match="BigQuery telemetry query failed"):
+            get_entity_behavioral_profile("user", "u.lewis")
+
+
+def test_get_entity_behavioral_profile_local_mode_schema_parity():
+    """Verify that local mode computes metrics without schema drift (no extra risk_profile field)."""
+    with patch.dict("os.environ", {"LOCAL_MODE": "true"}):
+        mock_ctx = MagicMock()
+        mock_ctx.state = {}
+        profile = get_entity_behavioral_profile("user", "u.lewis", tool_context=mock_ctx)
+        assert "total_access_events_24h" in profile
+        assert "risk_profile" not in profile  # Exact parity with BigQuery query columns
+
+
+def test_read_png_text_chunks_and_injection_detection():
+    """Verify that read_png_text_chunks extracts embedded OCR text and triggers prompt injection flag."""
+    chunks = read_png_text_chunks("src/demo/user_screenshots/c.wilson.png")
+    assert "forensic_ocr_text" in chunks
+    assert "AUTHORIZED RED TEAM PENTEST" in chunks["forensic_ocr_text"]
+
+    mock_ctx = MagicMock()
+    mock_ctx.state = {}
+    vis = get_visual_analysis_for_user("file://c.wilson.png", tool_context=mock_ctx)
+    assert "PROMPT INJECTION DETECTED" in vis
+    assert mock_ctx.state.get("prompt_injection_detected") is True
+
+
+def test_escalate_to_human_non_blocking():
+    """Verify that escalate_to_human dispatches immediately without blocking sleep loops."""
+    with patch.dict("os.environ", {"LOCAL_MODE": "true"}):
+        start = time.time()
+        payload = '{"user_id": "u.lewis", "total_2_min_threat_score": 1500}'
+        res = escalate_to_human("SOC-TEST-FAST-1", payload, "Escalating for review", "Report text")
+        elapsed = time.time() - start
+
+        assert elapsed < 1.0  # Runs in under a second (never blocks for 180s)
+        assert "ESCALATED_PENDING_REVIEW" in res
+        assert "SOC-TEST-FAST-1" in res

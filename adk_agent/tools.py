@@ -277,92 +277,220 @@ def build_event_logs_query(
     return query_sql.strip(), job_config
 
 
-def _get_mock_behavioral_profile(entity_type: str, entity_id: str) -> dict[str, Any]:
-    """Generates mock behavioral metrics for offline / zero-cloud testing."""
-    clean_id = (entity_id or "").lower()
-    if "u.lewis" in clean_id or "ws-hr-05" in clean_id or "175.45." in clean_id:
-        return {
-            "entity_type": entity_type,
-            "entity_id": entity_id,
-            "total_access_events_24h": 42,
-            "total_login_failures_24h": 35,
-            "distinct_public_source_ips_24h": 2,
-            "suspicious_user_agent_logins_24h": 4,
-            "distinct_user_agents_used_24h": 3,
-            "total_network_events_24h": 128,
-            "high_privilege_requests_24h": 6,
-            "risky_file_transfers_24h": 3,
-            "malicious_commands_24h": 2,
-            "malicious_dns_queries_24h": 5,
-            "distinct_destination_ips_24h": 12,
-            "distinct_files_transferred_24h": 8,
-            "risk_profile": "HIGH_RISK_COMPROMISE"
-        }
+def read_png_text_chunks(file_path: str) -> dict[str, str]:
+    """Reads embedded tEXt chunks from a PNG file without external image libraries."""
+    import struct
+    texts: dict[str, str] = {}
+    if not os.path.exists(file_path):
+        return texts
+    try:
+        with open(file_path, "rb") as f:
+            header = f.read(8)
+            if header != b"\x89PNG\r\n\x1a\n":
+                return texts
+            while True:
+                chunk_len_bytes = f.read(4)
+                if len(chunk_len_bytes) < 4:
+                    break
+                chunk_len = struct.unpack(">I", chunk_len_bytes)[0]
+                chunk_type = f.read(4)
+                chunk_data = f.read(chunk_len)
+                f.read(4)  # CRC
+                if chunk_type == b"tEXt":
+                    parts = chunk_data.split(b"\x00", 1)
+                    if len(parts) == 2:
+                        k = parts[0].decode("latin-1", errors="ignore")
+                        v = parts[1].decode("latin-1", errors="ignore")
+                        texts[k] = v
+                elif chunk_type == b"IEND":
+                    break
+    except Exception as e:
+        logger.debug("Could not read PNG chunks from %s: %s", file_path, e)
+    return texts
+
+
+def _compute_profile_from_local_logs(entity_type: str, entity_id: str) -> dict[str, Any]:
+    """Computes exact behavioral profile metrics dynamically from local synthetic log files."""
+    logs_dir = os.path.join(os.getcwd(), "local_demo_data", "logs")
+    access_file = os.path.join(logs_dir, "user_access_events.jsonl")
+    network_file = os.path.join(logs_dir, "network_events.jsonl")
+
+    total_access = 0
+    login_failures = 0
+    source_ips = set()
+    suspicious_ua = 0
+    user_agents = set()
+
+    total_network = 0
+    high_priv = 0
+    risky_files = 0
+    mal_cmds = 0
+    mal_dns = 0
+    dest_ips = set()
+    files_transferred = set()
+
+    clean_id = (entity_id or "").strip().lower()
+
+    if os.path.exists(access_file):
+        try:
+            with open(access_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    ev = json.loads(line)
+                    ev_user = str(ev.get("user_id") or "").lower()
+                    ev_dev = str(ev.get("device_id") or "").lower()
+                    ev_ip = str(ev.get("source_ip") or "").lower()
+
+                    matches = (
+                        (entity_type == "user" and ev_user == clean_id) or
+                        (entity_type == "device" and ev_dev == clean_id) or
+                        (entity_type == "ip" and ev_ip == clean_id)
+                    )
+                    if matches:
+                        total_access += 1
+                        if ev.get("event_type") == "login_failure":
+                            login_failures += 1
+                        if ev.get("source_ip"):
+                            source_ips.add(ev["source_ip"])
+                        ua = str(ev.get("user_agent") or "")
+                        if ua:
+                            user_agents.add(ua)
+                            if re.search(r"^(python-requests|curl|Go-http-client)", ua, re.IGNORECASE):
+                                suspicious_ua += 1
+        except Exception as e:
+            logger.warning("Error reading local access logs: %s", e)
+
+    if os.path.exists(network_file):
+        try:
+            with open(network_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    ev = json.loads(line)
+                    ev_user = str(ev.get("user_id") or "").lower()
+                    ev_ip = str(ev.get("source_ip") or "").lower()
+
+                    matches = (
+                        (entity_type == "user" and ev_user == clean_id) or
+                        (entity_type == "ip" and ev_ip == clean_id)
+                    )
+                    if matches:
+                        total_network += 1
+                        if ev.get("permission_level_requested") in ("root", "admin"):
+                            high_priv += 1
+                        ft = str(ev.get("file_type") or "").lower()
+                        if ft in ("exe", "dll", "ps1", "bat", "vbs"):
+                            risky_files += 1
+                        cmd = str(ev.get("command_line") or "")
+                        if re.search(r"(?i)(powershell -enc|IEX|DownloadString|mimikatz|payload)", cmd):
+                            mal_cmds += 1
+                        domain = str(ev.get("network_domain") or "")
+                        if re.search(r"(\.ru|\.xyz|bad-domain|payload-downloader|c2-server)", domain):
+                            mal_dns += 1
+                        if ev.get("destination_ip"):
+                            dest_ips.add(ev["destination_ip"])
+                        fh = ev.get("file_hash_sha256")
+                        if fh:
+                            files_transferred.add(fh)
+        except Exception as e:
+            logger.warning("Error reading local network logs: %s", e)
+
     return {
-        "entity_type": entity_type,
-        "entity_id": entity_id,
-        "total_access_events_24h": 15,
-        "total_login_failures_24h": 0,
-        "distinct_public_source_ips_24h": 1,
-        "suspicious_user_agent_logins_24h": 0,
-        "distinct_user_agents_used_24h": 1,
-        "total_network_events_24h": 45,
-        "high_privilege_requests_24h": 0,
-        "risky_file_transfers_24h": 0,
-        "malicious_commands_24h": 0,
-        "malicious_dns_queries_24h": 0,
-        "distinct_destination_ips_24h": 3,
-        "distinct_files_transferred_24h": 2,
-        "risk_profile": "BENIGN_BASELINE"
+        "total_access_events_24h": total_access,
+        "total_login_failures_24h": login_failures,
+        "distinct_public_source_ips_24h": len(source_ips),
+        "suspicious_user_agent_logins_24h": suspicious_ua,
+        "distinct_user_agents_used_24h": len(user_agents),
+        "total_network_events_24h": total_network,
+        "high_privilege_requests_24h": high_priv,
+        "risky_file_transfers_24h": risky_files,
+        "malicious_commands_24h": mal_cmds,
+        "malicious_dns_queries_24h": mal_dns,
+        "distinct_destination_ips_24h": len(dest_ips),
+        "distinct_files_transferred_24h": len(files_transferred)
     }
 
 
 def get_entity_behavioral_profile(
     entity_type: str,
     entity_id: str,
-    window_to_investigate: str = "24 HOUR"
+    window_to_investigate: str = "24 HOUR",
+    tool_context: Optional[Any] = None
 ) -> dict[str, Any]:
     """
     Retrieves the 24-hour behavioral profile and correlated anomaly metrics for an entity
     (user, device, or IP) by executing a strictly parameterized BigQuery query.
 
-    Eliminates SQL injection and LLM query hallucination by executing the parameterized query
-    directly with QueryJobConfig rather than routing raw SQL strings through the model.
+    Fails closed in cloud mode on query or permission errors so that infrastructure
+    failures are not disguised as benign baseline activity.
+    In LOCAL_MODE=true, dynamically computes metrics from local synthetic logs.
 
     Args:
         entity_type: Type of entity to investigate ('user', 'device', or 'ip').
         entity_id: The specific identifier (e.g., 'u.lewis', 'ws-hr-05', '175.45.177.32').
         window_to_investigate: Investigation lookback window (e.g. '24 HOUR', '12 HOUR').
+        tool_context: ADK ToolContext used to record security state flags.
 
     Returns:
         dict: Correlated behavioral metrics including login failure counts, suspicious user agents,
               high privilege executions, risky file transfers, and C2 domain queries.
     """
     sql, job_config = build_event_logs_query(entity_type, entity_id, window_to_investigate)
-    try:
-        bq = get_bq_client()
-        query_job = bq.query(sql, job_config=job_config)
-        rows = list(query_job.result())
-        if rows:
-            res = dict(rows[0].items())
-            res["entity_type"] = entity_type
-            res["entity_id"] = entity_id
-            return res
-        return _get_mock_behavioral_profile(entity_type, entity_id)
-    except Exception as e:
-        logger.info("Executing behavioral query in offline/local mode (%s)", e)
-        return _get_mock_behavioral_profile(entity_type, entity_id)
+    is_local_mode = os.getenv("LOCAL_MODE", "false").lower() == "true"
+
+    if is_local_mode:
+        res = _compute_profile_from_local_logs(entity_type, entity_id)
+    else:
+        try:
+            bq = get_bq_client()
+            query_job = bq.query(sql, job_config=job_config)
+            rows = list(query_job.result())
+            if rows:
+                res = dict(rows[0].items())
+            else:
+                res = {
+                    "total_access_events_24h": 0,
+                    "total_login_failures_24h": 0,
+                    "distinct_public_source_ips_24h": 0,
+                    "suspicious_user_agent_logins_24h": 0,
+                    "distinct_user_agents_used_24h": 0,
+                    "total_network_events_24h": 0,
+                    "high_privilege_requests_24h": 0,
+                    "risky_file_transfers_24h": 0,
+                    "malicious_commands_24h": 0,
+                    "malicious_dns_queries_24h": 0,
+                    "distinct_destination_ips_24h": 0,
+                    "distinct_files_transferred_24h": 0
+                }
+        except Exception as e:
+            logger.error("BigQuery query failed for %s (%s). Failing closed.", entity_id, e)
+            raise RuntimeError(f"BigQuery telemetry query failed: {e}") from e
+
+    # Update state flag on malicious indicators to enforce deterministic security gate
+    if (
+        res.get("total_login_failures_24h", 0) > 5 or
+        res.get("malicious_commands_24h", 0) > 0 or
+        res.get("risky_file_transfers_24h", 0) > 0 or
+        res.get("malicious_dns_queries_24h", 0) > 0
+    ):
+        logger.info("Setting state['malicious_indicators'] = True for entity: %s", entity_id)
+        if tool_context and hasattr(tool_context, "state") and isinstance(tool_context.state, dict):
+            tool_context.state["malicious_indicators"] = True
+
+    return res
 
 
-def get_visual_analysis_for_user(gcs_uri: str) -> str:
+def get_visual_analysis_for_user(gcs_uri: str, tool_context: Optional[Any] = None) -> str:
     """
     Performs multimodal inspection of a desktop screenshot using Gemini.
     Performs OCR on terminals, identifies command prompts, and evaluates suspicious UI activity.
+    Detects adversarial prompt injection attempts and sets state['prompt_injection_detected'].
     """
-    if not gcs_uri or not gcs_uri.startswith("gs://"):
+    if not gcs_uri or (not gcs_uri.startswith("gs://") and not gcs_uri.startswith("file://")):
         return f"Cannot perform visual analysis. Invalid or missing GCS URI: {gcs_uri}"
 
-    logger.info("Sending screenshot %s to multimodal model (%s)...", gcs_uri, MODEL_NAME)
+    logger.info("Sending screenshot %s to visual analysis...", gcs_uri)
     prompt_text = """
     You are a Senior Level 3 SOC Analyst conducting a digital forensics investigation.
     This screenshot represents the visual evidence from the target workstation at the time of the alert.
@@ -371,19 +499,53 @@ def get_visual_analysis_for_user(gcs_uri: str) -> str:
     3. Note any popups, suspicious URLs in browser tabs, or unexpected background utilities.
     4. Provide a clear forensic conclusion: Does this visual evidence confirm a Genuine Threat or indicate Benign Activity?
     """
-    try:
-        client = get_genai_client()
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=[
-                types.Part.from_uri(file_uri=gcs_uri, mime_type="image/png"),
-                types.Part.from_text(text=prompt_text)
-            ]
-        )
-        return (response.text or "").strip()
-    except Exception as e:
-        logger.error("Error during multimodal visual analysis: %s", e)
-        return f"An error occurred during the visual analysis: {e}"
+
+    visual_text = ""
+    is_local_mode = os.getenv("LOCAL_MODE", "false").lower() == "true"
+
+    if is_local_mode or "file://" in gcs_uri:
+        # Local forensic inspection: Extract OCR metadata from local screenshot file
+        filename = gcs_uri.split("/")[-1].replace(".png", "")
+        local_path = os.path.join(os.getcwd(), "src", "demo", "user_screenshots", f"{filename}.png")
+        ocr_chunks = read_png_text_chunks(local_path)
+        if "forensic_ocr_text" in ocr_chunks:
+            visual_text = f"Forensic Desktop OCR Output:\n{ocr_chunks['forensic_ocr_text']}"
+        else:
+            visual_text = f"Forensic inspection of desktop {filename}.png: Workspace shows standard developer console. No malicious tools."
+    else:
+        try:
+            client = get_genai_client()
+            response = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=[
+                    types.Part.from_uri(file_uri=gcs_uri, mime_type="image/png"),
+                    types.Part.from_text(text=prompt_text)
+                ]
+            )
+            visual_text = (response.text or "").strip()
+        except Exception as e:
+            logger.warning("Multimodal API unavailable (%s), inspecting local screenshot...", e)
+            filename = gcs_uri.split("/")[-1].replace(".png", "")
+            local_path = os.path.join(os.getcwd(), "src", "demo", "user_screenshots", f"{filename}.png")
+            ocr_chunks = read_png_text_chunks(local_path)
+            if "forensic_ocr_text" in ocr_chunks:
+                visual_text = f"Forensic Desktop OCR Output:\n{ocr_chunks['forensic_ocr_text']}"
+            else:
+                return f"An error occurred during the visual analysis: {e}"
+
+    # Deterministic Prompt Injection Keyword Scanner
+    INJECTION_KEYWORDS = [
+        "ai triage", "classify as", "instruction override", "system notice to ai",
+        "override instruction", "authorized red team", "authorized pentest",
+        "suppress all critical", "do not dispatch", "do not alert"
+    ]
+    if any(kw in visual_text.lower() for kw in INJECTION_KEYWORDS):
+        logger.warning("PROMPT INJECTION DETECTED in visual evidence for %s", gcs_uri)
+        if tool_context and hasattr(tool_context, "state") and isinstance(tool_context.state, dict):
+            tool_context.state["prompt_injection_detected"] = True
+        visual_text = f"[SECURITY ALERT: PROMPT INJECTION DETECTED IN DESKTOP SCREENSHOT]\n{visual_text}"
+
+    return visual_text
 
 
 def get_gcs_uri_for_user(user: str) -> str:
@@ -520,8 +682,8 @@ def escalate_to_human(
     context_data: str
 ) -> str:
     """
-    Compatibility function that dispatches the ticket to the SOC ticketing system
-    and waits for human analyst response in gs://{GCS_ESCALATION_BUCKET}/.
+    Dispatches the incident ticket to the SOC ticketing queue for human analyst adjudication.
+    Returns immediately with escalation confirmation without blocking the agent runner.
     """
     soc_service = get_soc_service()
     row = _parse_alert_payload_to_row(alert_payload)
@@ -538,26 +700,10 @@ def escalate_to_human(
         agent_reason=agent_reason_for_escalation,
         structured_report=context_data
     )
-    soc_service.create_and_dispatch_ticket(ticket)
-
-    # Polling wait loop (for synchronous agent runners)
-    try:
-        bucket = soc_service.storage_client.bucket(GCS_ESCALATION_BUCKET)
-        response_blob = bucket.blob(f"human_escalation_response_{ticket_id}.json")
-        timeout_seconds = 180
-        start_time = time.time()
-        logger.info("Waiting for human response in gs://%s/%s...", GCS_ESCALATION_BUCKET, response_blob.name)
-
-        while time.time() - start_time < timeout_seconds:
-            if response_blob.exists():
-                response_data = json.loads(response_blob.download_as_string())
-                human_decision = response_data.get("human_decision", "Analyst Reviewed")
-                human_comment = response_data.get("human_comment", "")
-                soc_service.record_human_verdict(ticket_id, human_decision, human_comment)
-                return f"Human analyst responded with '{human_decision}'. Decision logged to BigQuery."
-            time.sleep(2)
-    except Exception as e:
-        logger.warning("Human handoff polling error: %s", e)
-
-    return f"Ticket {ticket_id} passed to SOC ticketing system. Analyst queue updated."
+    result = soc_service.create_and_dispatch_ticket(ticket)
+    logger.info("Escalated ticket %s to human analyst: %s", ticket_id, agent_reason_for_escalation)
+    return (
+        f"Incident successfully escalated to Human SOC Analyst: Ticket ID '{ticket_id}'. "
+        f"Status: ESCALATED_PENDING_REVIEW. Queue Result: {result}"
+    )
 

@@ -122,6 +122,40 @@ def forbidden_dml_check(tool: BaseTool, args: Dict[str, Any], tool_context: Tool
     return None
 
 
+def security_gate_callback(tool: BaseTool, args: Dict[str, Any], tool_context: ToolContext) -> Optional[Dict]:
+    """
+    Deterministic security gate callback on soc_ticketing_agent.
+    Enforces that the LLM cannot execute log_false_positive if:
+    1. Prompt injection was detected in visual forensic evidence (tool_context.state['prompt_injection_detected'] is True), OR
+    2. High-risk behavioral indicators were recorded in telemetry (tool_context.state['malicious_indicators'] is True).
+    """
+    if tool.name == "log_false_positive":
+        state = getattr(tool_context, "state", {}) if tool_context else {}
+        if isinstance(state, dict):
+            if state.get("prompt_injection_detected"):
+                log_agent_event("SECURITY GATE TRIGGERED: Blocked log_false_positive due to visual prompt injection.")
+                return {
+                    "error": "SECURITY_GATE_VIOLATION",
+                    "status": "BLOCKED",
+                    "reason": (
+                        "Security Gate Violation: Cannot classify alert as FALSE POSITIVE because prompt injection "
+                        "was detected in visual evidence. You MUST invoke escalate_to_human immediately."
+                    )
+                }
+            if state.get("malicious_indicators"):
+                log_agent_event("SECURITY GATE TRIGGERED: Blocked log_false_positive due to malicious telemetry indicators.")
+                return {
+                    "error": "SECURITY_GATE_VIOLATION",
+                    "status": "BLOCKED",
+                    "reason": (
+                        "Security Gate Violation: Cannot classify alert as FALSE POSITIVE because anomalous behavioral "
+                        "indicators (malicious commands, login spray, or risky files) were confirmed in telemetry. "
+                        "You MUST dispatch an incident ticket or escalate to a human analyst."
+                    )
+                }
+    return None
+
+
 def before_sub_agent_starts(callback_context: CallbackContext):
     """Logs the activation of any agent."""
     log_agent_event(f"Agent triggered: {callback_context.agent_name}", callback_context.agent_name)
@@ -273,6 +307,7 @@ soc_ticketing_agent = Agent(
         generate_signed_url,
         escalate_to_human
     ],
+    before_tool_callback=security_gate_callback,
     before_agent_callback=before_sub_agent_starts,
     after_agent_callback=log_agent_completion
 )

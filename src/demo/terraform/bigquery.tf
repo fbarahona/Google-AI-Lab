@@ -5,7 +5,7 @@ resource "google_bigquery_dataset" "cyber_dataset" {
   friendly_name              = "Cymbal Cyber Security Analytics"
   description                = "Streaming and correlated event data for near real-time AI threat detection."
   location                   = var.bigquery_location
-  delete_contents_on_destroy = false
+  delete_contents_on_destroy = true
 
   depends_on = [google_project_service.required]
 }
