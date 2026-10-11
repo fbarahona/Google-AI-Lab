@@ -31,7 +31,7 @@ resource "google_pubsub_subscription" "adk_agent_trigger" {
       push_endpoint = push_config.value
 
       oidc_token {
-        service_account_email = google_service_account.orchestrator_sa.email
+        service_account_email = google_service_account.invoker_sa.email
         audience              = push_config.value
       }
 
@@ -46,7 +46,7 @@ resource "google_pubsub_subscription" "adk_agent_trigger" {
     maximum_backoff = "600s"
   }
 
-  depends_on = [google_service_account.orchestrator_sa]
+  depends_on = [google_service_account.invoker_sa]
 }
 
 # 3. Pub/Sub Topic for Raw Synthetic Logs (Data Ingestion Pipeline)

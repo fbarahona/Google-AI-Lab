@@ -22,9 +22,21 @@ variable "dataset_id" {
 }
 
 variable "service_account_id" {
-  description = "ID for the dedicated orchestration and continuous query service account."
+  description = "ID for the dedicated continuous query service account."
   type        = string
   default     = "bq-continuous-query-sa"
+}
+
+variable "agent_service_account_id" {
+  description = "ID for the dedicated ADK Multi-Agent runtime service account."
+  type        = string
+  default     = "cymbal-adk-agent-sa"
+}
+
+variable "invoker_service_account_id" {
+  description = "ID for the dedicated Pub/Sub push subscription invoker service account."
+  type        = string
+  default     = "pubsub-invoker-sa"
 }
 
 variable "disable_on_destroy" {

@@ -9,8 +9,23 @@ output "region" {
 }
 
 output "service_account_email" {
-  description = "Dedicated orchestrator service account email."
-  value       = google_service_account.orchestrator_sa.email
+  description = "Dedicated ADK agent runtime service account email (backward compatibility alias)."
+  value       = google_service_account.agent_sa.email
+}
+
+output "continuous_query_service_account_email" {
+  description = "Dedicated BigQuery continuous query service account email."
+  value       = google_service_account.continuous_query_sa.email
+}
+
+output "agent_service_account_email" {
+  description = "Dedicated ADK multi-agent runtime service account email."
+  value       = google_service_account.agent_sa.email
+}
+
+output "invoker_service_account_email" {
+  description = "Dedicated Pub/Sub push subscription invoker service account email."
+  value       = google_service_account.invoker_sa.email
 }
 
 output "bigquery_dataset_id" {

@@ -21,12 +21,22 @@ In enterprise security engineering, granting broad administrative roles across a
 │    - Least-Privilege: BigQuery User & DataViewer, Storage ObjectViewer      │
 │    - ZERO administrative, IAM mutation, or storage deletion permissions     │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ 3. Application Runtime Workload Identity (`bq-continuous-query-sa`)         │
-│    - Automated daemon, Continuous Queries, Pub/Sub, ADK Agent server        │
-│    - Scoped execution: BigQuery dataEditor on dataset, Pub/Sub publisher,   │
-│      Storage objectUser on escalations, self-impersonation for V4 URLs      │
+│ 3. Continuous Query Workload Identity (`bq-continuous-query-sa`)            │
+│    - Headless BigQuery Continuous Query stream processing                   │
+│    - Least-Privilege: BigQuery jobUser, dataset READER, publisher on alerts │
+│    - ZERO storage access, ZERO Vertex AI access, ZERO token creation        │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ 4. Platform Connection Identity (`continuous-query-vertex-ai-connection`)   │
+│ 4. ADK Agent Runtime Workload Identity (`cymbal-adk-agent-sa`)              │
+│    - Multi-agent forensic investigations, threat scanner, and SOC dispatch  │
+│    - Scoped execution: BigQuery jobUser, dataset WRITER, bucket-level read  │
+│      on screenshots, bucket-level write on escalations, aiplatform.user     │
+│    - Keyless V4 signed URL self-impersonation (scoped to itself only)       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 5. Pub/Sub Push Invoker Identity (`pubsub-invoker-sa`)                      │
+│    - OIDC token identity for authenticating push subscription delivery      │
+│    - ZERO ambient project roles                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 6. Platform Connection Identity (`continuous-query-vertex-ai-connection`)   │
 │    - Managed by BigQuery for Vertex AI foundation model & object queries    │
 │    - Read-only inference & storage access: Vertex AI User, Object Viewer    │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -191,65 +201,68 @@ gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
 
 ---
 
-## 4. Application Workload Runtime Identity (`bq-continuous-query-sa`)
+## 4. Scoped Workload Identities & Resource-Level Bindings
 
-The deployed application runs headless workloads (BigQuery Continuous Queries, Pub/Sub event processing, background threat scanner daemon, and ADK agent server). It executes under a dedicated non-human service account: `bq-continuous-query-sa`.
+To enforce the principle of least privilege, background automation is split into **three dedicated service accounts** rather than relying on a single monolithic identity:
 
-### Runtime Roles & Least-Privilege Rationale:
+### 4A. Continuous Query Workload Identity (`bq-continuous-query-sa`)
+- **Purpose:** Executes headless BigQuery continuous streaming queries and writes alerts to Pub/Sub.
+- **Project Roles:** `roles/bigquery.jobUser` (run jobs), `roles/logging.logWriter`, `roles/serviceusage.serviceUsageConsumer`.
+- **Resource Bindings:**
+  - `READER` access on BigQuery dataset `Cymbal_Cyber`
+  - `roles/pubsub.publisher` scoped strictly to Pub/Sub topic `cymbal_cyber_alerts`
+- **Zero Access:** No access to GCS, Vertex AI, or token creation.
 
-| Role Name | IAM Role ID | Rationale |
-|---|---|---|
-| **BigQuery User** | `roles/bigquery.user` | Run queries and initiate query jobs |
-| **BigQuery Data Editor** | `roles/bigquery.dataEditor` | Insert incident rows into `adk_threat_assessment` and `soc_tickets` |
-| **BigQuery Connection User** | `roles/bigquery.connectionUser` | Execute queries utilizing the remote Vertex AI connection |
-| **Pub/Sub Publisher** | `roles/pubsub.publisher` | Publish high-risk alerts to Pub/Sub topics |
-| **Pub/Sub Viewer** | `roles/pubsub.viewer` | Monitor subscriber backlogs |
-| **Storage Object User** | `roles/storage.objectUser` | Upload human escalation JSON files into the escalation GCS bucket |
-| **Vertex AI User** | `roles/aiplatform.user` | Invoke Gemini multimodal models during multi-agent investigations |
-| **Logs Writer** | `roles/logging.logWriter` | Stream structured audit logs to Cloud Logging |
-| **Service Usage Consumer** | `roles/serviceusage.serviceUsageConsumer` | Consume project quota for BigQuery and Vertex AI calls |
+### 4B. ADK Multi-Agent Runtime Identity (`cymbal-adk-agent-sa`)
+- **Purpose:** Executes the ADK multi-agent team, background threat scanner daemon, visual inspection, and SOC ticket dispatch.
+- **Project Roles:** `roles/bigquery.jobUser`, `roles/bigquery.connectionUser`, `roles/aiplatform.user`, `roles/logging.logWriter`, `roles/serviceusage.serviceUsageConsumer`.
+- **Resource Bindings (Least-Privilege Scoped):**
+  - `WRITER` access on BigQuery dataset `Cymbal_Cyber` (inserts incident tickets into `soc_tickets` and `adk_threat_assessment`).
+  - `roles/storage.objectViewer` on `screenshots` bucket (read-only for multimodal vision OCR).
+  - `roles/storage.objectUser` on `escalations` bucket (uploading escalation tickets).
+  - `roles/storage.objectUser` on `adk_staging` bucket.
+  - `roles/iam.serviceAccountTokenCreator` bound **strictly to itself** for generating short-lived keyless V4 signed URLs without persistent keys.
 
-### Keyless V4 Signed URL Generation (Self-Impersonation):
-To avoid distributing or storing permanent JSON service account keys on disk, the runtime identity uses **keyless V4 signed URLs**:
-- The service account is granted `roles/iam.serviceAccountTokenCreator` **only on itself** (resource-level binding).
-- This allows the running container to call the Cloud IAM Credentials API to produce cryptographic signatures for temporary (30-minute) screenshot URLs without holding private keys.
+### 4C. Pub/Sub Push Invoker Identity (`pubsub-invoker-sa`)
+- **Purpose:** Provides the OIDC identity used by Pub/Sub push subscription (`adk_agent_trigger`) to authenticate delivery to the agent webhook endpoint.
+- **Roles:** Holds zero ambient project roles by default.
 
-### CLI Setup:
+### CLI Setup for Scoped Workloads:
 ```bash
-# 1. Create the Workload Service Account
+# 1. Create Continuous Query Service Account
 gcloud iam service-accounts create bq-continuous-query-sa \
     --project="${PROJECT_ID}" \
-    --display-name="Cymbal Cyber Workload SA" \
-    --description="Runs continuous queries, Pub/Sub pipeline, and ADK agent runtime"
+    --display-name="Cymbal Cyber Continuous Query SA"
 
-SA_EMAIL="bq-continuous-query-sa@${PROJECT_ID}.iam.gserviceaccount.com"
+CQ_SA="bq-continuous-query-sa@${PROJECT_ID}.iam.gserviceaccount.com"
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${CQ_SA}" --role="roles/bigquery.jobUser"
+gcloud pubsub topics add-iam-policy-binding "cymbal_cyber_alerts" --project="${PROJECT_ID}" --member="serviceAccount:${CQ_SA}" --role="roles/pubsub.publisher"
 
-# 2. Grant project-level runtime roles
-SA_ROLES=(
-  "roles/bigquery.connectionUser"
-  "roles/bigquery.dataEditor"
-  "roles/bigquery.user"
-  "roles/logging.logWriter"
-  "roles/pubsub.publisher"
-  "roles/pubsub.viewer"
-  "roles/serviceusage.serviceUsageConsumer"
-  "roles/storage.objectUser"
-  "roles/aiplatform.user"
-)
+# 2. Create ADK Agent Runtime Service Account
+gcloud iam service-accounts create cymbal-adk-agent-sa \
+    --project="${PROJECT_ID}" \
+    --display-name="Cymbal Cyber ADK Agent SA"
 
-for role in "${SA_ROLES[@]}"; do
-  echo "Granting $role to ${SA_EMAIL}..."
-  gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
-    --member="serviceAccount:${SA_EMAIL}" \
-    --role="$role" \
-    --condition=None
+AGENT_SA="cymbal-adk-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com"
+AGENT_ROLES=("roles/bigquery.jobUser" "roles/bigquery.connectionUser" "roles/aiplatform.user" "roles/logging.logWriter")
+for role in "${AGENT_ROLES[@]}"; do
+  gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${AGENT_SA}" --role="$role"
 done
 
-# 3. Grant resource-level self-impersonation for keyless V4 signed URL signing
-gcloud iam service-accounts add-iam-policy-binding "${SA_EMAIL}" \
+# Resource-level bucket bindings for Agent SA
+gcloud storage buckets add-iam-policy-binding "gs://cymbal-cyber-screenshots_${PROJECT_ID}" --member="serviceAccount:${AGENT_SA}" --role="roles/storage.objectViewer"
+gcloud storage buckets add-iam-policy-binding "gs://cymbal-cyber-adk-escalations-bucket_${PROJECT_ID}" --member="serviceAccount:${AGENT_SA}" --role="roles/storage.objectUser"
+
+# Resource-level self-impersonation for keyless V4 signed URLs
+gcloud iam service-accounts add-iam-policy-binding "${AGENT_SA}" \
     --project="${PROJECT_ID}" \
-    --member="serviceAccount:${SA_EMAIL}" \
+    --member="serviceAccount:${AGENT_SA}" \
     --role="roles/iam.serviceAccountTokenCreator"
+
+# 3. Create Pub/Sub Push Invoker Service Account
+gcloud iam service-accounts create pubsub-invoker-sa \
+    --project="${PROJECT_ID}" \
+    --display-name="Cymbal Cyber Pub/Sub Invoker SA"
 ```
 
 ---
