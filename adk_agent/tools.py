@@ -685,14 +685,19 @@ def log_false_positive(
 
         bq = get_bq_client()
         errors = bq.insert_rows_json(BIGQUERY_ADK_THREAT_ASSESSMENT, [row_data])
+        if errors:
+            logger.error("Failed to insert false positive to BigQuery: %s", errors)
+            if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
+                tool_context.state["evidence_unavailable"] = True
+            return f"Failed to log false positive in BigQuery. Errors: {errors}"
+
         if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
             tool_context.state["false_positive_logged"] = True
-        if errors:
-            return f"Failed to log false positive. Errors: {errors}"
         return "Successfully logged alert as a False Positive in BigQuery."
     except Exception as e:
+        logger.error("Exception during false positive logging: %s", e)
         if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
-            tool_context.state["false_positive_logged"] = True
+            tool_context.state["evidence_unavailable"] = True
         return f"Error logging false positive: {e}"
 
 

@@ -198,7 +198,14 @@ def before_orchestrator_starts(callback_context: CallbackContext):
         state["escalation_dispatched"] = False
         state["false_positive_logged"] = False
 
-        # Seed alert fields from user_content if missing
+        # Clear alert identity fields so prior alert attributes cannot leak across turns
+        state["user_id"] = None
+        state["device_id"] = None
+        state["source_ip"] = None
+        state["threat_score"] = None
+        state["ticket_id"] = None
+
+        # Seed alert fields from user_content
         user_content = getattr(callback_context, "user_content", None)
         raw_text = ""
         if user_content:
@@ -214,14 +221,18 @@ def before_orchestrator_starts(callback_context: CallbackContext):
                 if match:
                     data = json.loads(match.group(1))
                     if isinstance(data, dict):
-                        if not state.get("user_id") and data.get("user_id"):
+                        if "user_id" in data:
                             state["user_id"] = data["user_id"]
-                        if not state.get("device_id") and data.get("device_id"):
+                        if "device_id" in data:
                             state["device_id"] = data["device_id"]
-                        if not state.get("source_ip") and data.get("source_ip"):
+                        if "source_ip" in data:
                             state["source_ip"] = data["source_ip"]
-                        if not state.get("threat_score") and data.get("total_2_min_threat_score"):
+                        if "total_2_min_threat_score" in data:
                             state["threat_score"] = data["total_2_min_threat_score"]
+                        elif "threat_score" in data:
+                            state["threat_score"] = data["threat_score"]
+                        if state.get("user_id"):
+                            state["ticket_id"] = f"SOC-TICKET-{state['user_id']}-{int(time.time())}"
             except Exception:
                 pass
 

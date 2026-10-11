@@ -23,6 +23,7 @@ from adk_agent.tools import (
     get_entity_behavioral_profile,
     get_gcs_uri_for_user,
     get_visual_analysis_for_user,
+    log_false_positive,
     read_png_text_chunks,
     sanitize_entity_value,
 )
@@ -312,11 +313,48 @@ def test_security_gate_permits_incident_dispatch():
     assert res is None
 
 
+@patch("adk_agent.tools.get_bq_client")
+def test_log_false_positive_failed_write_does_not_set_flag(mock_get_bq):
+    """Verify that a failed BigQuery write does not count as resolved and sets evidence_unavailable."""
+    mock_bq = MagicMock()
+    mock_bq.insert_rows_json.return_value = [{"error": "Quota exceeded"}]
+    mock_get_bq.return_value = mock_bq
+
+    mock_ctx = MagicMock()
+    mock_ctx.state = State({}, {})
+    payload = '{"user_id": "l.taylor", "total_2_min_threat_score": 120}'
+    res = log_false_positive(payload, "Benign admin noise", tool_context=mock_ctx)
+
+    assert "Failed to log false positive" in res
+    assert mock_ctx.state.get("false_positive_logged") is not True
+    assert mock_ctx.state.get("evidence_unavailable") is True
+
+
+@patch("adk_agent.tools.get_bq_client")
+def test_log_false_positive_successful_write_sets_flag(mock_get_bq):
+    """Verify that a successful BigQuery write sets false_positive_logged in state."""
+    mock_bq = MagicMock()
+    mock_bq.insert_rows_json.return_value = []
+    mock_get_bq.return_value = mock_bq
+
+    mock_ctx = MagicMock()
+    mock_ctx.state = State({}, {})
+    payload = '{"user_id": "l.taylor", "total_2_min_threat_score": 120}'
+    res = log_false_positive(payload, "Benign admin noise", tool_context=mock_ctx)
+
+    assert "Successfully logged alert as a False Positive" in res
+    assert mock_ctx.state.get("false_positive_logged") is True
+
+
 def test_before_orchestrator_starts_resets_flags_and_seeds_state():
-    """Verify that before_orchestrator_starts resets invocation flags and seeds state from payload."""
+    """Verify that before_orchestrator_starts resets invocation flags, clears prior identities, and seeds new state."""
     callback_ctx = MagicMock()
-    # Leftover flags from a prior invocation
+    # Leftover flags and old alert identity from a prior invocation in the same session
     state_obj = State({
+        "user_id": "prior_user_from_alert_1",
+        "device_id": "ws-old-01",
+        "source_ip": "1.1.1.1",
+        "threat_score": 9999,
         "prompt_injection_detected": True,
         "ticket_dispatched": True,
         "malicious_indicators": True,
@@ -338,11 +376,12 @@ def test_before_orchestrator_starts_resets_flags_and_seeds_state():
     assert state_obj.get("ticket_dispatched") is False
     assert state_obj.get("false_positive_logged") is False
 
-    # 2. Verification of alert metadata seeding
+    # 2. Verification that prior alert identity was overwritten, NOT leaked
     assert state_obj.get("user_id") == "c.wilson"
     assert state_obj.get("device_id") == "ws-dev-10"
     assert state_obj.get("source_ip") == "194.26.135.68"
     assert state_obj.get("threat_score") == 1850
+    assert "c.wilson" in state_obj.get("ticket_id")
 
 
 def test_default_deny_callback_escalates_when_unresolved():
