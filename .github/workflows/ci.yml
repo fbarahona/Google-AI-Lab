@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  GOOGLE_CLOUD_PROJECT: "dummy-project-for-testing"
+  GCP_PROJECT_ID: "dummy-project-for-testing"
+
 jobs:
   pytest:
     name: Run Test Suite
