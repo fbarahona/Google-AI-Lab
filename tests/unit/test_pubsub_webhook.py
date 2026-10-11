@@ -53,9 +53,11 @@ def test_extract_pubsub_payload_raw_bytes():
     assert unwrapped["user_id"] == "c.wilson"
 
 
-def test_pubsub_push_endpoint_wrapped():
-    """Test POST to /apps/adk_agent/trigger/pubsub with wrapped Pub/Sub message."""
+def test_pubsub_push_endpoint_returns_503_when_runner_uninitialized():
+    """Verify that uninitialized runner returns 503 so Pub/Sub retries rather than dropping."""
     client = TestClient(app)
+    # Ensure runner is None
+    app.state.runner = None
     raw_alert = {
         "user_id": "u.lewis",
         "total_2_min_threat_score": 1850
@@ -64,26 +66,72 @@ def test_pubsub_push_endpoint_wrapped():
     payload = {
         "message": {
             "data": b64_data,
-            "messageId": "12345"
+            "messageId": f"msg-test-503-{raw_alert['user_id']}"
         }
     }
 
     response = client.post("/apps/adk_agent/trigger/pubsub", json=payload)
-    assert response.status_code in [200, 202]
+    assert response.status_code == 503
     data = response.json()
-    assert data["status"] in ["ACK", "ACCEPTED"]
-    assert "session_id" in data
+    assert data["status"] == "SERVICE_UNAVAILABLE"
 
 
-def test_pubsub_push_endpoint_alias():
-    """Test POST to /trigger/pubsub convenience alias route."""
+def test_pubsub_push_endpoint_deduplication():
+    """Verify that duplicate Pub/Sub deliveries are recognized and acknowledged with 200."""
     client = TestClient(app)
-    direct_payload = {
-        "user_id": "l.taylor",
-        "total_2_min_threat_score": 120
+    msg_id = "test-pubsub-dedup-12345"
+    payload = {
+        "message": {
+            "data": base64.b64encode(b'{"user_id": "l.taylor"}').decode("utf-8"),
+            "messageId": msg_id
+        }
     }
 
-    response = client.post("/trigger/pubsub", json=direct_payload)
-    assert response.status_code in [200, 202]
+    # First call records the key (returns 503 because runner is uninitialized)
+    client.post("/apps/adk_agent/trigger/pubsub", json=payload)
+
+    # Second call with identical messageId should be recognized as duplicate and return 200 DUPLICATE_ACK
+    res2 = client.post("/apps/adk_agent/trigger/pubsub", json=payload)
+    assert res2.status_code == 200
+    assert res2.json()["status"] == "DUPLICATE_ACK"
+
+
+def test_pubsub_push_endpoint_with_mock_runner():
+    """Test successful synchronous investigation execution when runner is ready."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_runner = MagicMock()
+    mock_session = MagicMock()
+    mock_session.id = "session-123"
+    mock_runner.session_service.get_session = AsyncMock(return_value=mock_session)
+    mock_runner.session_service.create_session = AsyncMock(return_value=mock_session)
+
+    mock_event = MagicMock()
+    mock_part = MagicMock()
+    mock_part.text = "Investigation complete: FALSE_POSITIVE verified."
+    mock_event.content.parts = [mock_part]
+
+    async def mock_run_async(*args, **kwargs):
+        yield mock_event
+
+    mock_runner.run_async = mock_run_async
+
+    app.state.runner = mock_runner
+    app.state.agent_app_name = "adk_agent"
+    client = TestClient(app)
+
+    raw_alert = {"user_id": "fresh.user.1", "threat_score": 100}
+    b64_data = base64.b64encode(json.dumps(raw_alert).encode("utf-8")).decode("utf-8")
+    payload = {
+        "message": {
+            "data": b64_data,
+            "messageId": f"msg-fresh-mock-{raw_alert['user_id']}"
+        }
+    }
+
+    response = client.post("/apps/adk_agent/trigger/pubsub", json=payload)
+    assert response.status_code == 200
     data = response.json()
-    assert data["status"] in ["ACK", "ACCEPTED"]
+    assert data["status"] == "COMPLETED"
+    assert "Investigation complete" in data["output"]
+    app.state.runner = None

@@ -6,12 +6,14 @@
 # We deploy the ADK Agent to Cloud Run to natively support Pub/Sub OIDC push tokens
 # without requiring an intermediary token-exchange relay service.
 resource "google_cloud_run_v2_service" "adk_agent_service" {
-  name     = "cymbal-cyber-adk-agent"
-  location = var.region
-  project  = var.project_id
-  ingress  = "INGRESS_TRAFFIC_ALL"
+  name                = "cymbal-cyber-adk-agent"
+  location            = var.region
+  project             = var.project_id
+  ingress             = "INGRESS_TRAFFIC_ALL"
+  deletion_protection = false
 
   template {
+    timeout         = "600s"
     service_account = google_service_account.agent_sa.email
 
     containers {
@@ -30,7 +32,19 @@ resource "google_cloud_run_v2_service" "adk_agent_service" {
         name  = "LOCAL_MODE"
         value = "false"
       }
+      env {
+        name  = "GCS_SIGNER_SA"
+        value = google_service_account.agent_sa.email
+      }
     }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].containers[0].image,
+      client,
+      client_version,
+    ]
   }
 
   depends_on = [google_project_service.required]
@@ -45,38 +59,43 @@ resource "google_cloud_run_v2_service_iam_member" "agent_invoker" {
   member   = "serviceAccount:${google_service_account.invoker_sa.email}"
 }
 
-# 2. BigQuery Continuous Query (Simulated via Scheduled Query for Demo)
-# Since native BigQuery Continuous Queries require an Enterprise reservation and 
-# are difficult to provision via standard Terraform without raw API calls,
-# we represent the continuous streaming capability here.
-resource "google_bigquery_data_transfer_config" "continuous_query_simulator" {
-  project                = var.project_id
-  display_name           = "Cymbal Cyber Threat Correlation (Continuous Query)"
-  data_source_id         = "scheduled_query"
-  schedule               = "every 2 minutes"
-  destination_dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
-  service_account_name   = google_service_account.continuous_query_sa.email
+# 2. BigQuery Continuous Query Infrastructure (Gated behind enable_continuous_query)
+# BigQuery Continuous Queries require an Enterprise Edition slot reservation (billed 24/7).
+# When enable_continuous_query is false (default), the background threat_scanner.py polling
+# daemon serves as the zero-reservation, cost-free trigger path.
+resource "google_bigquery_reservation" "continuous_query_reservation" {
+  count             = var.enable_continuous_query ? 1 : 0
+  project           = var.project_id
+  location          = var.bigquery_location
+  name              = "cymbal-cyber-continuous-reservation"
+  slot_capacity     = 100
+  edition           = "ENTERPRISE"
+  ignore_idle_slots = false
 
-  params = {
-    query = file("${path.module}/../data_pipeline/continuous_query.sql")
-  }
+  depends_on = [google_project_service.required]
+}
 
-  depends_on = [
-    google_project_service.required,
-    google_bigquery_table.user_access_events,
-    google_bigquery_table.network_events
-  ]
+resource "google_bigquery_reservation_assignment" "continuous_query_assignment" {
+  count       = var.enable_continuous_query ? 1 : 0
+  project     = var.project_id
+  location    = var.bigquery_location
+  reservation = google_bigquery_reservation.continuous_query_reservation[0].name
+  job_type    = "CONTINUOUS"
+  assignee    = "projects/${var.project_id}"
+
+  depends_on = [google_bigquery_reservation.continuous_query_reservation]
 }
 
 # 3. Dataflow Streaming Ingestion Pipeline
 # Reads from Pub/Sub cymbal_cyber_raw_logs and streams to BigQuery tables.
+# Uses the classic subscription-based PubSub_Subscription_to_BigQuery template.
 resource "google_dataflow_job" "pubsub_to_bigquery" {
   project               = var.project_id
   region                = var.region
   name                  = "cymbal-cyber-ingestion-pipeline"
-  template_gcs_path     = "gs://dataflow-templates/latest/PubSub_to_BigQuery"
+  template_gcs_path     = "gs://dataflow-templates/latest/PubSub_Subscription_to_BigQuery"
   temp_gcs_location     = "gs://${google_storage_bucket.adk_staging.name}/temp"
-  service_account_email = google_service_account.continuous_query_sa.email
+  service_account_email = google_service_account.dataflow_sa.email
   on_delete             = "cancel"
 
   parameters = {
@@ -86,6 +105,8 @@ resource "google_dataflow_job" "pubsub_to_bigquery" {
 
   depends_on = [
     google_project_service.required,
+    google_service_account.dataflow_sa,
+    google_project_iam_member.dataflow_project_bindings,
     google_storage_bucket.adk_staging,
     google_pubsub_subscription.raw_logs_to_bq_sub,
     google_bigquery_table.user_access_events

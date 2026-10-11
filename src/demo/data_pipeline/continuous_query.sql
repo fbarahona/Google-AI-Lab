@@ -1,6 +1,6 @@
 /* =================================================================================
  * Cymbal Cyber - BigQuery Continuous Query for Real-Time Threat Correlation
- * Target Project: <PROJECT_ID>
+ * Target Project: ${project_id}
  * Target Dataset: Cymbal_Cyber
  * Target Pub/Sub Topic: cymbal_cyber_alerts
  * =================================================================================
@@ -9,7 +9,7 @@
 EXPORT DATA
 OPTIONS (
   format = CLOUD_PUBSUB,
-  uri = "https://pubsub.googleapis.com/projects/<PROJECT_ID>/topics/cymbal_cyber_alerts"
+  uri = "https://pubsub.googleapis.com/projects/${project_id}/topics/cymbal_cyber_alerts"
 )
 AS (
   /* CTE 1: Correlate Access and Network Events using streaming APPENDS read */
@@ -57,7 +57,7 @@ AS (
       COUNTIF(permission_level_requested IN ('root', 'admin')) AS high_privilege_request_count,
       COUNTIF(REGEXP_CONTAINS(user_agent, r'^(python-requests|curl|Go-http-client)')) AS suspicious_user_agent_count,
       COUNTIF(file_type IN ('exe', 'dll', 'ps1', 'bat', 'vbs')) AS risky_file_transfer_count,
-      COUNTIF(REGEXP_CONTAINS(command_line, r'(?i)(powershell -enc|IEX|DownloadString|mimikatz|payload)')) AS malicious_command_count,
+      COUNTIF(`Cymbal_Cyber.is_malicious_command`(command_line)) AS malicious_command_count,
       COUNTIF(`Cymbal_Cyber.is_malicious_domain`(network_domain)) AS malicious_dns_count
     FROM
       TUMBLE(TABLE CorrelatedEventScores, "bq_changed_ts", INTERVAL 2 MINUTE)

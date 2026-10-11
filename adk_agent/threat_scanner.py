@@ -67,7 +67,7 @@ class BigQueryThreatScanner:
               )
             ) AS total_2_min_threat_score,
             COUNTIF(network.permission_level_requested IN ('root', 'admin')) AS high_privilege_request_count,
-            COUNTIF(REGEXP_CONTAINS(network.command_line, r'(?i)(powershell -enc|IEX|mimikatz|payload)')) AS malicious_command_count,
+            COUNTIF(`{self.project_id}.{self.dataset_id}.is_malicious_command`(network.command_line)) AS malicious_command_count,
             COUNTIF(`{self.project_id}.{self.dataset_id}.is_malicious_domain`(network.network_domain)) AS malicious_dns_count
           FROM `{self.project_id}.{self.dataset_id}.user_access_events` AS access
           INNER JOIN `{self.project_id}.{self.dataset_id}.network_events` AS network

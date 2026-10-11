@@ -55,9 +55,11 @@ jobs:
         run: terraform -chdir=src/demo/terraform validate
 
       - name: Checkov Static Security Analysis
-        uses: bridgecrewio/checkov-action@master
+        # Pinned to specific release tag for supply-chain security integrity
+        uses: bridgecrewio/checkov-action@v12.2814.0
         with:
           directory: src/demo/terraform
           framework: terraform
+          # soft_fail: true ensures initial baseline scans report policy insights without blocking PR builds
           soft_fail: true
           output_format: cli

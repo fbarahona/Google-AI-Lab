@@ -243,11 +243,18 @@ terraform apply -var="project_id=<PROJECT_ID>" -auto-approve
 ```
 
 **Resources provisioned:**
-- **APIs:** BigQuery, Vertex AI, Pub/Sub, Storage, Dataflow, IAM Credentials, Resource Manager.
-- **IAM:** Service Account `bq-continuous-query-sa` with least-privilege roles and self-token-creation.
+- **APIs:** BigQuery, Vertex AI, Pub/Sub, Storage, Cloud Run, Dataflow, IAM Credentials, Resource Manager.
+- **IAM:** Least-privilege dedicated service accounts:
+  1. `continuous_query_sa` (`bq-continuous-query-sa`): BigQuery dataset READER, Pub/Sub alerts topic publisher.
+  2. `agent_sa` (`cymbal-adk-agent-sa`): Dataset READER, table-level dataEditor on `soc_tickets` and `adk_threat_assessment`, GCS screenshots viewer, GCS escalations user, self-token-creation.
+  3. `invoker_sa` (`pubsub-invoker-sa`): Cloud Run invoker role for authenticated Pub/Sub push notifications.
+  4. `dataflow_sa` (`cymbal-dataflow-pipeline-sa`): Dataflow worker, dataset WRITER, raw logs subscriber, staging admin.
+- **Compute:** Cloud Run deployment (`cymbal-cyber-adk-agent`) hosting the multi-agent FastAPI app with 600s execution timeout.
+  *(Architectural Note: Cloud Run was chosen over Vertex AI Agent Runtime to natively support Pub/Sub OIDC push tokens without an external token-exchange relay).*
 - **Storage:** 4 GCS Buckets (staging, escalations, screenshots, raw_logs) configured with `public_access_prevention = "enforced"`.
-- **BigQuery:** Dataset `Cymbal_Cyber` with `delete_contents_on_destroy = true`, partitioned & clustered tables, routing UDFs, and connection `continuous-query-vertex-ai-connection`.
-- **Pub/Sub:** Topics `cymbal_cyber_alerts` and `cymbal_cyber_raw_logs` with subscriptions and OIDC push configurations.
+- **BigQuery:** Dataset `Cymbal_Cyber` with `delete_contents_on_destroy = true`, partitioned & clustered tables, centralized scalar UDFs (`calculate_threat_score`, `is_malicious_domain`, `is_malicious_command`), and optional Enterprise continuous query reservation (`enable_continuous_query`).
+- **Pub/Sub:** Topics `cymbal_cyber_alerts` and `cymbal_cyber_raw_logs` with subscriptions, metadata forwarding, and OIDC push configurations.
+- **Dataflow:** Streaming pipeline using `PubSub_Subscription_to_BigQuery` ingesting raw logs directly into BigQuery.
 
 ---
 

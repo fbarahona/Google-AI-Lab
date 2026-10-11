@@ -62,6 +62,17 @@ An enterprise-grade platform demonstrating real-time cybersecurity threat detect
 
 ---
 
+### 🏗️ Deployment Architecture: Cloud Run vs. Agent Runtime (Vertex AI Reasoning Engine)
+
+This project deploys the ADK Multi-Agent Team to **Google Cloud Run** rather than Vertex AI Agent Runtime (Reasoning Engine). This is a deliberate architectural decision:
+- **Native Pub/Sub Push Authentication:** Cloud Run natively accepts Google Cloud Pub/Sub push subscriptions authenticated with OpenID Connect (OIDC) identity tokens (`roles/run.invoker`), requiring **zero** token-exchange relays or intermediary proxy microservices.
+- **FastAPI Ingestion & A2A Protocols:** Hosting the agent container on Cloud Run provides full control over FastAPI routes, enabling direct continuous query alert webhook ingestion (`/apps/adk_agent/trigger/pubsub`), message deduplication, and Google A2A inter-agent communication.
+- **Execution Lifecycle & Timeouts:** Forensic investigations across 4 specialized agents can run up to several minutes. Cloud Run supports configurable request timeouts up to 600s matching the Pub/Sub acknowledgement deadline, avoiding premature execution kills.
+
+*Alternative (Vertex AI Agent Runtime):* If deploying to Vertex AI Reasoning Engine / Agent Runtime (`agents-cli deploy --target agent_runtime`), Pub/Sub push cannot authenticate directly to the Reasoning Engine API endpoint; a dedicated Cloud Run or Cloud Function relay must be deployed in front to unwrap the Pub/Sub push envelope and call the Reasoning Engine SDK.
+
+---
+
 ## 🚀 Key Features
 
 1. **Google ADK Multi-Agent Team (`adk_agent/`)**:

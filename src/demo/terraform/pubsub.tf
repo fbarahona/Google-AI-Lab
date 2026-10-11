@@ -33,7 +33,7 @@ resource "google_pubsub_subscription" "adk_agent_trigger" {
     }
 
     no_wrapper {
-      write_metadata = false
+      write_metadata = true
     }
   }
 

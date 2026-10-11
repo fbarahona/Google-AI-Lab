@@ -77,12 +77,30 @@ resource "google_project_iam_member" "agent_project_bindings" {
   member  = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
-# Resource-level BigQuery dataset WRITER access (inserts into soc_tickets & adk_threat_assessment)
-resource "google_bigquery_dataset_access" "agent_dataset_writer" {
+# Resource-level BigQuery dataset READER access (queries tables & UDFs)
+resource "google_bigquery_dataset_access" "agent_dataset_reader" {
   project       = var.project_id
   dataset_id    = google_bigquery_dataset.cyber_dataset.dataset_id
-  role          = "WRITER"
+  role          = "READER"
   user_by_email = google_service_account.agent_sa.email
+}
+
+# Table-level least-privilege dataEditor scoped strictly to soc_tickets
+resource "google_bigquery_table_iam_member" "agent_soc_tickets_editor" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
+  table_id   = google_bigquery_table.soc_tickets.table_id
+  role       = "roles/bigquery.dataEditor"
+  member     = "serviceAccount:${google_service_account.agent_sa.email}"
+}
+
+# Table-level least-privilege dataEditor scoped strictly to adk_threat_assessment
+resource "google_bigquery_table_iam_member" "agent_adk_threat_assessment_editor" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
+  table_id   = google_bigquery_table.adk_threat_assessment.table_id
+  role       = "roles/bigquery.dataEditor"
+  member     = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
 # Resource-level GCS bucket bindings:
@@ -96,13 +114,6 @@ resource "google_storage_bucket_iam_member" "agent_screenshots_reader" {
 # 2) Escalations bucket: WRITE/READ (objectUser)
 resource "google_storage_bucket_iam_member" "agent_escalations_writer" {
   bucket = google_storage_bucket.escalations.name
-  role   = "roles/storage.objectUser"
-  member = "serviceAccount:${google_service_account.agent_sa.email}"
-}
-
-# 3) Staging bucket: WRITE/READ (objectUser)
-resource "google_storage_bucket_iam_member" "agent_staging_writer" {
-  bucket = google_storage_bucket.adk_staging.name
   role   = "roles/storage.objectUser"
   member = "serviceAccount:${google_service_account.agent_sa.email}"
 }
@@ -124,4 +135,56 @@ resource "google_service_account" "invoker_sa" {
   description  = "Dedicated identity used by Pub/Sub push subscription to authenticate to Agent Runtime endpoint."
 
   depends_on = [google_project_service.required]
+}
+
+
+# 4. Dataflow Pipeline Workload Service Account
+# Role: Executes Dataflow streaming ingestion from Pub/Sub raw logs to BigQuery.
+resource "google_service_account" "dataflow_sa" {
+  project      = var.project_id
+  account_id   = var.dataflow_service_account_id
+  display_name = "Cymbal Cyber Dataflow Pipeline SA"
+  description  = "Dedicated least-privilege identity running Dataflow streaming log ingestion."
+
+  depends_on = [google_project_service.required]
+}
+
+locals {
+  dataflow_project_roles = toset([
+    "roles/dataflow.worker",
+    "roles/bigquery.jobUser",
+    "roles/logging.logWriter",
+    "roles/serviceusage.serviceUsageConsumer",
+  ])
+}
+
+resource "google_project_iam_member" "dataflow_project_bindings" {
+  for_each = local.dataflow_project_roles
+
+  project = var.project_id
+  role    = each.value
+  member  = "serviceAccount:${google_service_account.dataflow_sa.email}"
+}
+
+# Subscriber role on raw logs subscription
+resource "google_pubsub_subscription_iam_member" "dataflow_raw_sub_subscriber" {
+  project      = var.project_id
+  subscription = google_pubsub_subscription.raw_logs_to_bq_sub.name
+  role         = "roles/pubsub.subscriber"
+  member       = "serviceAccount:${google_service_account.dataflow_sa.email}"
+}
+
+# BigQuery dataset WRITER access for streaming insertion
+resource "google_bigquery_dataset_access" "dataflow_dataset_writer" {
+  project       = var.project_id
+  dataset_id    = google_bigquery_dataset.cyber_dataset.dataset_id
+  role          = "WRITER"
+  user_by_email = google_service_account.dataflow_sa.email
+}
+
+# Staging bucket objectAdmin access for Dataflow pipeline binaries and temporary files
+resource "google_storage_bucket_iam_member" "dataflow_staging_admin" {
+  bucket = google_storage_bucket.adk_staging.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.dataflow_sa.email}"
 }

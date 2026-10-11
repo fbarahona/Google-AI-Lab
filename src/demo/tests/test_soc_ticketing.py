@@ -33,6 +33,7 @@ def test_soc_ticket_validation():
 
 def test_soc_ticketing_service_dispatch(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCAL_QUEUE_DIR", str(tmp_path))
+    monkeypatch.setenv("LOCAL_MODE", "false")
     service = SocTicketingService(project_id="test-project", dataset_id="Test_Dataset")
     
     # Mock GCP clients

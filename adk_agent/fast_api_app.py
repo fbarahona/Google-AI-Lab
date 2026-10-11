@@ -38,7 +38,23 @@ load_dotenv()
 allow_origins = (
     os.getenv("ALLOW_ORIGINS", "").split(",") if os.getenv("ALLOW_ORIGINS") else None
 )
-otel_to_cloud = True
+
+
+def _should_enable_cloud_telemetry() -> bool:
+    """Disables Cloud Trace exporter in local mode or CI environments lacking GCP ADC."""
+    if os.getenv("LOCAL_MODE", "false").lower() in ("true", "1"):
+        return False
+    if os.getenv("OTEL_TO_CLOUD", "").lower() in ("false", "0"):
+        return False
+    try:
+        import google.auth
+        google.auth.default()
+        return True
+    except Exception:
+        return False
+
+
+otel_to_cloud = _should_enable_cloud_telemetry()
 
 AGENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -118,6 +134,24 @@ def extract_pubsub_payload(raw_body: Any) -> Dict[str, Any]:
     return raw_body
 
 
+_PROCESSED_MESSAGES: Dict[str, float] = {}
+_DEDUP_TTL_SECONDS = 900.0  # 15 minutes deduplication window
+
+
+def is_duplicate_alert(dedup_key: str) -> bool:
+    """Checks and records message keys to prevent duplicate processing from Pub/Sub retries."""
+    now = time.time()
+    # Expire stale entries
+    expired = [k for k, ts in _PROCESSED_MESSAGES.items() if now - ts > _DEDUP_TTL_SECONDS]
+    for k in expired:
+        _PROCESSED_MESSAGES.pop(k, None)
+
+    if dedup_key in _PROCESSED_MESSAGES:
+        return True
+    _PROCESSED_MESSAGES[dedup_key] = now
+    return False
+
+
 async def _run_agent_investigation(
     runner: Runner,
     app_name: str,
@@ -126,36 +160,32 @@ async def _run_agent_investigation(
     prompt_text: str,
 ) -> str:
     """Runs autonomous multi-agent forensic investigation asynchronously."""
-    try:
-        session = await runner.session_service.get_session(
+    session = await runner.session_service.get_session(
+        app_name=app_name, user_id=user_id, session_id=session_id
+    )
+    if not session:
+        session = await runner.session_service.create_session(
             app_name=app_name, user_id=user_id, session_id=session_id
         )
-        if not session:
-            session = await runner.session_service.create_session(
-                app_name=app_name, user_id=user_id, session_id=session_id
-            )
 
-        content = types.Content(
-            role="user",
-            parts=[types.Part.from_text(text=prompt_text)],
-        )
+    content = types.Content(
+        role="user",
+        parts=[types.Part.from_text(text=prompt_text)],
+    )
 
-        outputs = []
-        async for event in runner.run_async(
-            user_id=user_id,
-            session_id=session.id,
-            new_message=content,
-        ):
-            if event.content and event.content.parts:
-                for part in event.content.parts:
-                    if part.text:
-                        outputs.append(part.text)
+    outputs = []
+    async for event in runner.run_async(
+        user_id=user_id,
+        session_id=session.id,
+        new_message=content,
+    ):
+        if event.content and event.content.parts:
+            for part in event.content.parts:
+                if part.text:
+                    outputs.append(part.text)
 
-        logger.info("Pub/Sub agent investigation completed for session %s", session_id)
-        return "\n".join(outputs)
-    except Exception as exc:
-        logger.error("Failed to execute agent investigation for session %s: %s", session_id, exc)
-        return f"Investigation failed: {exc}"
+    logger.info("Pub/Sub agent investigation completed for session %s", session_id)
+    return "\n".join(outputs)
 
 
 @app.post("/apps/adk_agent/trigger/pubsub")
@@ -163,11 +193,12 @@ async def _run_agent_investigation(
 async def handle_pubsub_trigger(
     request: Request,
     background_tasks: BackgroundTasks,
-    sync: bool = False,
+    sync: bool = True,
 ):
     """
     Webhook receiving Pub/Sub push notifications for BigQuery Continuous Query security alerts.
-    Unwraps base64 alert data and triggers multi-agent forensic investigation.
+    Unwraps base64 alert data, deduplicates at-least-once deliveries, and executes the multi-agent
+    investigation synchronously (default) so Cloud Run does not throttle CPU mid-investigation.
     """
     try:
         raw_body = await request.json()
@@ -180,38 +211,71 @@ async def handle_pubsub_trigger(
     session_id = f"pubsub-{user_id}-{int(time.time())}"
     prompt_text = f"Investigate incoming continuous security alert: {json.dumps(alert_data)}"
 
+    # 1. Message Deduplication: Check messageId or (user_id, window_end)
+    message_id = None
+    if isinstance(raw_body, dict):
+        msg_obj = raw_body.get("message")
+        if isinstance(msg_obj, dict):
+            message_id = msg_obj.get("messageId") or msg_obj.get("message_id")
+    if not message_id:
+        message_id = request.headers.get("ce-id") or request.headers.get("x-goog-pubsub-message-id")
+    if not message_id:
+        window_end = alert_data.get("window_end") or alert_data.get("transaction_window_end") or ""
+        if window_end:
+            message_id = f"{user_id}:{window_end}"
+
+    if message_id and is_duplicate_alert(message_id):
+        logger.info("Duplicate Pub/Sub message detected (%s); acknowledging without re-processing.", message_id)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "DUPLICATE_ACK",
+                "message": "Alert previously received and processed.",
+                "message_id": message_id,
+            },
+        )
+
+    # 2. Runner Readiness: Return 503 so Pub/Sub retries rather than dropping the alert
     runner: Runner = getattr(app.state, "runner", None)
     app_name: str = getattr(app.state, "agent_app_name", "adk_agent")
 
     if not runner:
-        logger.warning("Runner not yet initialized in app.state; alert acknowledged.")
+        logger.warning("Runner not yet initialized in app.state; returning 503 to trigger Pub/Sub retry.")
         return JSONResponse(
-            status_code=202,
+            status_code=503,
             content={
-                "status": "ACCEPTED",
-                "message": "Alert received; runner initializing.",
+                "status": "SERVICE_UNAVAILABLE",
+                "message": "ADK Agent Runner is initializing; please retry.",
                 "session_id": session_id,
-                "alert": alert_data,
             },
         )
 
+    # 3. Synchronous Execution by Default (Prevents Cloud Run CPU throttling)
     if sync:
-        output = await _run_agent_investigation(
-            runner=runner,
-            app_name=app_name,
-            user_id=user_id,
-            session_id=session_id,
-            prompt_text=prompt_text,
-        )
-        return JSONResponse(
-            status_code=200,
-            content={
-                "status": "COMPLETED",
-                "session_id": session_id,
-                "output": output,
-            },
-        )
+        try:
+            output = await _run_agent_investigation(
+                runner=runner,
+                app_name=app_name,
+                user_id=user_id,
+                session_id=session_id,
+                prompt_text=prompt_text,
+            )
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "COMPLETED",
+                    "session_id": session_id,
+                    "output": output,
+                },
+            )
+        except Exception as exc:
+            logger.error("Pub/Sub agent investigation failed for session %s: %s", session_id, exc)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Agent investigation failed: {exc}",
+            )
 
+    # Optional background path (if explicitly requested via sync=false)
     background_tasks.add_task(
         _run_agent_investigation,
         runner=runner,
@@ -225,7 +289,7 @@ async def handle_pubsub_trigger(
         status_code=200,
         content={
             "status": "ACK",
-            "message": "Continuous query alert received and investigation started.",
+            "message": "Continuous query alert received and investigation started in background.",
             "session_id": session_id,
             "user_id": user_id,
         },

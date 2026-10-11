@@ -100,7 +100,14 @@ def step_2_correlate_events(scenario_data: Dict[str, Any]) -> Dict[str, Any]:
         domain = ev.get("network_domain") or ""
         file_type = ev.get("file_type") or ""
 
-        if "powershell -enc" in cmd or "mimikatz" in cmd or "IEX" in cmd:
+        cmd_lower = cmd.lower()
+        if (
+            "powershell -enc" in cmd_lower
+            or "iex" in cmd_lower
+            or "downloadstring" in cmd_lower
+            or "mimikatz" in cmd_lower
+            or "payload" in cmd_lower
+        ):
             score += 100
             malicious_cmd_count += 1
         elif cmd:

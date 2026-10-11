@@ -39,6 +39,18 @@ variable "invoker_service_account_id" {
   default     = "pubsub-invoker-sa"
 }
 
+variable "dataflow_service_account_id" {
+  description = "ID for the dedicated Dataflow streaming ingestion pipeline service account."
+  type        = string
+  default     = "cymbal-dataflow-pipeline-sa"
+}
+
+variable "enable_continuous_query" {
+  description = "Whether to provision BigQuery Enterprise reservation and continuous query streaming job. When false (default), the background threat_scanner.py daemon serves as the zero-cost polling trigger."
+  type        = bool
+  default     = false
+}
+
 variable "disable_on_destroy" {
   description = "Whether to disable Google APIs when Terraform resources are destroyed."
   type        = bool

@@ -52,9 +52,10 @@ GCS_ESCALATION_BUCKET = os.getenv(
     "ESCALATION_BUCKET",
     f"cymbal-cyber-adk-escalations-bucket_{PROJECT_ID}"
 )
+AGENT_SERVICE_ACCOUNT_NAME = os.getenv("AGENT_SERVICE_ACCOUNT", "cymbal-adk-agent-sa")
 GCS_SIGNER_SERVICE_ACCOUNT = os.getenv(
     "GCS_SIGNER_SA",
-    f"bq-continuous-query-sa@{PROJECT_ID}.iam.gserviceaccount.com"
+    f"{AGENT_SERVICE_ACCOUNT_NAME}@{PROJECT_ID}.iam.gserviceaccount.com"
 )
 
 # Initialize GenAI Client
@@ -256,7 +257,7 @@ def build_event_logs_query(
           COUNT(*) AS total_network_events_24h,
           COUNTIF(permission_level_requested IN ('root', 'admin')) AS high_privilege_requests_24h,
           COUNTIF(file_type IN ('exe', 'dll', 'ps1', 'bat', 'vbs')) AS risky_file_transfers_24h,
-          COUNTIF(REGEXP_CONTAINS(command_line, r'(?i)(powershell -enc|IEX|DownloadString|mimikatz|payload)')) AS malicious_commands_24h,
+          COUNTIF(`{DATASET_ID}.is_malicious_command`(command_line)) AS malicious_commands_24h,
           COUNTIF(`{DATASET_ID}.is_malicious_domain`(network_domain)) AS malicious_dns_queries_24h,
           COUNT(DISTINCT destination_ip) AS distinct_destination_ips_24h,
           COUNT(DISTINCT file_hash_sha256) AS distinct_files_transferred_24h
