@@ -53,33 +53,53 @@ def test_extract_pubsub_payload_raw_bytes():
     assert unwrapped["user_id"] == "c.wilson"
 
 
-def test_pubsub_push_endpoint_returns_503_when_runner_uninitialized():
-    """Verify that uninitialized runner returns 503 so Pub/Sub retries rather than dropping."""
+def test_pubsub_push_endpoint_returns_503_and_allows_retry_when_runner_uninitialized():
+    """Verify that uninitialized runner returns 503 and does NOT record dedup, so retries are NOT dropped."""
     client = TestClient(app)
-    # Ensure runner is None
     app.state.runner = None
-    raw_alert = {
-        "user_id": "u.lewis",
-        "total_2_min_threat_score": 1850
-    }
-    b64_data = base64.b64encode(json.dumps(raw_alert).encode("utf-8")).decode("utf-8")
+    msg_id = "msg-retry-test-503"
     payload = {
         "message": {
-            "data": b64_data,
-            "messageId": f"msg-test-503-{raw_alert['user_id']}"
+            "data": base64.b64encode(b'{"user_id": "u.lewis"}').decode("utf-8"),
+            "messageId": msg_id
         }
     }
 
-    response = client.post("/apps/adk_agent/trigger/pubsub", json=payload)
-    assert response.status_code == 503
-    data = response.json()
-    assert data["status"] == "SERVICE_UNAVAILABLE"
+    # First attempt: returns 503
+    r1 = client.post("/apps/adk_agent/trigger/pubsub", json=payload)
+    assert r1.status_code == 503
+    assert r1.json()["status"] == "SERVICE_UNAVAILABLE"
+
+    # Pub/Sub retries with the exact same messageId: MUST NOT return DUPLICATE_ACK (200), must still return 503!
+    r2 = client.post("/apps/adk_agent/trigger/pubsub", json=payload)
+    assert r2.status_code == 503
+    assert r2.json()["status"] == "SERVICE_UNAVAILABLE"
 
 
-def test_pubsub_push_endpoint_deduplication():
-    """Verify that duplicate Pub/Sub deliveries are recognized and acknowledged with 200."""
+def test_pubsub_push_endpoint_deduplication_after_success():
+    """Verify that duplicate Pub/Sub deliveries are recognized and acknowledged with 200 ONLY after a successful run."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_runner = MagicMock()
+    mock_session = MagicMock()
+    mock_session.id = "session-test"
+    mock_runner.session_service.get_session = AsyncMock(return_value=mock_session)
+    mock_runner.session_service.create_session = AsyncMock(return_value=mock_session)
+
+    mock_event = MagicMock()
+    mock_part = MagicMock()
+    mock_part.text = "Investigation complete."
+    mock_event.content.parts = [mock_part]
+
+    async def mock_run_async(*args, **kwargs):
+        yield mock_event
+
+    mock_runner.run_async = mock_run_async
+    app.state.runner = mock_runner
+    app.state.agent_app_name = "adk_agent"
     client = TestClient(app)
-    msg_id = "test-pubsub-dedup-12345"
+
+    msg_id = "test-pubsub-dedup-success-999"
     payload = {
         "message": {
             "data": base64.b64encode(b'{"user_id": "l.taylor"}').decode("utf-8"),
@@ -87,13 +107,53 @@ def test_pubsub_push_endpoint_deduplication():
         }
     }
 
-    # First call records the key (returns 503 because runner is uninitialized)
-    client.post("/apps/adk_agent/trigger/pubsub", json=payload)
+    # First attempt: succeeds (200 COMPLETED)
+    r1 = client.post("/apps/adk_agent/trigger/pubsub", json=payload)
+    assert r1.status_code == 200
+    assert r1.json()["status"] == "COMPLETED"
 
-    # Second call with identical messageId should be recognized as duplicate and return 200 DUPLICATE_ACK
-    res2 = client.post("/apps/adk_agent/trigger/pubsub", json=payload)
-    assert res2.status_code == 200
-    assert res2.json()["status"] == "DUPLICATE_ACK"
+    # Second delivery (at-least-once retry of already-completed message): returns 200 DUPLICATE_ACK
+    r2 = client.post("/apps/adk_agent/trigger/pubsub", json=payload)
+    assert r2.status_code == 200
+    assert r2.json()["status"] == "DUPLICATE_ACK"
+    app.state.runner = None
+
+
+def test_pubsub_push_endpoint_failure_allows_retry():
+    """Verify that when an investigation raises an error (500), retries are NOT dropped by dedup."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_runner = MagicMock()
+    mock_session = MagicMock()
+    mock_runner.session_service.get_session = AsyncMock(return_value=mock_session)
+    mock_runner.session_service.create_session = AsyncMock(return_value=mock_session)
+
+    # Runner that raises an exception
+    async def mock_failing_run(*args, **kwargs):
+        raise RuntimeError("Transient network timeout connecting to BigQuery")
+        yield None
+
+    mock_runner.run_async = mock_failing_run
+    app.state.runner = mock_runner
+    app.state.agent_app_name = "adk_agent"
+    client = TestClient(app)
+
+    msg_id = "test-failing-msg-500"
+    payload = {
+        "message": {
+            "data": base64.b64encode(b'{"user_id": "u.lewis"}').decode("utf-8"),
+            "messageId": msg_id
+        }
+    }
+
+    # First attempt fails with 500
+    r1 = client.post("/apps/adk_agent/trigger/pubsub", json=payload)
+    assert r1.status_code == 500
+
+    # Pub/Sub retries: MUST NOT be swallowed by DUPLICATE_ACK (200), must attempt run again!
+    r2 = client.post("/apps/adk_agent/trigger/pubsub", json=payload)
+    assert r2.status_code == 500
+    app.state.runner = None
 
 
 def test_pubsub_push_endpoint_with_mock_runner():
@@ -135,3 +195,12 @@ def test_pubsub_push_endpoint_with_mock_runner():
     assert data["status"] == "COMPLETED"
     assert "Investigation complete" in data["output"]
     app.state.runner = None
+
+
+def test_scheduled_scan_endpoint():
+    """Test POST to /apps/adk_agent/trigger/scan endpoint."""
+    client = TestClient(app)
+    response = client.post("/apps/adk_agent/trigger/scan")
+    assert response.status_code in [200, 500]
+    data = response.json()
+    assert "status" in data

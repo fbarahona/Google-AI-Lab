@@ -210,9 +210,13 @@ This project is configured with `agents-cli` for managing the agent development 
 ## 💰 FinOps: Cost Control & Teardown
 
 > **⚠️ Cloud Resource Billing Warning:**  
-> The zero-cloud local runner (`python -m src.demo.local_runner`) is free and requires zero cloud infrastructure. However, deploying the live cloud architecture via Terraform incurs **continuous running costs**:
-> - **BigQuery Continuous Queries:** Require a BigQuery Enterprise Edition slot reservation, which bills for active compute slots 24/7 while running.
-> - **Dataflow Streaming:** The `cymbal-cyber-ingestion-pipeline` streaming ingestion job provisions continuous compute worker VMs and streaming throughput.
+> The zero-cloud local runner (`python -m src.demo.local_runner`) is free and requires zero cloud infrastructure. For cloud deployment, Terraform defaults to a **zero-continuous-cost serverless baseline** by disabling Enterprise slot reservations and continuous Dataflow workers:
+> - **Default Trigger Path ($0/mo continuous):** Cloud Scheduler triggers `/apps/adk_agent/trigger/scan` on Cloud Run every 2 minutes using OIDC tokens, querying BigQuery for unassessed threat events without requiring slot reservations.
+> - **BigQuery Continuous Queries (`enable_continuous_query = true`):** Requires a 100-slot Enterprise Edition reservation. Slot reservations bill 24/7 at **~$0.06/slot-hour = ~$6.00/hour (~$4,320/month)**. When enabled, submit the query via:
+>   ```bash
+>   ./src/demo/data_pipeline/launch_continuous_query.sh <PROJECT_ID>
+>   ```
+> - **Dataflow Streaming (`enable_dataflow_streaming = true`):** Provisions continuous streaming worker VMs and throughput (**~$100–$300/month**). Gated off by default.
 > - **Cloud Run & Vertex AI:** Billed on-demand per request execution duration and token usage.
 
 ### Automated Budget Alert

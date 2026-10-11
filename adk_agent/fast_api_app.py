@@ -19,7 +19,7 @@ import logging
 import os
 import time
 from collections.abc import AsyncIterator
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from a2a.server.tasks import InMemoryTaskStore
 from dotenv import load_dotenv
@@ -134,22 +134,46 @@ def extract_pubsub_payload(raw_body: Any) -> Dict[str, Any]:
     return raw_body
 
 
-_PROCESSED_MESSAGES: Dict[str, float] = {}
+_IN_PROGRESS_MESSAGES: Dict[str, float] = {}
+_COMPLETED_MESSAGES: Dict[str, float] = {}
 _DEDUP_TTL_SECONDS = 900.0  # 15 minutes deduplication window
 
 
-def is_duplicate_alert(dedup_key: str) -> bool:
-    """Checks and records message keys to prevent duplicate processing from Pub/Sub retries."""
+def _cleanup_expired_messages():
+    """Removes expired entries from memory dedup tables."""
     now = time.time()
-    # Expire stale entries
-    expired = [k for k, ts in _PROCESSED_MESSAGES.items() if now - ts > _DEDUP_TTL_SECONDS]
-    for k in expired:
-        _PROCESSED_MESSAGES.pop(k, None)
+    for store in (_IN_PROGRESS_MESSAGES, _COMPLETED_MESSAGES):
+        expired = [k for k, ts in store.items() if now - ts > _DEDUP_TTL_SECONDS]
+        for k in expired:
+            store.pop(k, None)
 
-    if dedup_key in _PROCESSED_MESSAGES:
-        return True
-    _PROCESSED_MESSAGES[dedup_key] = now
-    return False
+
+def is_alert_durably_assessed(user_id: str, window_end: Optional[str]) -> bool:
+    """Checks BigQuery adk_threat_assessment to determine if this alert was already evaluated."""
+    if os.getenv("LOCAL_MODE", "false").lower() == "true":
+        return False
+    if not user_id or not window_end:
+        return False
+    try:
+        from google.cloud import bigquery
+        from adk_agent.tools import get_bq_client, PROJECT_ID, DATASET_ID
+        bq = get_bq_client()
+        query = f"""
+            SELECT 1 FROM `{PROJECT_ID}.{DATASET_ID}.adk_threat_assessment`
+            WHERE user_id = @user_id
+              AND transaction_window_end = TIMESTAMP(@window_end)
+            LIMIT 1
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("user_id", "STRING", user_id),
+                bigquery.ScalarQueryParameter("window_end", "STRING", window_end),
+            ]
+        )
+        results = list(bq.query(query, job_config=job_config).result())
+        return len(results) > 0
+    except Exception:
+        return False
 
 
 async def _run_agent_investigation(
@@ -197,8 +221,8 @@ async def handle_pubsub_trigger(
 ):
     """
     Webhook receiving Pub/Sub push notifications for BigQuery Continuous Query security alerts.
-    Unwraps base64 alert data, deduplicates at-least-once deliveries, and executes the multi-agent
-    investigation synchronously (default) so Cloud Run does not throttle CPU mid-investigation.
+    Unwraps base64 alert data, deduplicates at-least-once deliveries, tracks in-flight executions,
+    and executes synchronously (default) so Cloud Run does not throttle CPU mid-investigation.
     """
     try:
         raw_body = await request.json()
@@ -211,31 +235,7 @@ async def handle_pubsub_trigger(
     session_id = f"pubsub-{user_id}-{int(time.time())}"
     prompt_text = f"Investigate incoming continuous security alert: {json.dumps(alert_data)}"
 
-    # 1. Message Deduplication: Check messageId or (user_id, window_end)
-    message_id = None
-    if isinstance(raw_body, dict):
-        msg_obj = raw_body.get("message")
-        if isinstance(msg_obj, dict):
-            message_id = msg_obj.get("messageId") or msg_obj.get("message_id")
-    if not message_id:
-        message_id = request.headers.get("ce-id") or request.headers.get("x-goog-pubsub-message-id")
-    if not message_id:
-        window_end = alert_data.get("window_end") or alert_data.get("transaction_window_end") or ""
-        if window_end:
-            message_id = f"{user_id}:{window_end}"
-
-    if message_id and is_duplicate_alert(message_id):
-        logger.info("Duplicate Pub/Sub message detected (%s); acknowledging without re-processing.", message_id)
-        return JSONResponse(
-            status_code=200,
-            content={
-                "status": "DUPLICATE_ACK",
-                "message": "Alert previously received and processed.",
-                "message_id": message_id,
-            },
-        )
-
-    # 2. Runner Readiness: Return 503 so Pub/Sub retries rather than dropping the alert
+    # 1. Runner Readiness: Check first! If unready, return 503 so Pub/Sub retries without marking dedup
     runner: Runner = getattr(app.state, "runner", None)
     app_name: str = getattr(app.state, "agent_app_name", "adk_agent")
 
@@ -250,10 +250,86 @@ async def handle_pubsub_trigger(
             },
         )
 
-    # 3. Synchronous Execution by Default (Prevents Cloud Run CPU throttling)
-    if sync:
-        try:
+    # 2. Extract deduplication identifier (messageId, header, or user:window_end)
+    message_id = None
+    if isinstance(raw_body, dict):
+        msg_obj = raw_body.get("message")
+        if isinstance(msg_obj, dict):
+            message_id = msg_obj.get("messageId") or msg_obj.get("message_id")
+    if not message_id:
+        message_id = request.headers.get("ce-id") or request.headers.get("x-goog-pubsub-message-id")
+    if not message_id:
+        window_end = alert_data.get("window_end") or alert_data.get("transaction_window_end") or ""
+        if window_end:
+            message_id = f"{user_id}:{window_end}"
+
+    # 3. Deduplication Check: Check completed first, then in-progress, then durable BigQuery store
+    _cleanup_expired_messages()
+    if message_id:
+        if message_id in _COMPLETED_MESSAGES:
+            logger.info("Duplicate Pub/Sub message already completed (%s); returning 200 DUPLICATE_ACK.", message_id)
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "DUPLICATE_ACK",
+                    "message": "Alert previously completed.",
+                    "message_id": message_id,
+                },
+            )
+
+        window_end = alert_data.get("window_end") or alert_data.get("transaction_window_end")
+        if is_alert_durably_assessed(user_id, window_end):
+            logger.info("Alert previously recorded in BigQuery adk_threat_assessment (%s, %s); acknowledging with 200.", user_id, window_end)
+            _COMPLETED_MESSAGES[message_id] = time.time()
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "DUPLICATE_ACK",
+                    "message": "Alert previously assessed in BigQuery.",
+                    "message_id": message_id,
+                },
+            )
+
+        if message_id in _IN_PROGRESS_MESSAGES:
+            logger.warning("Pub/Sub message currently in-progress (%s); returning 409 to trigger Pub/Sub retry.", message_id)
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "status": "IN_PROGRESS",
+                    "message": "Investigation currently in progress; please retry.",
+                    "message_id": message_id,
+                },
+            )
+
+        # Mark as currently executing
+        _IN_PROGRESS_MESSAGES[message_id] = time.time()
+
+    # 4. Synchronous Execution by Default (with guaranteed state cleanup in finally)
+    try:
+        if sync:
             output = await _run_agent_investigation(
+                runner=runner,
+                app_name=app_name,
+                user_id=user_id,
+                session_id=session_id,
+                prompt_text=prompt_text,
+            )
+            # Record completed ID ONLY on success!
+            if message_id:
+                _COMPLETED_MESSAGES[message_id] = time.time()
+
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "COMPLETED",
+                    "session_id": session_id,
+                    "output": output,
+                },
+            )
+        else:
+            # Optional background path
+            background_tasks.add_task(
+                _run_agent_investigation,
                 runner=runner,
                 app_name=app_name,
                 user_id=user_id,
@@ -263,37 +339,67 @@ async def handle_pubsub_trigger(
             return JSONResponse(
                 status_code=200,
                 content={
-                    "status": "COMPLETED",
+                    "status": "ACK",
+                    "message": "Continuous query alert received and investigation started in background.",
                     "session_id": session_id,
-                    "output": output,
+                    "user_id": user_id,
                 },
             )
-        except Exception as exc:
-            logger.error("Pub/Sub agent investigation failed for session %s: %s", session_id, exc)
-            raise HTTPException(
-                status_code=500,
-                detail=f"Agent investigation failed: {exc}",
+    except Exception as exc:
+        logger.error("Pub/Sub agent investigation failed for session %s: %s", session_id, exc)
+        # On failure: do NOT add to _COMPLETED_MESSAGES so retries can run!
+        raise HTTPException(
+            status_code=500,
+            detail=f"Agent investigation failed: {exc}",
+        )
+    finally:
+        # Always remove from in-progress store
+        if message_id:
+            _IN_PROGRESS_MESSAGES.pop(message_id, None)
+
+
+@app.post("/apps/adk_agent/trigger/scan")
+@app.post("/trigger/scan")
+async def handle_scheduled_scan():
+    """
+    Cloud Scheduler trigger endpoint. Runs periodic threat scanning (every 2 minutes)
+    to query BigQuery for newly emerging unassessed threats and dispatch investigations.
+    Provides serverless, zero-reservation anomaly triage.
+    """
+    logger.info("Executing Cloud Scheduler threat scan pass...")
+    try:
+        from adk_agent.threat_scanner import BigQueryThreatScanner
+        from adk_agent.tools import PROJECT_ID, DATASET_ID
+        scanner = BigQueryThreatScanner(project_id=PROJECT_ID, dataset_id=DATASET_ID)
+        threats = scanner.find_new_threat_events()
+        results = []
+        for threat in threats:
+            logger.info(
+                "Discovered unassessed threat for user: %s (score: %s)",
+                threat.get("user_id"),
+                threat.get("total_2_min_threat_score"),
             )
+            res = await scanner.investigate_threat(threat)
+            results.append({
+                "user_id": threat.get("user_id"),
+                "threat_score": threat.get("total_2_min_threat_score"),
+                "response": res,
+            })
 
-    # Optional background path (if explicitly requested via sync=false)
-    background_tasks.add_task(
-        _run_agent_investigation,
-        runner=runner,
-        app_name=app_name,
-        user_id=user_id,
-        session_id=session_id,
-        prompt_text=prompt_text,
-    )
-
-    return JSONResponse(
-        status_code=200,
-        content={
-            "status": "ACK",
-            "message": "Continuous query alert received and investigation started in background.",
-            "session_id": session_id,
-            "user_id": user_id,
-        },
-    )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "SCAN_COMPLETE",
+                "threats_discovered": len(threats),
+                "investigations": results,
+            },
+        )
+    except Exception as exc:
+        logger.error("Scheduled threat scan pass failed: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content={"status": "ERROR", "detail": str(exc)},
+        )
 
 
 # Main execution

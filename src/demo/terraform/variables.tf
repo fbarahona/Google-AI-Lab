@@ -46,7 +46,13 @@ variable "dataflow_service_account_id" {
 }
 
 variable "enable_continuous_query" {
-  description = "Whether to provision BigQuery Enterprise reservation and continuous query streaming job. When false (default), the background threat_scanner.py daemon serves as the zero-cost polling trigger."
+  description = "Whether to provision BigQuery Enterprise reservation (100 slots) and continuous query assignment. CAUTION: BigQuery Enterprise slot reservations bill continuously (~$0.06/slot-hour = ~$6.00/hour or ~$4,320/month for 100 slots). Defaults to false; when false, Cloud Scheduler periodically triggers the threat scanner at zero continuous cost."
+  type        = bool
+  default     = false
+}
+
+variable "enable_dataflow_streaming" {
+  description = "Whether to provision the Dataflow streaming log ingestion job. CAUTION: Dataflow streaming worker VMs bill continuously (~$100-$300/month). Defaults to false (zero-cost). When false, synthetic logs and GCS batch loader provide ingestion."
   type        = bool
   default     = false
 }

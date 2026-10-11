@@ -12,6 +12,7 @@ locals {
     "dataflow.googleapis.com",
     "compute.googleapis.com",
     "run.googleapis.com",
+    "cloudscheduler.googleapis.com",
     "bigquerydatatransfer.googleapis.com",
     "billingbudgets.googleapis.com"
   ])

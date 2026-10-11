@@ -86,10 +86,12 @@ resource "google_bigquery_reservation_assignment" "continuous_query_assignment" 
   depends_on = [google_bigquery_reservation.continuous_query_reservation]
 }
 
-# 3. Dataflow Streaming Ingestion Pipeline
+# 3. Dataflow Streaming Ingestion Pipeline (Gated behind enable_dataflow_streaming)
 # Reads from Pub/Sub cymbal_cyber_raw_logs and streams to BigQuery tables.
 # Uses the classic subscription-based PubSub_Subscription_to_BigQuery template.
+# Gated to false by default to prevent continuous compute worker charges (~$100-$300/mo).
 resource "google_dataflow_job" "pubsub_to_bigquery" {
+  count                 = var.enable_dataflow_streaming ? 1 : 0
   project               = var.project_id
   region                = var.region
   name                  = "cymbal-cyber-ingestion-pipeline"
@@ -110,6 +112,35 @@ resource "google_dataflow_job" "pubsub_to_bigquery" {
     google_storage_bucket.adk_staging,
     google_pubsub_subscription.raw_logs_to_bq_sub,
     google_bigquery_table.user_access_events
+  ]
+}
+
+# 4. Cloud Scheduler Job for Periodic Threat Scanner Polling
+# Runs when enable_continuous_query is false (the default cost-effective serverless path).
+# Wakes Cloud Run every 2 minutes via OIDC auth to run an active threat scan pass at $0 continuous cost.
+resource "google_cloud_scheduler_job" "threat_scanner_cron" {
+  count       = var.enable_continuous_query ? 0 : 1
+  project     = var.project_id
+  region      = var.region
+  name        = "cymbal-cyber-threat-scanner-cron"
+  description = "Triggers Cloud Run threat scan every 2 minutes for zero-reservation threat triage."
+  schedule    = "*/2 * * * *"
+  time_zone   = "UTC"
+
+  http_target {
+    http_method = "POST"
+    uri         = "${google_cloud_run_v2_service.adk_agent_service.uri}/apps/adk_agent/trigger/scan"
+
+    oidc_token {
+      service_account_email = google_service_account.invoker_sa.email
+      audience              = "${google_cloud_run_v2_service.adk_agent_service.uri}/apps/adk_agent/trigger/scan"
+    }
+  }
+
+  depends_on = [
+    google_project_service.required,
+    google_cloud_run_v2_service.adk_agent_service,
+    google_service_account.invoker_sa
   ]
 }
 
