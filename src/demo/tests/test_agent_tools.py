@@ -384,8 +384,9 @@ def test_before_orchestrator_starts_resets_flags_and_seeds_state():
     assert "c.wilson" in state_obj.get("ticket_id")
 
 
-def test_default_deny_callback_escalates_when_unresolved():
+def test_default_deny_callback_escalates_when_unresolved(tmp_path, monkeypatch):
     """Verify that default_deny_soc_callback escalates unresolved alerts using seeded user metadata."""
+    monkeypatch.setenv("LOCAL_QUEUE_DIR", str(tmp_path))
     callback_ctx = MagicMock()
     state_obj = State({}, {})
     state_obj["prompt_injection_detected"] = True

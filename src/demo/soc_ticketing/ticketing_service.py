@@ -46,8 +46,20 @@ class SocTicketingService:
         self._bq_client = None
         self._storage_client = None
 
-        os.makedirs(LOCAL_QUEUE_DIR, exist_ok=True)
-        os.makedirs(LOCAL_HISTORY_DIR, exist_ok=True)
+        os.makedirs(self.queue_dir, exist_ok=True)
+        os.makedirs(self.history_dir, exist_ok=True)
+
+    @property
+    def queue_dir(self) -> str:
+        d = os.getenv("LOCAL_QUEUE_DIR", "./local_demo_data/escalations")
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    @property
+    def history_dir(self) -> str:
+        d = os.path.join(self.queue_dir, "history")
+        os.makedirs(d, exist_ok=True)
+        return d
 
     @property
     def bq_client(self):
@@ -102,7 +114,7 @@ class SocTicketingService:
                 logger.warning("Could not upload to GCS: %s", e)
 
         # 2. Local File Queue write
-        local_file = os.path.join(LOCAL_QUEUE_DIR, f"human_escalation_information_{ticket.ticket_id}.json")
+        local_file = os.path.join(self.queue_dir, f"human_escalation_information_{ticket.ticket_id}.json")
         with open(local_file, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
 
@@ -155,7 +167,7 @@ class SocTicketingService:
                 pass
 
         # Fallback to local queue
-        for path in glob.glob(os.path.join(LOCAL_QUEUE_DIR, "human_escalation_information_*.json")):
+        for path in glob.glob(os.path.join(self.queue_dir, "human_escalation_information_*.json")):
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     tickets.append(json.load(f))
@@ -183,7 +195,7 @@ class SocTicketingService:
 
         # Find existing ticket
         ticket_data = None
-        active_local_path = os.path.join(LOCAL_QUEUE_DIR, f"human_escalation_information_{ticket_id}.json")
+        active_local_path = os.path.join(self.queue_dir, f"human_escalation_information_{ticket_id}.json")
 
         if os.path.exists(active_local_path):
             try:
@@ -223,8 +235,8 @@ class SocTicketingService:
         ticket_data["adjudicated_at"] = now_iso
 
         # 1. Save to Local History Archive
-        os.makedirs(LOCAL_HISTORY_DIR, exist_ok=True)
-        hist_local_path = os.path.join(LOCAL_HISTORY_DIR, f"resolved_{ticket_id}.json")
+        os.makedirs(self.history_dir, exist_ok=True)
+        hist_local_path = os.path.join(self.history_dir, f"resolved_{ticket_id}.json")
         with open(hist_local_path, "w", encoding="utf-8") as f:
             json.dump(ticket_data, f, indent=2)
 
@@ -309,7 +321,7 @@ class SocTicketingService:
                 pass
 
         # 2. Local History Files
-        for path in glob.glob(os.path.join(LOCAL_HISTORY_DIR, "resolved_*.json")):
+        for path in glob.glob(os.path.join(self.history_dir, "resolved_*.json")):
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     historic.append(json.load(f))
@@ -321,7 +333,7 @@ class SocTicketingService:
             seed_items = self._generate_seed_history()
             for item in seed_items:
                 # Save locally so they persist across runs
-                hist_file = os.path.join(LOCAL_HISTORY_DIR, f"resolved_{item['ticket_id']}.json")
+                hist_file = os.path.join(self.history_dir, f"resolved_{item['ticket_id']}.json")
                 if not os.path.exists(hist_file):
                     try:
                         with open(hist_file, "w", encoding="utf-8") as f:
