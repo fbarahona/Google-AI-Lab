@@ -267,6 +267,7 @@ def default_deny_soc_callback(callback_context: CallbackContext):
         ticket_id = f"SOC-TICKET-AUTO-ESCALATED-{user_id}-{int(time.time())}"
         ticket = SocTicket(
             ticket_id=ticket_id,
+            transaction_window_end=state.get("window_end") or state.get("transaction_window_end"),
             user_id=user_id,
             device_id=state.get("device_id") or "unknown_device",
             source_ip=state.get("source_ip") or "unknown_ip",

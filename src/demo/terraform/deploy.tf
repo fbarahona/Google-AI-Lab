@@ -119,13 +119,14 @@ resource "google_dataflow_job" "pubsub_to_bigquery" {
 # Runs when enable_continuous_query is false (the default cost-effective serverless path).
 # Wakes Cloud Run every 2 minutes via OIDC auth to run an active threat scan pass at $0 continuous cost.
 resource "google_cloud_scheduler_job" "threat_scanner_cron" {
-  count       = var.enable_continuous_query ? 0 : 1
-  project     = var.project_id
-  region      = var.region
-  name        = "cymbal-cyber-threat-scanner-cron"
-  description = "Triggers Cloud Run threat scan every 2 minutes for zero-reservation threat triage."
-  schedule    = "*/2 * * * *"
-  time_zone   = "UTC"
+  count            = var.enable_continuous_query ? 0 : 1
+  project          = var.project_id
+  region           = var.region
+  name             = "cymbal-cyber-threat-scanner-cron"
+  description      = "Triggers Cloud Run threat scan every 2 minutes for zero-reservation threat triage."
+  schedule         = "*/2 * * * *"
+  time_zone        = "UTC"
+  attempt_deadline = "600s"
 
   http_target {
     http_method = "POST"

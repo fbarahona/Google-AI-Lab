@@ -84,7 +84,7 @@ class BigQueryThreatScanner:
           ON c.user_id = a.user_id
           AND a.transaction_window_end >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {lookback_minutes} MINUTE)
         WHERE a.user_id IS NULL
-        LIMIT 5;
+        LIMIT 3;
         """
         try:
             logger.info("Scanning BigQuery (%s.%s) for new threat events...", self.project_id, self.dataset_id)
@@ -100,11 +100,39 @@ class BigQueryThreatScanner:
             logger.warning("BigQuery threat scan query failed: %s", e)
             return []
 
+    def mark_threat_pending(self, threat_payload: Dict[str, Any]):
+        """
+        Inserts a temporary PENDING row into adk_threat_assessment prior to running
+        the investigation. Ensures subsequent or overlapping scan passes immediately
+        filter out this threat and prevent duplicate ticket creation.
+        """
+        if self.bq_client is None:
+            return
+        try:
+            assessment_table_id = f"{self.project_id}.{self.dataset_id}.adk_threat_assessment"
+            pending_row = {
+                "transaction_window_end": threat_payload.get("window_end") or datetime.now(timezone.utc).isoformat(),
+                "user_id": threat_payload.get("user_id"),
+                "device_id": threat_payload.get("device_id") or "unknown_device",
+                "source_ip": threat_payload.get("source_ip") or "unknown_ip",
+                "total_2_min_threat_score": threat_payload.get("total_2_min_threat_score", 100),
+                "agent_decision": "PENDING_INVESTIGATION",
+                "agent_reason": "In-flight autonomous investigation initiated by threat scanner.",
+                "human_decision": None,
+                "human_reason": None,
+                "alert_payload": json.dumps(threat_payload, default=str),
+            }
+            self.bq_client.insert_rows_json(assessment_table_id, [pending_row])
+            logger.info("Marked in-flight investigation PENDING for user: %s", threat_payload.get("user_id"))
+        except Exception as e:
+            logger.warning("Could not pre-insert PENDING assessment row in BigQuery: %s", e)
+
     async def investigate_threat(self, threat_payload: Dict[str, Any]) -> str:
         """
         Invokes the ADK Agent Orchestrator to investigate the threat and pass
         the ticket to the SOC ticketing system.
         """
+        self.mark_threat_pending(threat_payload)
         app_name = "cymbal_cyber_adk"
         session_id = f"bq-threat-{uuid.uuid4().hex[:8]}"
         user_id = threat_payload.get("user_id", "security_scanner")

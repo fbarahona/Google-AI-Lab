@@ -13,6 +13,10 @@ class SocTicket(BaseModel):
         default_factory=lambda: datetime.now(timezone.utc).isoformat(),
         description="Ticket creation timestamp (ISO 8601 UTC)."
     )
+    transaction_window_end: Optional[str] = Field(
+        None,
+        description="Aggregation window end timestamp from continuous query alert."
+    )
     user_id: str = Field(..., description="Entity or user under investigation.")
     device_id: str = Field(..., description="Endpoint or device identifier.")
     source_ip: str = Field(..., description="Originating public or internal IP address.")

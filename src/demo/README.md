@@ -263,7 +263,7 @@ terraform apply -var="project_id=<PROJECT_ID>" -auto-approve
 **⚠️ Running Costs Warning & Gating:**
 While the local Python runner is free, deploying the live infrastructure via Terraform defaults to a **zero-continuous-cost serverless baseline**:
 - **Default Trigger Path ($0/mo continuous):** Cloud Scheduler triggers Cloud Run (`/apps/adk_agent/trigger/scan`) every 2 minutes using OIDC tokens to scan BigQuery for unassessed threat events without requiring slot reservations.
-- **BigQuery Continuous Queries (`enable_continuous_query = true`):** Requires a 100-slot Enterprise Edition reservation. Slot reservations bill continuously 24/7 at **~$0.06/slot-hour = ~$6.00/hour (~$4,320/month)**. When enabled, launch the streaming query using:
+- **BigQuery Continuous Queries (`enable_continuous_query = true`):** Requires a 100-slot Enterprise Edition reservation. Slot reservations bill continuously 24/7 at **~$0.06/slot-hour = ~$6.00/hour (~$4,320/month) whether or not a query is running**. Canceling the continuous query job saves no money; only disabling the reservation in Terraform (`enable_continuous_query = false && terraform apply`) stops slot charges. When enabled, launch the streaming query using:
   ```bash
   ./data_pipeline/launch_continuous_query.sh <PROJECT_ID>
   ```

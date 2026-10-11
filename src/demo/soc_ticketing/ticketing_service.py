@@ -130,7 +130,7 @@ class SocTicketingService:
             try:
                 assessment_table_id = f"{self.project_id}.{self.dataset_id}.adk_threat_assessment"
                 assessment_row = {
-                    "transaction_window_end": datetime.now(timezone.utc).isoformat(),
+                    "transaction_window_end": ticket.transaction_window_end or datetime.now(timezone.utc).isoformat(),
                     "user_id": ticket.user_id,
                     "device_id": ticket.device_id,
                     "source_ip": ticket.source_ip,

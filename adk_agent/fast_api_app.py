@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import base64
 import contextlib
 import json
@@ -358,48 +359,62 @@ async def handle_pubsub_trigger(
             _IN_PROGRESS_MESSAGES.pop(message_id, None)
 
 
+_SCAN_LOCK = asyncio.Lock()
+
+
 @app.post("/apps/adk_agent/trigger/scan")
 @app.post("/trigger/scan")
 async def handle_scheduled_scan():
     """
     Cloud Scheduler trigger endpoint. Runs periodic threat scanning (every 2 minutes)
     to query BigQuery for newly emerging unassessed threats and dispatch investigations.
-    Provides serverless, zero-reservation anomaly triage.
+    Uses an in-memory lock to skip overlapping passes if an earlier scan is still in-flight.
     """
-    logger.info("Executing Cloud Scheduler threat scan pass...")
-    try:
-        from adk_agent.threat_scanner import BigQueryThreatScanner
-        from adk_agent.tools import PROJECT_ID, DATASET_ID
-        scanner = BigQueryThreatScanner(project_id=PROJECT_ID, dataset_id=DATASET_ID)
-        threats = scanner.find_new_threat_events()
-        results = []
-        for threat in threats:
-            logger.info(
-                "Discovered unassessed threat for user: %s (score: %s)",
-                threat.get("user_id"),
-                threat.get("total_2_min_threat_score"),
-            )
-            res = await scanner.investigate_threat(threat)
-            results.append({
-                "user_id": threat.get("user_id"),
-                "threat_score": threat.get("total_2_min_threat_score"),
-                "response": res,
-            })
-
+    if _SCAN_LOCK.locked():
+        logger.warning("Overlapping Cloud Scheduler scan requested while previous pass active; skipping.")
         return JSONResponse(
             status_code=200,
             content={
-                "status": "SCAN_COMPLETE",
-                "threats_discovered": len(threats),
-                "investigations": results,
+                "status": "SKIPPED_OVERLAPPING_PASS",
+                "message": "Previous threat scan pass is still executing; skipping overlapping run.",
             },
         )
-    except Exception as exc:
-        logger.error("Scheduled threat scan pass failed: %s", exc)
-        return JSONResponse(
-            status_code=500,
-            content={"status": "ERROR", "detail": str(exc)},
-        )
+
+    async with _SCAN_LOCK:
+        logger.info("Executing Cloud Scheduler threat scan pass...")
+        try:
+            from adk_agent.threat_scanner import BigQueryThreatScanner
+            from adk_agent.tools import PROJECT_ID, DATASET_ID
+            scanner = BigQueryThreatScanner(project_id=PROJECT_ID, dataset_id=DATASET_ID)
+            threats = scanner.find_new_threat_events()
+            results = []
+            for threat in threats:
+                logger.info(
+                    "Discovered unassessed threat for user: %s (score: %s)",
+                    threat.get("user_id"),
+                    threat.get("total_2_min_threat_score"),
+                )
+                res = await scanner.investigate_threat(threat)
+                results.append({
+                    "user_id": threat.get("user_id"),
+                    "threat_score": threat.get("total_2_min_threat_score"),
+                    "response": res,
+                })
+
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "SCAN_COMPLETE",
+                    "threats_discovered": len(threats),
+                    "investigations": results,
+                },
+            )
+        except Exception as exc:
+            logger.error("Scheduled threat scan pass failed: %s", exc)
+            return JSONResponse(
+                status_code=500,
+                content={"status": "ERROR", "detail": str(exc)},
+            )
 
 
 # Main execution

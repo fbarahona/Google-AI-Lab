@@ -212,7 +212,7 @@ This project is configured with `agents-cli` for managing the agent development 
 > **⚠️ Cloud Resource Billing Warning:**  
 > The zero-cloud local runner (`python -m src.demo.local_runner`) is free and requires zero cloud infrastructure. For cloud deployment, Terraform defaults to a **zero-continuous-cost serverless baseline** by disabling Enterprise slot reservations and continuous Dataflow workers:
 > - **Default Trigger Path ($0/mo continuous):** Cloud Scheduler triggers `/apps/adk_agent/trigger/scan` on Cloud Run every 2 minutes using OIDC tokens, querying BigQuery for unassessed threat events without requiring slot reservations.
-> - **BigQuery Continuous Queries (`enable_continuous_query = true`):** Requires a 100-slot Enterprise Edition reservation. Slot reservations bill 24/7 at **~$0.06/slot-hour = ~$6.00/hour (~$4,320/month)**. When enabled, submit the query via:
+> - **BigQuery Continuous Queries (`enable_continuous_query = true`):** Requires a 100-slot Enterprise Edition reservation. Slot reservations bill 24/7 at **~$0.06/slot-hour = ~$6.00/hour (~$4,320/month) whether or not a query is running**. Canceling the continuous query job saves no money; only disabling the reservation in Terraform (`enable_continuous_query = false && terraform apply`) stops slot billing. When enabled, submit the query via:
 >   ```bash
 >   ./src/demo/data_pipeline/launch_continuous_query.sh <PROJECT_ID>
 >   ```

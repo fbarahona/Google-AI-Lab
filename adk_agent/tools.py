@@ -649,6 +649,7 @@ def dispatch_to_soc_ticketing_system(
 
     ticket = SocTicket(
         ticket_id=ticket_id,
+        transaction_window_end=row.get("transaction_window_end"),
         user_id=user_id,
         device_id=device_id,
         source_ip=source_ip,
@@ -718,6 +719,7 @@ def escalate_to_human(
 
     ticket = SocTicket(
         ticket_id=ticket_id,
+        transaction_window_end=row.get("transaction_window_end"),
         user_id=row.get("user_id") or "unknown_user",
         device_id=row.get("device_id") or "unknown_device",
         source_ip=row.get("source_ip") or "unknown_ip",
