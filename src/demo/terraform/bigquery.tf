@@ -112,7 +112,7 @@ resource "google_bigquery_routine" "calculate_threat_score" {
     (
       CASE
         WHEN event_type = 'policy_violation' THEN 50
-        WHEN event_type = 'dns_query' AND REGEXP_CONTAINS(network_domain, r'(?i)(\.ru$|\.xyz$|bad-domain|payload-downloader|c2-server)') THEN 60
+        WHEN event_type = 'dns_query' AND REGEXP_CONTAINS(network_domain, r'(?i)(\.ru$|\.xyz$|bad-domain|payload-downloader|c2-server|apt-group-data-exfil\.org$)') THEN 60
         ELSE 0
       END
       + CASE WHEN permission_level IN ('root', 'admin') THEN 35 ELSE 0 END
@@ -143,7 +143,7 @@ resource "google_bigquery_routine" "is_malicious_domain" {
   return_type = "{\"typeKind\": \"BOOL\"}"
 
   definition_body = <<-EOF
-    REGEXP_CONTAINS(network_domain, r'(?i)(\.ru$|\.xyz$|bad-domain|payload-downloader|c2-server)')
+    REGEXP_CONTAINS(network_domain, r'(?i)(\.ru$|\.xyz$|bad-domain|payload-downloader|c2-server|apt-group-data-exfil\.org$)')
   EOF
 }
 

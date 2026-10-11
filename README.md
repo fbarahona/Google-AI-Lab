@@ -193,3 +193,29 @@ This project is configured with `agents-cli` for managing the agent development 
 | `agents-cli eval run` | Run LLM-as-judge automated evaluation |
 | `agents-cli deploy` | Deploy agent to configured target |
 | `agents-cli lint` | Run code quality checks |
+
+---
+
+## 💰 FinOps: Cost Control & Teardown
+
+> **⚠️ Cloud Resource Billing Warning:**  
+> The zero-cloud local runner (`python -m src.demo.local_runner`) is free and requires zero cloud infrastructure. However, deploying the live cloud architecture via Terraform incurs **continuous running costs**:
+> - **BigQuery Continuous Queries:** Require a BigQuery Enterprise Edition slot reservation, which bills for active compute slots 24/7 while running.
+> - **Dataflow Streaming:** The `cymbal-cyber-ingestion-pipeline` streaming ingestion job provisions continuous compute worker VMs and streaming throughput.
+> - **Cloud Run & Vertex AI:** Billed on-demand per request execution duration and token usage.
+
+### Automated Budget Alert
+The Terraform configuration in `src/demo/terraform/deploy.tf` provisions an automated cost alert (`google_billing_budget.demo_budget`) with a $100 ceiling and 50% / 90% threshold notifications when supplied with your Billing Account ID:
+```bash
+cd src/demo/terraform
+terraform apply -var="project_id=<PROJECT_ID>" -var="billing_account_id=<YOUR_BILLING_ACCOUNT_ID>"
+```
+
+### Complete Cloud Teardown
+To avoid continuous billing, tear down cloud infrastructure immediately when finished testing:
+```bash
+cd src/demo/terraform
+terraform destroy -var="project_id=<PROJECT_ID>"
+```
+*(All BigQuery datasets and GCS buckets are configured with `delete_contents_on_destroy` and `force_destroy` so teardown succeeds cleanly even if populated).*
+

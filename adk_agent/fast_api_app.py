@@ -12,18 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import base64
 import contextlib
+import json
+import logging
 import os
+import time
 from collections.abc import AsyncIterator
+from typing import Any, Dict
 
 from a2a.server.tasks import InMemoryTaskStore
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from google.adk.cli.fast_api import get_fast_api_app
 from google.adk.runners import Runner
+from google.genai import types
 
 from adk_agent.app_utils import services
 from adk_agent.app_utils.a2a import attach_a2a_routes
+
+logger = logging.getLogger("CymbalCyberADK.Webhook")
 
 load_dotenv()
 allow_origins = (
@@ -68,6 +77,159 @@ app: FastAPI = get_fast_api_app(
 )
 app.title = "google"
 app.description = "API for interacting with the Agent google"
+
+
+def extract_pubsub_payload(raw_body: Any) -> Dict[str, Any]:
+    """
+    Decodes and extracts the alert payload from incoming Pub/Sub push requests.
+    Handles:
+    - Standard wrapped Pub/Sub envelope: {"message": {"data": "<base64>", "attributes": ...}}
+    - Raw/unwrapped JSON payloads (Pub/Sub no_wrapper configuration)
+    - Raw strings and byte payloads
+    """
+    if isinstance(raw_body, bytes):
+        try:
+            raw_body = json.loads(raw_body.decode("utf-8"))
+        except Exception:
+            raw_body = {"raw_text": raw_body.decode("utf-8", errors="replace")}
+    elif isinstance(raw_body, str):
+        try:
+            raw_body = json.loads(raw_body)
+        except Exception:
+            raw_body = {"raw_text": raw_body}
+
+    if not isinstance(raw_body, dict):
+        return {"raw_payload": raw_body}
+
+    # Wrapped Pub/Sub push message
+    if "message" in raw_body and isinstance(raw_body["message"], dict):
+        msg = raw_body["message"]
+        data = msg.get("data")
+        if data:
+            try:
+                decoded = base64.b64decode(data).decode("utf-8")
+                return json.loads(decoded)
+            except Exception:
+                try:
+                    return json.loads(data)
+                except Exception:
+                    return {"raw_message_data": data}
+
+    return raw_body
+
+
+async def _run_agent_investigation(
+    runner: Runner,
+    app_name: str,
+    user_id: str,
+    session_id: str,
+    prompt_text: str,
+) -> str:
+    """Runs autonomous multi-agent forensic investigation asynchronously."""
+    try:
+        session = await runner.session_service.get_session(
+            app_name=app_name, user_id=user_id, session_id=session_id
+        )
+        if not session:
+            session = await runner.session_service.create_session(
+                app_name=app_name, user_id=user_id, session_id=session_id
+            )
+
+        content = types.Content(
+            role="user",
+            parts=[types.Part.from_text(text=prompt_text)],
+        )
+
+        outputs = []
+        async for event in runner.run_async(
+            user_id=user_id,
+            session_id=session.id,
+            new_message=content,
+        ):
+            if event.content and event.content.parts:
+                for part in event.content.parts:
+                    if part.text:
+                        outputs.append(part.text)
+
+        logger.info("Pub/Sub agent investigation completed for session %s", session_id)
+        return "\n".join(outputs)
+    except Exception as exc:
+        logger.error("Failed to execute agent investigation for session %s: %s", session_id, exc)
+        return f"Investigation failed: {exc}"
+
+
+@app.post("/apps/adk_agent/trigger/pubsub")
+@app.post("/trigger/pubsub")
+async def handle_pubsub_trigger(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    sync: bool = False,
+):
+    """
+    Webhook receiving Pub/Sub push notifications for BigQuery Continuous Query security alerts.
+    Unwraps base64 alert data and triggers multi-agent forensic investigation.
+    """
+    try:
+        raw_body = await request.json()
+    except Exception:
+        body_bytes = await request.body()
+        raw_body = body_bytes
+
+    alert_data = extract_pubsub_payload(raw_body)
+    user_id = alert_data.get("user_id") or "pubsub-automator"
+    session_id = f"pubsub-{user_id}-{int(time.time())}"
+    prompt_text = f"Investigate incoming continuous security alert: {json.dumps(alert_data)}"
+
+    runner: Runner = getattr(app.state, "runner", None)
+    app_name: str = getattr(app.state, "agent_app_name", "adk_agent")
+
+    if not runner:
+        logger.warning("Runner not yet initialized in app.state; alert acknowledged.")
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "ACCEPTED",
+                "message": "Alert received; runner initializing.",
+                "session_id": session_id,
+                "alert": alert_data,
+            },
+        )
+
+    if sync:
+        output = await _run_agent_investigation(
+            runner=runner,
+            app_name=app_name,
+            user_id=user_id,
+            session_id=session_id,
+            prompt_text=prompt_text,
+        )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "COMPLETED",
+                "session_id": session_id,
+                "output": output,
+            },
+        )
+
+    background_tasks.add_task(
+        _run_agent_investigation,
+        runner=runner,
+        app_name=app_name,
+        user_id=user_id,
+        session_id=session_id,
+        prompt_text=prompt_text,
+    )
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "ACK",
+            "message": "Continuous query alert received and investigation started.",
+            "session_id": session_id,
+            "user_id": user_id,
+        },
+    )
 
 
 # Main execution

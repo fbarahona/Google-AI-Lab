@@ -106,7 +106,17 @@ def step_2_correlate_events(scenario_data: Dict[str, Any]) -> Dict[str, Any]:
         elif cmd:
             score += 10
 
-        if any(bad in domain for bad in [".ru", ".xyz", ".org", "bad-domain", "c2-server"]):
+        # Check malicious domain indicators (aligned with BigQuery is_malicious_domain UDF)
+        # Avoid flagging all .org domains by targeting specific malicious C2 indicators
+        d = domain.lower()
+        if (
+            d.endswith(".ru")
+            or d.endswith(".xyz")
+            or "apt-group-data-exfil.org" in d
+            or "bad-domain" in d
+            or "c2-server" in d
+            or "payload-downloader" in d
+        ):
             score += 60
             malicious_dns_count += 1
 
