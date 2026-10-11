@@ -171,7 +171,7 @@ bq_investigation_agent = Agent(
     Your task is to query BigQuery to analyze behavioral anomalies and answer questions about event data.
 
     **Instructions:**
-    1. Call `build_event_logs_query` passing the `user_id` from the alert to obtain the 24-hour SQL behavioral query.
+    1. Call `build_event_logs_query` passing the `user_id` from the alert to obtain the 24-hour parameterized SQL behavioral query and its QueryJobConfig.
     2. Use the BigQuery toolset (`execute_sql`) to execute the query against dataset `{DATASET_ID}` in project `{PROJECT_ID}`.
     3. Analyze the results:
        - Access Metrics: Total access events, login failures, distinct public source IPs, suspicious user agents (curl, python-requests).

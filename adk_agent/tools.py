@@ -184,11 +184,22 @@ def create_rich_ticket_id(user_id: str) -> str:
     return f"SOC-TICKET-{clean_user}-{timestamp}"
 
 
-def build_event_logs_query(entity_type: str, entity_id: str, window_to_investigate: str = "24 HOUR") -> str:
+def build_event_logs_query(
+    entity_type: str,
+    entity_id: str,
+    window_to_investigate: str = "24 HOUR"
+) -> tuple[str, bigquery.QueryJobConfig]:
     """
-    Generates a secure, validated SQL query to construct a behavioral profile
-    for an entity in the Cymbal_Cyber dataset. Validates entity_type, entity_id,
-    and interval window against strict allowlists to prevent SQL injection.
+    Generates a secure, parameterized SQL query and QueryJobConfig to construct
+    a behavioral profile for an entity in the Cymbal_Cyber dataset.
+
+    Validates entity_type and interval window against strict allowlists (as SQL syntax
+    cannot be parameterized), and sanitizes and binds entity_id as a named parameter (@entity_id)
+    inside a BigQuery QueryJobConfig to eliminate SQL injection vulnerabilities.
+
+    Returns:
+        tuple[str, bigquery.QueryJobConfig]: The parameterized SQL string and the job configuration
+        containing the scalar query parameter.
     """
     if not entity_type or not isinstance(entity_type, str):
         raise ValueError("entity_type must be a non-empty string.")
@@ -207,19 +218,19 @@ def build_event_logs_query(entity_type: str, entity_id: str, window_to_investiga
             f"Invalid window '{window_to_investigate}'. Must be one of {sorted(ALLOWED_INTERVAL_WINDOWS)}."
         )
 
-    logger.info("Building %s SQL threat profile for %s: %s", clean_window, clean_type, clean_id)
+    logger.info("Building %s parameterized SQL threat profile for %s: %s", clean_window, clean_type, clean_id)
 
     if clean_type in {"device", "device_id"}:
-        access_filter = f"device_id = '{clean_id}'"
-        network_filter = f"device_id = '{clean_id}'"
+        access_filter = "device_id = @entity_id"
+        network_filter = "device_id = @entity_id"
     elif clean_type in {"ip", "source_ip"}:
-        access_filter = f"source_ip = '{clean_id}'"
-        network_filter = f"source_ip = '{clean_id}'"
+        access_filter = "source_ip = @entity_id"
+        network_filter = "source_ip = @entity_id"
     else:
-        access_filter = f"user_id = '{clean_id}'"
-        network_filter = f"(user_id = '{clean_id}' OR source_ip IN (SELECT assigned_internal_ip FROM FlaggedSessions))"
+        access_filter = "user_id = @entity_id"
+        network_filter = "(user_id = @entity_id OR source_ip IN (SELECT assigned_internal_ip FROM FlaggedSessions))"
 
-    return rf"""
+    query_sql = rf"""
     WITH
     FlaggedSessions AS (
         SELECT DISTINCT assigned_internal_ip
@@ -256,6 +267,14 @@ def build_event_logs_query(entity_type: str, entity_id: str, window_to_investiga
     FROM AccessMetrics
     CROSS JOIN NetworkMetrics;
     """
+
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("entity_id", "STRING", clean_id)
+        ]
+    )
+
+    return query_sql.strip(), job_config
 
 
 def get_visual_analysis_for_user(gcs_uri: str) -> str:
@@ -326,9 +345,11 @@ def get_gcs_uri_for_user(user: str) -> str:
 def generate_signed_url(gcs_uri: str) -> str:
     """
     Generates a secure signed URL for a GCS object to allow authorized human SOC viewing.
+    Returns an explicit error message if signing fails or the URI is invalid, ensuring
+    that a signing failure never produces a misleading success result or unauthenticated link.
     """
     if not gcs_uri or not gcs_uri.startswith("gs://"):
-        return "Invalid GCS URI provided."
+        return f"Error: Invalid GCS URI provided: {gcs_uri!r}"
 
     try:
         source_credentials, _ = google.auth.default()
@@ -353,8 +374,8 @@ def generate_signed_url(gcs_uri: str) -> str:
             service_account_email=GCS_SIGNER_SERVICE_ACCOUNT
         )
     except Exception as e:
-        logger.warning("Could not generate impersonated signed URL (%s), returning public GCS URI.", e)
-        return f"https://storage.cloud.google.com/{gcs_uri.replace('gs://', '')}"
+        logger.error("Could not generate impersonated signed URL for %s: %s", gcs_uri, e)
+        return f"Error: Failed to generate signed URL: {e}"
 
 
 def dispatch_to_soc_ticketing_system(
