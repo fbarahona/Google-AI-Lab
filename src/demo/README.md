@@ -1,24 +1,26 @@
-# Real-time Cyber Security AI with BigQuery Continuous Queries, ADK & SOC
+# Real-Time Cybersecurity AI: Cloud Architecture, Data Engineering, ADK & SOC
 
-This repository contains an end-to-end demonstration of a near real-time cybersecurity threat detection, multi-agent AI investigation, and SOC response system built on Google Cloud Platform (configured for project `<PROJECT_ID>`).
+This demonstration showcases an enterprise-grade cybersecurity threat detection, autonomous multi-agent AI forensic investigation, and human-in-the-loop Security Operations Center (SOC) response platform built on Google Cloud Platform (configured for project `<PROJECT_ID>`).
 
-It integrates **Cloud Architecture**, **Data Engineering**, **Agentic AI**, and **Cybersecurity Operations**:
-- **Synthetic Log Generator:** Modular Python tool generating access and network logs with ad-hoc threat injection (both malicious attacks and benign false positives).
-- **Data Pipelines:** Ingestion pathways to BigQuery via Cloud Storage batch loads, Pub/Sub to Dataflow streaming, or direct BigQuery streaming.
-- **BigQuery Continuous Query:** Stateful stream processing performing temporal windowed joins between login events and network activity.
-- **BigQuery Threat Scanner:** Active background service scanning BigQuery for newly emerging threats.
-- **Google ADK Multi-Agent Framework:** Orchestrator coordinating 4 specialized agents:
-  1. `google_search_agent`: Researches external IP addresses from security alerts via Google Search OSINT.
-  2. `bq_investigation_agent`: Answers questions about BigQuery data by executing SQL queries.
-  3. `visual_analysis_agent`: Performs multimodal visual analysis and OCR on user desktop screenshots.
-  4. `soc_ticketing_agent`: Consolidates forensic findings and passes incident tickets to the SOC ticketing system.
-- **SOC Ticketing System & Console:** Persistent incident queue and interactive Streamlit console for human-in-the-loop triage.
-- **Terraform Infrastructure as Code:** Modular Terraform templates provisioning all GCP resources in project `<PROJECT_ID>`.
-- **Zero-Cloud Local Testing:** Ability to run the complete pipeline locally on your workstation with no cloud deployment required.
+It seamlessly bridges **Cloud Architecture**, **Stream Data Engineering**, **Agentic Multi-Agent AI**, and **SOC Operations**:
+- **Synthetic Log Generator:** Modular Python tool generating access and network logs with ad-hoc threat injection (both APT attacks and administrative false positives).
+- **Data Ingestion Pipelines:** Multiple ingestion pathways to BigQuery via Cloud Storage batch loads, Pub/Sub to Dataflow streaming, or direct BigQuery streaming.
+- **BigQuery Continuous Queries:** Stateful stream processing performing temporal windowed joins between login events and network activity.
+- **BigQuery Threat Scanner:** Active background daemon monitoring BigQuery for newly emerging threat events.
+- **Google ADK Multi-Agent Team:** Autonomous orchestrator coordinating 4 specialized agents:
+  1. `google_search_agent`: OSINT threat intel on external public IPs via Google Search.
+  2. `bq_investigation_agent`: 24-hour behavioral profile queries in BigQuery using parameterized SQL.
+  3. `visual_analysis_agent`: Gemini multimodal vision OCR inspecting user desktop forensic screenshots.
+  4. `soc_ticketing_agent`: Consolidates forensic findings, generates structured reports, and dispatches incident tickets.
+- **SOC Ticketing System & Analyst Console:** Persistent incident queue and interactive Streamlit console for analyst triage.
+- **Terraform Infrastructure as Code:** Modular IaC templates provisioning BigQuery datasets, tables, Pub/Sub topics, subscriptions, and GCS buckets.
+- **Zero-Cloud Local Runner:** Complete end-to-end pipeline simulation locally with zero cloud deployment required.
 
 ---
 
-## 🏛️ Architecture Diagram
+## 🏛️ System Architecture
+
+![System Architecture](./system_architecture.png)
 
 ```
                                   ┌───────────────────────────┐
@@ -31,7 +33,7 @@ It integrates **Cloud Architecture**, **Data Engineering**, **Agentic AI**, and 
     ┌─────────────────────────┐   ┌─────────────────────────┐   ┌─────────────────────────┐
     │  Google Cloud Storage   │   │     Cloud Pub/Sub       │   │  Direct BQ Streaming    │
     │  gs://cymbal-cyber-     │   │  cymbal_cyber_raw_logs  │   │     Storage Write API   │
-    │  raw-logs_<PROJECT_ID> │   └─────────────┬───────────┘   └─────────────┬───────────┘
+    │  raw-logs_<PROJECT_ID>  │   └─────────────┬───────────┘   └─────────────┬───────────┘
     └────────────┬────────────┘                 │                             │
                  │ (GCS Loader)                 │ (Dataflow Streaming)        │
                  └──────────────────────┐       ▼                             │
@@ -51,6 +53,7 @@ It integrates **Cloud Architecture**, **Data Engineering**, **Agentic AI**, and 
                                                 ▼
                                ┌─────────────────────────────────┐
                                │   ADK Multi-Agent Orchestrator  │
+                               │           (adk_agent/)          │
                                └────────────────┬────────────────┘
                                                 │
          ┌──────────────────────────────┬───────┴──────────────────────┬──────────────────────────────┐
@@ -92,22 +95,24 @@ python -m src.demo.local_runner --threat false_positive
 ```bash
 LOCAL_MODE=true streamlit run src/demo/soc_ticketing/streamlit_soc_console.py
 ```
-Open `http://localhost:8501` to view the incident queue, inspect the desktop screenshot evidence (`u.lewis.png`), review the ADK report, and adjudicate the incident.
+Open `http://localhost:8501` to view the incident queue, inspect desktop screenshot evidence (`u.lewis.png`), review the ADK report, and adjudicate the incident.
 
-### 3. Run Automated Unit Tests
+### 3. Run Automated Tests
 ```bash
-python -m pytest
+uv run pytest src/demo/tests/ tests/unit/
 ```
 
 ---
 
 ## ⚙️ Component Details
 
-### 1. Synthetic Log Generator (`src/demo/data_generator/`)
-Replaces manual Colab notebooks with a flexible Python CLI tool:
-- **Models:** Validated Pydantic models in [`models.py`](models.py).
-- **Threat Scenarios:** Pre-configured attack injection scenarios in [`threat_scenarios.py`](threat_scenarios.py).
-- **Sinks:** Write logs to Cloud Storage, Cloud Pub/Sub, direct BigQuery, or local files in [`sinks.py`](sinks.py).
+### 1. Synthetic Log Generator & Threat Injection (`src/demo/data_generator/`)
+Modular CLI tool and Python API generating high-fidelity security logs:
+- **Models:** Validated Pydantic models in [`data_generator/models.py`](data_generator/models.py).
+- **Threat Scenarios:** Pre-configured scenarios in [`data_generator/threat_scenarios.py`](data_generator/threat_scenarios.py):
+  - `malicious`: Password spraying, foreign IP breach (North Korea / Russia), C2 DNS beaconing, mimikatz/powershell execution, and payload downloads.
+  - `false_positive`: Administrative automation noise (curl, ping, ipconfig, batch backup) triggering scores without malicious compromise.
+- **Sinks:** Write logs to Cloud Storage, Cloud Pub/Sub, direct BigQuery, or local files in [`data_generator/sinks.py`](data_generator/sinks.py).
 
 ```bash
 # Generate batch benign logs locally:
@@ -129,22 +134,16 @@ python -m src.demo.data_generator.log_generator --mode threat --threat-type fals
 ---
 
 ### 2. Data Pipelines to BigQuery (`src/demo/data_pipeline/`)
-- **Pub/Sub to BigQuery Dataflow Streaming Pipeline:** [`pubsub_to_bigquery_dataflow.py`](data_pipeline/pubsub_to_bigquery_dataflow.py)
+- **Pub/Sub to BigQuery Dataflow Streaming Pipeline:** [`data_pipeline/pubsub_to_bigquery_dataflow.py`](data_pipeline/pubsub_to_bigquery_dataflow.py)
   Apache Beam pipeline streaming from `cymbal_cyber_raw_logs` into BigQuery tables.
-- **GCS to BigQuery Batch Loader:** [`gcs_to_bigquery_loader.py`](data_pipeline/gcs_to_bigquery_loader.py)
+- **GCS to BigQuery Batch Loader:** [`data_pipeline/gcs_to_bigquery_loader.py`](data_pipeline/gcs_to_bigquery_loader.py)
   Loads NDJSON log files from Cloud Storage into partitioned/clustered tables.
-- **BigQuery Continuous Query:** [`continuous_query.sql`](data_pipeline/continuous_query.sql)
+- **BigQuery Continuous Query:** [`data_pipeline/continuous_query.sql`](data_pipeline/continuous_query.sql)
   Continuous stream query running temporal joins and aggregating 2-minute tumbling windows into `cymbal_cyber_alerts`.
 
 ---
 
-### 3. Google ADK Multi-Agent Framework (`adk_agent/`)
-Configured in [`agent.py`](../../adk_agent/agent.py) with the following agents:
-
-1. **`google_search_agent`**
-### 3. Google ADK Multi-Agent Architecture (`src/demo/adk_agent/`)
-
-![ADK Multi-Agent and Tool Hierarchy](/home/vscode/.gemini/antigravity/brain/b077e7df-f593-4036-a378-4aeb4e0be421/.user_uploaded/media_1791648641516_dc6d99df.png)
+### 3. Google ADK Multi-Agent Architecture (`adk_agent/`)
 
 ```mermaid
 graph TD
@@ -203,7 +202,7 @@ graph TD
   2. **`bq_investigation_agent`**
      - **Description:** *"Agent that answers questions about BigQuery data by executing SQL queries."*
      - **Tools:** `build_event_logs_query`, `BigQueryToolset`
-     - **Purpose:** Queries 24-hour behavioral history in BigQuery dataset `Cymbal_Cyber`.
+     - **Purpose:** Constructs and executes 24-hour parameterized behavioral queries against BigQuery dataset `Cymbal_Cyber`.
   3. **`visual_analysis_agent`**
      - **Description:** *"Agent that analyzes user desktop screenshots using multi-modal AI to uncover forensic visual evidence."*
      - **Tools:** `get_visual_analysis_for_user`, `get_gcs_uri_for_user`, `generate_signed_url`
@@ -215,7 +214,7 @@ graph TD
 
 ---
 
-### 4. BigQuery Threat Scanner (`adk_agent/threat_scanner.py`)
+### 4. BigQuery Threat Scanner Service (`adk_agent/threat_scanner.py`)
 Monitors BigQuery for correlated anomalies and triggers the multi-agent investigation:
 ```bash
 # Single scan:
@@ -228,8 +227,8 @@ python -m adk_agent.threat_scanner --daemon --interval 30
 ---
 
 ### 5. SOC Ticketing System & Console (`src/demo/soc_ticketing/`)
-- **Service Backend:** [`ticketing_service.py`](soc_ticketing/ticketing_service.py) handles ticket creation, BigQuery storage (`soc_tickets`, `adk_threat_assessment`), GCS queue management, and outbound webhooks.
-- **Streamlit Analyst Console:** [`streamlit_soc_console.py`](soc_ticketing/streamlit_soc_console.py) provides a web UI for human analysts to review and adjudicate tickets.
+- **Service Backend:** [`soc_ticketing/ticketing_service.py`](soc_ticketing/ticketing_service.py) handles ticket creation, BigQuery storage (`soc_tickets`, `adk_threat_assessment`), GCS queue management, and outbound webhooks.
+- **Streamlit Analyst Console:** [`soc_ticketing/streamlit_soc_console.py`](soc_ticketing/streamlit_soc_console.py) provides a web UI for human analysts to review and adjudicate tickets.
 
 ---
 
@@ -253,3 +252,12 @@ terraform apply -var="project_id=<PROJECT_ID>" -auto-approve
   - `cymbal-cyber-raw-logs_<PROJECT_ID>`
 - **BigQuery:** Dataset `Cymbal_Cyber`, partitioned & clustered tables (`user_access_events`, `network_events`, `adk_threat_assessment`, `soc_tickets`, `agent_events`), connection `continuous-query-vertex-ai-connection`, and screenshots view.
 - **Pub/Sub:** Topics `cymbal_cyber_alerts` and `cymbal_cyber_raw_logs` with subscriptions.
+
+---
+
+### 7. Unit Tests & Verification
+Run the automated test suite with `uv`:
+```bash
+uv run pytest src/demo/tests/ tests/unit/
+```
+Validates models, agent configurations, security DML guards, SQL parameterization, signed URL generation, threat generators, and ticketing operations.

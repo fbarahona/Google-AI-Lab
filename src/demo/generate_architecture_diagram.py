@@ -1,6 +1,6 @@
 """
 Script to generate System Architecture Diagram as both SVG and PNG image files.
-Based on src/demo/README_REFACTORED.md for Google Cloud Platform (<PROJECT_ID>).
+Based on src/demo/README.md for Google Cloud Platform (<PROJECT_ID>).
 """
 
 import os
