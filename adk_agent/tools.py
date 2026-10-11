@@ -122,6 +122,50 @@ def _parse_alert_payload_to_row(alert_payload_str: str) -> dict:
     return row
 
 
+# --- Security & SQL Injection Prevention ---
+ALLOWED_ENTITY_TYPES = {"user", "user_id", "device", "device_id", "ip", "source_ip"}
+ALLOWED_INTERVAL_WINDOWS = {"1 HOUR", "2 HOUR", "6 HOUR", "12 HOUR", "24 HOUR", "48 HOUR", "7 DAY", "30 DAY"}
+
+ENTITY_SAFE_PATTERN = re.compile(r"^[a-zA-Z0-9\._\-:@]+$")
+SQL_INJECTION_DANGEROUS_PATTERNS = [
+    re.compile(r"['\";\\]"),
+    re.compile(r"--"),
+    re.compile(r"/\*|\*/"),
+    re.compile(r"\b(UNION|SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|EXEC|EXECUTE)\b", re.IGNORECASE),
+    re.compile(r"\b(OR|AND)\b\s+['\"0-9\w]", re.IGNORECASE),
+]
+
+
+def sanitize_entity_value(value: str, field_name: str = "entity_id") -> str:
+    """
+    Validates and sanitizes entity values (user IDs, device IDs, IP addresses)
+    to prevent SQL injection vulnerabilities.
+
+    Raises:
+        ValueError: If value contains illegal characters or SQL injection patterns.
+    """
+    if value is None or not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a non-empty string.")
+
+    trimmed = value.strip()
+    if not trimmed:
+        raise ValueError(f"{field_name} cannot be empty or whitespace.")
+
+    for pattern in SQL_INJECTION_DANGEROUS_PATTERNS:
+        if pattern.search(trimmed):
+            raise ValueError(
+                f"SQL Injection attempt or illegal characters detected in {field_name}: {trimmed!r}"
+            )
+
+    if not ENTITY_SAFE_PATTERN.match(trimmed):
+        raise ValueError(
+            f"{field_name} contains invalid characters: {trimmed!r}. "
+            "Only alphanumeric characters, dots, hyphens, underscores, colons, and '@' are permitted."
+        )
+
+    return trimmed
+
+
 def create_rich_ticket_id(user_id: str) -> str:
     """
     Generates a standardized, readable ticket ID.
@@ -130,8 +174,11 @@ def create_rich_ticket_id(user_id: str) -> str:
     if not user_id:
         clean_user = "unknown_user"
     else:
-        match = re.match(r"^[a-zA-Z0-9\._-]+", str(user_id))
-        clean_user = match.group(0) if match else "invalid_id"
+        try:
+            clean_user = sanitize_entity_value(user_id, field_name="user_id")
+        except ValueError:
+            match = re.match(r"^[a-zA-Z0-9\._-]+", str(user_id))
+            clean_user = match.group(0) if match else "invalid_id"
 
     timestamp = int(time.time())
     return f"SOC-TICKET-{clean_user}-{timestamp}"
@@ -139,18 +186,47 @@ def create_rich_ticket_id(user_id: str) -> str:
 
 def build_event_logs_query(entity_type: str, entity_id: str, window_to_investigate: str = "24 HOUR") -> str:
     """
-    Generates an optimized SQL query to construct a 24-hour behavioral profile
-    for an entity in the Cymbal_Cyber dataset.
+    Generates a secure, validated SQL query to construct a behavioral profile
+    for an entity in the Cymbal_Cyber dataset. Validates entity_type, entity_id,
+    and interval window against strict allowlists to prevent SQL injection.
     """
-    logger.info("Building 24-hour SQL threat profile for entity: %s", entity_id)
+    if not entity_type or not isinstance(entity_type, str):
+        raise ValueError("entity_type must be a non-empty string.")
+
+    clean_type = entity_type.strip().lower()
+    if clean_type not in ALLOWED_ENTITY_TYPES:
+        raise ValueError(
+            f"Invalid entity_type '{entity_type}'. Must be one of {sorted(ALLOWED_ENTITY_TYPES)}."
+        )
+
+    clean_id = sanitize_entity_value(entity_id, field_name="entity_id")
+
+    clean_window = (window_to_investigate or "24 HOUR").strip().upper()
+    if clean_window not in ALLOWED_INTERVAL_WINDOWS:
+        raise ValueError(
+            f"Invalid window '{window_to_investigate}'. Must be one of {sorted(ALLOWED_INTERVAL_WINDOWS)}."
+        )
+
+    logger.info("Building %s SQL threat profile for %s: %s", clean_window, clean_type, clean_id)
+
+    if clean_type in {"device", "device_id"}:
+        access_filter = f"device_id = '{clean_id}'"
+        network_filter = f"device_id = '{clean_id}'"
+    elif clean_type in {"ip", "source_ip"}:
+        access_filter = f"source_ip = '{clean_id}'"
+        network_filter = f"source_ip = '{clean_id}'"
+    else:
+        access_filter = f"user_id = '{clean_id}'"
+        network_filter = f"(user_id = '{clean_id}' OR source_ip IN (SELECT assigned_internal_ip FROM FlaggedSessions))"
+
     return rf"""
     WITH
     FlaggedSessions AS (
         SELECT DISTINCT assigned_internal_ip
         FROM `{DATASET_ID}.user_access_events`
-        WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
+        WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {clean_window})
           AND event_type = 'login_success'
-          AND user_id = '{entity_id}'
+          AND {access_filter}
     ),
     AccessMetrics AS (
         SELECT
@@ -160,8 +236,8 @@ def build_event_logs_query(entity_type: str, entity_id: str, window_to_investiga
           COUNTIF(REGEXP_CONTAINS(user_agent, r'^(python-requests|curl|Go-http-client)')) AS suspicious_user_agent_logins_24h,
           COUNT(DISTINCT user_agent) AS distinct_user_agents_used_24h
         FROM `{DATASET_ID}.user_access_events`
-        WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
-          AND user_id = '{entity_id}'
+        WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {clean_window})
+          AND {access_filter}
     ),
     NetworkMetrics AS (
         SELECT
@@ -173,11 +249,8 @@ def build_event_logs_query(entity_type: str, entity_id: str, window_to_investiga
           COUNT(DISTINCT destination_ip) AS distinct_destination_ips_24h,
           COUNT(DISTINCT file_hash_sha256) AS distinct_files_transferred_24h
         FROM `{DATASET_ID}.network_events`
-        WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
-          AND (
-            user_id = '{entity_id}'
-            OR source_ip IN (SELECT assigned_internal_ip FROM FlaggedSessions)
-          )
+        WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {clean_window})
+          AND {network_filter}
     )
     SELECT *
     FROM AccessMetrics
@@ -220,26 +293,34 @@ def get_visual_analysis_for_user(gcs_uri: str) -> str:
 def get_gcs_uri_for_user(user: str) -> str:
     """
     Queries BigQuery user_screenshots_view to retrieve the GCS URI of the user's desktop screenshot.
+    Uses parameterized query and strict sanitization to prevent SQL injection.
     """
     logger.info("Searching for screenshot GCS URI for user: %s", user)
+    clean_user = sanitize_entity_value(user, field_name="user")
     sql = f"""
         SELECT t2.gcs_uri
         FROM `{PROJECT_ID}.{DATASET_ID}.user_access_events` AS t1
         JOIN `{PROJECT_ID}.{DATASET_ID}.user_screenshots_view` AS t2 ON t1.user_id = t2.user_id
-        WHERE t1.user_id = '{user}'
+        WHERE t1.user_id = @user_id
         LIMIT 1;
     """
     try:
+        from google.cloud import bigquery
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("user_id", "STRING", clean_user)
+            ]
+        )
         bq = get_bq_client()
-        results = list(bq.query(sql).result())
+        results = list(bq.query(sql, job_config=job_config).result())
         if not results:
-            fallback_uri = f"gs://cymbal-cyber-screenshots_{PROJECT_ID}/{user}.png"
+            fallback_uri = f"gs://cymbal-cyber-screenshots_{PROJECT_ID}/{clean_user}.png"
             logger.info("No join match in view, using default URI: %s", fallback_uri)
             return fallback_uri
         return results[0].gcs_uri
     except Exception as e:
         logger.error("Error querying GCS URI: %s", e)
-        return f"gs://cymbal-cyber-screenshots_{PROJECT_ID}/{user}.png"
+        return f"gs://cymbal-cyber-screenshots_{PROJECT_ID}/{clean_user}.png"
 
 
 def generate_signed_url(gcs_uri: str) -> str:

@@ -113,7 +113,7 @@ def forbidden_dml_check(tool: BaseTool, args: Dict[str, Any], tool_context: Tool
     if tool.name == "execute_sql":
         sql_query = args.get("query", "")
         if sql_query:
-            forbidden_dml = ["UPDATE", "DELETE", "MERGE", "TRUNCATE", "DROP", "ALTER"]
+            forbidden_dml = ["UPDATE", "DELETE", "MERGE", "TRUNCATE", "DROP", "ALTER", "INSERT", "CREATE", "GRANT", "REVOKE"]
             normalized_query = sql_query.upper().strip()
             if any(re.search(rf"\b{kw}\b", normalized_query) for kw in forbidden_dml):
                 return {"result": "Tool execution was blocked: Destructive DML operations are not permitted."}

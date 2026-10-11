@@ -48,7 +48,6 @@ The project features an end-to-end near real-time cybersecurity threat detection
 ├── agents-cli-manifest.yaml        # agents-cli configuration (agent_directory: adk_agent)
 ├── pyproject.toml                  # Python package configuration & dependencies
 ├── pytest.ini                      # Pytest runner configuration
-├── requirements.txt                # System Python dependencies
 ├── .env.example                    # Template environment variables
 ├── .env                            # Local environment variables (not committed)
 ├── GEMINI.md                       # Workspace guidance and agent instructions
