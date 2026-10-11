@@ -127,6 +127,21 @@ def _parse_alert_payload_to_row(alert_payload_str: str) -> dict:
 # --- Security & SQL Injection Prevention ---
 ALLOWED_ENTITY_TYPES = {"user", "user_id", "device", "device_id", "ip", "source_ip"}
 ALLOWED_INTERVAL_WINDOWS = {"1 HOUR", "2 HOUR", "6 HOUR", "12 HOUR", "24 HOUR", "48 HOUR", "7 DAY", "30 DAY"}
+DEFAULT_MAX_BYTES_BILLED = int(os.getenv("BQ_MAX_BYTES_BILLED", "1073741824"))  # 1 GB default scan ceiling
+DESTRUCTIVE_SQL_TOKENS = {"DROP", "ALTER", "DELETE", "UPDATE", "INSERT", "TRUNCATE", "GRANT", "REVOKE", "MERGE"}
+
+
+def validate_safe_sql_query(sql: str) -> None:
+    """
+    Pre-execution guardrail validating that SQL queries intended for read-only forensic analysis
+    do not contain destructive DML/DDL operations. Raises ValueError if violations are detected.
+    """
+    if not sql:
+        return
+    upper_sql = sql.upper()
+    for token in DESTRUCTIVE_SQL_TOKENS:
+        if re.search(rf"\b{token}\b", upper_sql):
+            raise ValueError(f"Security Policy Violation: Destructive SQL operation '{token}' is strictly forbidden.")
 
 ENTITY_SAFE_PATTERN = re.compile(r"^[a-zA-Z0-9\._\-:@]+$")
 SQL_INJECTION_DANGEROUS_PATTERNS = [
@@ -270,10 +285,13 @@ def build_event_logs_query(
     CROSS JOIN NetworkMetrics;
     """
 
+    validate_safe_sql_query(query_sql)
+
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
             bigquery.ScalarQueryParameter("entity_id", "STRING", clean_id)
-        ]
+        ],
+        maximum_bytes_billed=DEFAULT_MAX_BYTES_BILLED
     )
 
     return query_sql.strip(), job_config
@@ -572,12 +590,14 @@ def get_gcs_uri_for_user(user: str) -> str:
         WHERE t1.user_id = @user_id
         LIMIT 1;
     """
+    validate_safe_sql_query(sql)
     try:
         from google.cloud import bigquery
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
                 bigquery.ScalarQueryParameter("user_id", "STRING", clean_user)
-            ]
+            ],
+            maximum_bytes_billed=DEFAULT_MAX_BYTES_BILLED
         )
         bq = get_bq_client()
         results = list(bq.query(sql, job_config=job_config).result())

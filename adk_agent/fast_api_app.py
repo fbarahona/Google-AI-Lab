@@ -24,7 +24,7 @@ from typing import Any, Dict, Optional
 
 from a2a.server.tasks import InMemoryTaskStore
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from google.adk.cli.fast_api import get_fast_api_app
 from google.adk.runners import Runner
@@ -213,12 +213,49 @@ async def _run_agent_investigation(
     return "\n".join(outputs)
 
 
+def verify_incoming_oidc_token(request: Request) -> Dict[str, Any]:
+    """
+    Validates Google-issued OpenID Connect (OIDC) JWT bearer tokens for Pub/Sub push
+    and Cloud Scheduler endpoints to guarantee caller identity authenticity.
+    Bypassed in local simulation mode (LOCAL_MODE=true) or when authentication is disabled.
+    """
+    if os.getenv("LOCAL_MODE", "false").lower() in ("true", "1") or os.getenv("DISABLE_AUTH", "false").lower() in ("true", "1"):
+        return {"email": "local-dev@internal", "local": True}
+
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Missing or malformed Authorization header. Google OIDC bearer token required.",
+        )
+
+    token = auth_header.split(" ", 1)[1].strip()
+    try:
+        from google.oauth2 import id_token
+        from google.auth.transport import requests as google_requests
+
+        expected_audience = os.getenv("EXPECTED_OIDC_AUDIENCE") or str(request.url).split("?")[0]
+        claims = id_token.verify_oauth2_token(
+            token,
+            google_requests.Request(),
+            audience=expected_audience,
+        )
+        return claims
+    except Exception as exc:
+        logger.warning("Inbound OIDC JWT validation failed: %s", exc)
+        raise HTTPException(
+            status_code=403,
+            detail=f"Invalid OIDC bearer token: {exc}",
+        )
+
+
 @app.post("/apps/adk_agent/trigger/pubsub")
 @app.post("/trigger/pubsub")
 async def handle_pubsub_trigger(
     request: Request,
     background_tasks: BackgroundTasks,
     sync: bool = True,
+    caller_claims: Dict[str, Any] = Depends(verify_incoming_oidc_token),
 ):
     """
     Webhook receiving Pub/Sub push notifications for BigQuery Continuous Query security alerts.
@@ -364,7 +401,9 @@ _SCAN_LOCK = asyncio.Lock()
 
 @app.post("/apps/adk_agent/trigger/scan")
 @app.post("/trigger/scan")
-async def handle_scheduled_scan():
+async def handle_scheduled_scan(
+    caller_claims: Dict[str, Any] = Depends(verify_incoming_oidc_token),
+):
     """
     Cloud Scheduler trigger endpoint. Runs periodic threat scanning (every 2 minutes)
     to query BigQuery for newly emerging unassessed threats and dispatch investigations.

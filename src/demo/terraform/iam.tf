@@ -174,12 +174,30 @@ resource "google_pubsub_subscription_iam_member" "dataflow_raw_sub_subscriber" {
   member       = "serviceAccount:${google_service_account.dataflow_sa.email}"
 }
 
-# BigQuery dataset WRITER access for streaming insertion
-resource "google_bigquery_dataset_access" "dataflow_dataset_writer" {
+# BigQuery dataset READER access (metadata and schema resolution)
+resource "google_bigquery_dataset_access" "dataflow_dataset_reader" {
   project       = var.project_id
   dataset_id    = google_bigquery_dataset.cyber_dataset.dataset_id
-  role          = "WRITER"
+  role          = "READER"
   user_by_email = google_service_account.dataflow_sa.email
+}
+
+# Table-level least-privilege dataEditor scoped strictly to user_access_events
+resource "google_bigquery_table_iam_member" "dataflow_user_access_editor" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
+  table_id   = google_bigquery_table.user_access_events.table_id
+  role       = "roles/bigquery.dataEditor"
+  member     = "serviceAccount:${google_service_account.dataflow_sa.email}"
+}
+
+# Table-level least-privilege dataEditor scoped strictly to network_events
+resource "google_bigquery_table_iam_member" "dataflow_network_events_editor" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
+  table_id   = google_bigquery_table.network_events.table_id
+  role       = "roles/bigquery.dataEditor"
+  member     = "serviceAccount:${google_service_account.dataflow_sa.email}"
 }
 
 # Staging bucket objectAdmin access for Dataflow pipeline binaries and temporary files
