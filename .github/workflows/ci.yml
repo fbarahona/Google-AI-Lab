@@ -49,3 +49,9 @@ jobs:
 
       - name: Terraform Validate
         run: terraform -chdir=src/demo/terraform validate
+
+      - name: Terraform Security Scan (tfsec)
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: src/demo/terraform
+          soft_fail: true

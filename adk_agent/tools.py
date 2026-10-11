@@ -257,7 +257,7 @@ def build_event_logs_query(
           COUNTIF(permission_level_requested IN ('root', 'admin')) AS high_privilege_requests_24h,
           COUNTIF(file_type IN ('exe', 'dll', 'ps1', 'bat', 'vbs')) AS risky_file_transfers_24h,
           COUNTIF(REGEXP_CONTAINS(command_line, r'(?i)(powershell -enc|IEX|DownloadString|mimikatz|payload)')) AS malicious_commands_24h,
-          COUNTIF(REGEXP_CONTAINS(network_domain, r'(\.ru|\.xyz|\.org|bad-domain|payload-downloader|c2-server)')) AS malicious_dns_queries_24h,
+          COUNTIF(`{DATASET_ID}.is_malicious_domain`(network_domain)) AS malicious_dns_queries_24h,
           COUNT(DISTINCT destination_ip) AS distinct_destination_ips_24h,
           COUNT(DISTINCT file_hash_sha256) AS distinct_files_transferred_24h
         FROM `{DATASET_ID}.network_events`

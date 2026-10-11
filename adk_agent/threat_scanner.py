@@ -57,19 +57,18 @@ class BigQueryThreatScanner:
             access.source_ip,
             MAX(access.event_timestamp) AS window_end,
             SUM(
-              CASE
-                WHEN network.event_type = 'policy_violation' THEN 50
-                WHEN network.event_type = 'dns_query' AND REGEXP_CONTAINS(network.network_domain, r'(\\.ru|\\.xyz|\\.org|bad-domain|c2-server)') THEN 60
-                ELSE 0
-              END
-              + CASE WHEN network.permission_level_requested IN ('root', 'admin') THEN 35 ELSE 0 END
-              + CASE WHEN REGEXP_CONTAINS(access.user_agent, r'^(python-requests|curl|Go-http-client)') THEN 20 ELSE 0 END
-              + CASE WHEN network.event_type = 'file_transfer' AND network.file_type IN ('exe', 'dll', 'ps1', 'bat', 'vbs') THEN 40 ELSE 0 END
-              + CASE WHEN REGEXP_CONTAINS(network.command_line, r'(?i)(powershell -enc|IEX|DownloadString|mimikatz|payload)') THEN 100 ELSE 0 END
+              `{self.project_id}.{self.dataset_id}.calculate_threat_score`(
+                network.event_type,
+                network.permission_level_requested,
+                network.file_type,
+                network.command_line,
+                network.network_domain,
+                access.user_agent
+              )
             ) AS total_2_min_threat_score,
             COUNTIF(network.permission_level_requested IN ('root', 'admin')) AS high_privilege_request_count,
             COUNTIF(REGEXP_CONTAINS(network.command_line, r'(?i)(powershell -enc|IEX|mimikatz|payload)')) AS malicious_command_count,
-            COUNTIF(REGEXP_CONTAINS(network.network_domain, r'(\\.ru|\\.xyz|bad-domain|c2-server)')) AS malicious_dns_count
+            COUNTIF(`{self.project_id}.{self.dataset_id}.is_malicious_domain`(network.network_domain)) AS malicious_dns_count
           FROM `{self.project_id}.{self.dataset_id}.user_access_events` AS access
           INNER JOIN `{self.project_id}.{self.dataset_id}.network_events` AS network
             ON access.assigned_internal_ip = network.source_ip

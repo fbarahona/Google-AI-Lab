@@ -73,7 +73,81 @@ resource "google_bigquery_table" "network_events" {
   ])
 }
 
-# 3. adk_threat_assessment Table
+# 3. Threat Scoring UDF (Single Source of Truth)
+resource "google_bigquery_routine" "calculate_threat_score" {
+  project      = var.project_id
+  dataset_id   = google_bigquery_dataset.cyber_dataset.dataset_id
+  routine_id   = "calculate_threat_score"
+  routine_type = "SCALAR_FUNCTION"
+  language     = "SQL"
+
+  arguments {
+    name      = "event_type"
+    data_type = "{\"typeKind\": \"STRING\"}"
+  }
+  arguments {
+    name      = "permission_level"
+    data_type = "{\"typeKind\": \"STRING\"}"
+  }
+  arguments {
+    name      = "file_type"
+    data_type = "{\"typeKind\": \"STRING\"}"
+  }
+  arguments {
+    name      = "command_line"
+    data_type = "{\"typeKind\": \"STRING\"}"
+  }
+  arguments {
+    name      = "network_domain"
+    data_type = "{\"typeKind\": \"STRING\"}"
+  }
+  arguments {
+    name      = "user_agent"
+    data_type = "{\"typeKind\": \"STRING\"}"
+  }
+
+  return_type = "{\"typeKind\": \"INT64\"}"
+
+  definition_body = <<-EOF
+    (
+      CASE
+        WHEN event_type = 'policy_violation' THEN 50
+        WHEN event_type = 'dns_query' AND REGEXP_CONTAINS(network_domain, r'(?i)(\.ru$|\.xyz$|bad-domain|payload-downloader|c2-server)') THEN 60
+        ELSE 0
+      END
+      + CASE WHEN permission_level IN ('root', 'admin') THEN 35 ELSE 0 END
+      + CASE WHEN REGEXP_CONTAINS(user_agent, r'^(python-requests|curl|Go-http-client)') THEN 20 ELSE 0 END
+      + CASE WHEN event_type = 'file_transfer' AND file_type IN ('exe', 'dll', 'ps1', 'bat', 'vbs') THEN 40 ELSE 0 END
+      + CASE
+          WHEN REGEXP_CONTAINS(command_line, r'(?i)(powershell -enc|IEX|DownloadString|mimikatz|payload)') THEN 100
+          WHEN REGEXP_CONTAINS(command_line, r'^(ipconfig|ping|ls -la|df -h|hostname)') THEN 0
+          WHEN command_line IS NOT NULL THEN 10
+          ELSE 0
+        END
+    )
+  EOF
+}
+
+resource "google_bigquery_routine" "is_malicious_domain" {
+  project      = var.project_id
+  dataset_id   = google_bigquery_dataset.cyber_dataset.dataset_id
+  routine_id   = "is_malicious_domain"
+  routine_type = "SCALAR_FUNCTION"
+  language     = "SQL"
+
+  arguments {
+    name      = "network_domain"
+    data_type = "{\"typeKind\": \"STRING\"}"
+  }
+
+  return_type = "{\"typeKind\": \"BOOL\"}"
+
+  definition_body = <<-EOF
+    REGEXP_CONTAINS(network_domain, r'(?i)(\.ru$|\.xyz$|bad-domain|payload-downloader|c2-server)')
+  EOF
+}
+
+# 4. adk_threat_assessment Table
 resource "google_bigquery_table" "adk_threat_assessment" {
   project             = var.project_id
   dataset_id          = google_bigquery_dataset.cyber_dataset.dataset_id

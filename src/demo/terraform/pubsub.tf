@@ -24,20 +24,16 @@ resource "google_pubsub_subscription" "adk_agent_trigger" {
     ttl = "" # Never expire
   }
 
-  # Push config is activated when push endpoint URL is provided
-  dynamic "push_config" {
-    for_each = var.agent_push_endpoint != "" ? [var.agent_push_endpoint] : []
-    content {
-      push_endpoint = push_config.value
+  push_config {
+    push_endpoint = var.agent_push_endpoint != "" ? var.agent_push_endpoint : "${google_cloud_run_v2_service.adk_agent_service.uri}/apps/adk_agent/trigger/pubsub"
 
-      oidc_token {
-        service_account_email = google_service_account.invoker_sa.email
-        audience              = push_config.value
-      }
+    oidc_token {
+      service_account_email = google_service_account.invoker_sa.email
+      audience              = var.agent_push_endpoint != "" ? var.agent_push_endpoint : "${google_cloud_run_v2_service.adk_agent_service.uri}/apps/adk_agent/trigger/pubsub"
+    }
 
-      no_wrapper {
-        write_metadata = false
-      }
+    no_wrapper {
+      write_metadata = false
     }
   }
 
@@ -46,7 +42,10 @@ resource "google_pubsub_subscription" "adk_agent_trigger" {
     maximum_backoff = "600s"
   }
 
-  depends_on = [google_service_account.invoker_sa]
+  depends_on = [
+    google_service_account.invoker_sa,
+    google_cloud_run_v2_service.adk_agent_service
+  ]
 }
 
 # 3. Pub/Sub Topic for Raw Synthetic Logs (Data Ingestion Pipeline)

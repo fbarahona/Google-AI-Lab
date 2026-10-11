@@ -7,7 +7,7 @@ language: python
 framework: google-adk
 create_params:
   root_agent_name: root_agent
-  deployment_target: none
+  deployment_target: cloud_run
   session_type: none
   cicd_runner: skip
   agent_gateway: false

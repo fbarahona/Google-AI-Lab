@@ -260,11 +260,7 @@ def default_deny_soc_callback(callback_context: CallbackContext):
         try:
             from .tools import get_soc_service, SocTicket
         except (ImportError, ValueError):
-            try:
-                from tools import get_soc_service, SocTicket
-            except ImportError:
-                from src.demo.soc_ticketing.models import SocTicket
-                from adk_agent.tools import get_soc_service
+            from tools import get_soc_service, SocTicket
 
         soc_service = get_soc_service()
         user_id = state.get("user_id") or "unresolved_user"

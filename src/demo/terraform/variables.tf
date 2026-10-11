@@ -50,3 +50,9 @@ variable "agent_push_endpoint" {
   type        = string
   default     = ""
 }
+
+variable "billing_account_id" {
+  description = "Optional Google Cloud Billing Account ID to provision a demo budget alert."
+  type        = string
+  default     = ""
+}

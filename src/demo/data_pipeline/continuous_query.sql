@@ -25,22 +25,14 @@ AS (
       network.file_type,
       network.command_line,
       network.network_domain,
-      /* Threat Scoring Logic */
-      (
-        CASE
-          WHEN network.event_type = 'policy_violation' THEN 50
-          WHEN network.event_type = 'dns_query' AND REGEXP_CONTAINS(network.network_domain, r'(\.ru|\.xyz|\.org|bad-domain|payload-downloader|c2-server)') THEN 60
-          ELSE 0
-        END
-        + CASE WHEN network.permission_level_requested IN ('root', 'admin') THEN 35 ELSE 0 END
-        + CASE WHEN REGEXP_CONTAINS(access.user_agent, r'^(python-requests|curl|Go-http-client)') THEN 20 ELSE 0 END
-        + CASE WHEN network.event_type = 'file_transfer' AND network.file_type IN ('exe', 'dll', 'ps1', 'bat', 'vbs') THEN 40 ELSE 0 END
-        + CASE
-            WHEN REGEXP_CONTAINS(network.command_line, r'(?i)(powershell -enc|IEX|DownloadString|mimikatz|payload)') THEN 100
-            WHEN REGEXP_CONTAINS(network.command_line, r'^(ipconfig|ping|ls -la|df -h|hostname)') THEN 0
-            WHEN network.command_line IS NOT NULL THEN 10
-            ELSE 0
-          END
+      /* Threat Scoring Logic via Centralized UDF */
+      `Cymbal_Cyber.calculate_threat_score`(
+        network.event_type,
+        network.permission_level_requested,
+        network.file_type,
+        network.command_line,
+        network.network_domain,
+        access.user_agent
       ) AS event_score
     FROM
       APPENDS(TABLE `Cymbal_Cyber.user_access_events`, CURRENT_TIMESTAMP() - INTERVAL 10 MINUTE) AS access
@@ -66,7 +58,7 @@ AS (
       COUNTIF(REGEXP_CONTAINS(user_agent, r'^(python-requests|curl|Go-http-client)')) AS suspicious_user_agent_count,
       COUNTIF(file_type IN ('exe', 'dll', 'ps1', 'bat', 'vbs')) AS risky_file_transfer_count,
       COUNTIF(REGEXP_CONTAINS(command_line, r'(?i)(powershell -enc|IEX|DownloadString|mimikatz|payload)')) AS malicious_command_count,
-      COUNTIF(REGEXP_CONTAINS(network_domain, r'(\.ru|\.xyz|\.org|bad-domain|payload-downloader|c2-server)')) AS malicious_dns_count
+      COUNTIF(`Cymbal_Cyber.is_malicious_domain`(network_domain)) AS malicious_dns_count
     FROM
       TUMBLE(TABLE CorrelatedEventScores, "bq_changed_ts", INTERVAL 2 MINUTE)
     GROUP BY

@@ -245,17 +245,36 @@ terraform apply -var="project_id=<PROJECT_ID>" -auto-approve
 **Resources provisioned:**
 - **APIs:** BigQuery, Vertex AI, Pub/Sub, Storage, Dataflow, IAM Credentials, Resource Manager.
 - **IAM:** Service Account `bq-continuous-query-sa` with least-privilege roles and self-token-creation.
-- **Storage:** 4 GCS Buckets:
-  - `cymbal_cyber_adk_staging_bucket_<PROJECT_ID>`
-  - `cymbal-cyber-adk-escalations-bucket_<PROJECT_ID>`
-  - `cymbal-cyber-screenshots_<PROJECT_ID>`
-  - `cymbal-cyber-raw-logs_<PROJECT_ID>`
-- **BigQuery:** Dataset `Cymbal_Cyber`, partitioned & clustered tables (`user_access_events`, `network_events`, `adk_threat_assessment`, `soc_tickets`, `agent_events`), connection `continuous-query-vertex-ai-connection`, and screenshots view.
-- **Pub/Sub:** Topics `cymbal_cyber_alerts` and `cymbal_cyber_raw_logs` with subscriptions.
+- **Storage:** 4 GCS Buckets (staging, escalations, screenshots, raw_logs) configured with `public_access_prevention = "enforced"`.
+- **BigQuery:** Dataset `Cymbal_Cyber` with `delete_contents_on_destroy = true`, partitioned & clustered tables, routing UDFs, and connection `continuous-query-vertex-ai-connection`.
+- **Pub/Sub:** Topics `cymbal_cyber_alerts` and `cymbal_cyber_raw_logs` with subscriptions and OIDC push configurations.
 
 ---
 
-### 7. Unit Tests & Verification
+### 7. FinOps: Cost Control & Teardown
+
+**⚠️ Running Costs Warning:**
+While the local Python runner is free, deploying the live infrastructure via Terraform incurs **continuous running costs**:
+- **BigQuery Continuous Queries:** Require a BigQuery Enterprise Edition reservation, which bills for active slots 24/7 while the query runs.
+- **Dataflow Streaming:** The `pubsub_to_bigquery` streaming ingestion job provisions continuous compute resources.
+- **Cloud Run & Vertex AI:** Billed per request / execution duration.
+
+**Budget Alerts:**
+You can optionally deploy a $100 budget alert by passing your Billing Account ID during `terraform apply`:
+```bash
+terraform apply -var="project_id=<PROJECT_ID>" -var="billing_account_id=<YOUR_BILLING_ACCOUNT_ID>"
+```
+
+**Clean Teardown:**
+To stop continuous billing, cleanly destroy the infrastructure when you are finished testing:
+```bash
+terraform destroy -var="project_id=<PROJECT_ID>"
+```
+*(Note: BigQuery datasets and GCS buckets are configured with `force_destroy` and `delete_contents_on_destroy` so teardown succeeds even if populated).*
+
+---
+
+### 8. Unit Tests & Verification
 Run the automated test suite with `uv`:
 ```bash
 uv run pytest src/demo/tests/ tests/unit/
