@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pytest:
+    name: Run Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Pytest
+        env:
+          LOCAL_MODE: "true"
+        run: uv run pytest src/demo/tests/ tests/unit/
+
+  terraform:
+    name: Terraform Validation & Linting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.5"
+
+      - name: Terraform Init
+        run: terraform -chdir=src/demo/terraform init -backend=false
+
+      - name: Terraform Format Check
+        run: terraform -chdir=src/demo/terraform fmt -check
+
+      - name: Terraform Validate
+        run: terraform -chdir=src/demo/terraform validate
