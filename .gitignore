@@ -219,5 +219,6 @@ credentials*.json
 # Runtime demo output logs
 output_logs/
 local_demo_data/logs/
-local_demo_data/
+local_demo_data/escalations/*.json
+local_demo_data/escalations/history/*.json
 pytest.ini
