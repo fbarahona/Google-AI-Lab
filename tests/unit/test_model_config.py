@@ -40,3 +40,17 @@ def test_dynamic_project_id():
     expected_project = os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo")
     assert PROJECT_ID == expected_project
     assert tools.PROJECT_ID == expected_project
+
+
+def test_project_id_fallback_to_project_id_env(monkeypatch):
+    """Verify that when GOOGLE_CLOUD_PROJECT is unset, PROJECT_ID falls back to the PROJECT_ID env var."""
+    import importlib
+
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *args, **kwargs: None)
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.setenv("PROJECT_ID", "custom-fallback-project")
+    reloaded_tools = importlib.reload(tools)
+    assert reloaded_tools.PROJECT_ID == "custom-fallback-project"
+    # Restore original module state
+    monkeypatch.undo()
+    importlib.reload(tools)

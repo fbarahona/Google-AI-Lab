@@ -74,7 +74,7 @@ except ImportError:
 # --- Configuration ---
 load_dotenv()
 
-PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo")
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("PROJECT_ID", "local-demo")
 DATASET_ID = os.getenv("BIGQUERY_DATASET", "Cymbal_Cyber")
 MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 

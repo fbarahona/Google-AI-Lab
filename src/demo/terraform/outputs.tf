@@ -103,6 +103,11 @@ output "pubsub_alerts_dlq_topic" {
   value       = google_pubsub_topic.alerts_dlq_topic.id
 }
 
+output "pubsub_raw_events_dlq_topic" {
+  description = "Dead-letter topic for raw log ingestion events that fail schema parsing or delivery."
+  value       = google_pubsub_topic.raw_events_dlq.id
+}
+
 output "table_alerts" {
   description = "BigQuery alerts table (keyed by alert_id, status lifecycle)."
   value       = "${var.project_id}.${google_bigquery_dataset.cyber_dataset.dataset_id}.${google_bigquery_table.alerts.table_id}"

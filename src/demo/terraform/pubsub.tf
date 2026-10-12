@@ -119,9 +119,16 @@ resource "google_pubsub_subscription" "raw_access_to_bq" {
     write_metadata      = false
   }
 
+  dead_letter_policy {
+    dead_letter_topic     = google_pubsub_topic.raw_events_dlq.id
+    max_delivery_attempts = 5
+  }
+
   depends_on = [
     google_bigquery_table.user_access_events,
-    google_bigquery_table_iam_member.pubsub_sa_access_events_editor
+    google_bigquery_table_iam_member.pubsub_sa_access_events_editor,
+    google_pubsub_topic.raw_events_dlq,
+    google_pubsub_topic_iam_member.pubsub_agent_raw_dlq_publisher
   ]
 }
 
@@ -142,9 +149,28 @@ resource "google_pubsub_subscription" "raw_network_to_bq" {
     write_metadata      = false
   }
 
+  dead_letter_policy {
+    dead_letter_topic     = google_pubsub_topic.raw_events_dlq.id
+    max_delivery_attempts = 5
+  }
+
   depends_on = [
     google_bigquery_table.network_events,
-    google_bigquery_table_iam_member.pubsub_sa_network_events_editor
+    google_bigquery_table_iam_member.pubsub_sa_network_events_editor,
+    google_pubsub_topic.raw_events_dlq,
+    google_pubsub_topic_iam_member.pubsub_agent_raw_dlq_publisher
   ]
 }
 
+# 8. Dead-Letter Topic for Raw Event Ingestion Failures
+resource "google_pubsub_topic" "raw_events_dlq" {
+  project = var.project_id
+  name    = "cymbal_cyber_raw_events_dlq"
+
+  labels = {
+    environment = "demo"
+    component   = "raw-events-dlq"
+  }
+
+  depends_on = [google_project_service.required]
+}

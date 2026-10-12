@@ -17,6 +17,8 @@ import argparse
 import json
 import logging
 import os
+import time
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from google.cloud import bigquery, pubsub_v1
@@ -24,10 +26,19 @@ from google.cloud import bigquery, pubsub_v1
 logger = logging.getLogger("ThreatDetectorJob")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
-PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo")
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("PROJECT_ID", "local-demo")
 DATASET_ID = os.getenv("BIGQUERY_DATASET", "Cymbal_Cyber")
 ALERTS_TOPIC = os.getenv("ALERTS_TOPIC", "cymbal_cyber_alerts")
 DEFAULT_MAX_BYTES_BILLED = int(os.getenv("BQ_MAX_BYTES_BILLED", "524288000"))  # 500 MB scan ceiling
+
+
+def format_utc_timestamp(dt: Any) -> str:
+    """Ensures a datetime object or timestamp string is formatted as ISO-8601 UTC with trailing 'Z'."""
+    if isinstance(dt, datetime):
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return str(dt)
 
 
 class ThreatDetector:
@@ -37,11 +48,15 @@ class ThreatDetector:
         dataset_id: str = DATASET_ID,
         topic_id: str = ALERTS_TOPIC,
         max_bytes_billed: int = DEFAULT_MAX_BYTES_BILLED,
+        max_merge_attempts: int = 2,
+        merge_retry_delay: float = 3.0,
     ):
         self.project_id = project_id
         self.dataset_id = dataset_id
         self.topic_id = topic_id
         self.max_bytes_billed = max_bytes_billed
+        self.max_merge_attempts = max_merge_attempts
+        self.merge_retry_delay = merge_retry_delay
         self.bq_client = bigquery.Client(project=project_id)
         self.publisher = pubsub_v1.PublisherClient()
         self.topic_path = self.publisher.topic_path(project_id, topic_id)
@@ -64,11 +79,24 @@ class ThreatDetector:
                     published_count, dlq_count)
         return published_count
 
-    def _merge_and_fetch_new_alerts(self, lookback_minutes: int, min_score: int) -> list[dict[str, Any]]:
+    def _merge_and_fetch_new_alerts(
+        self,
+        lookback_minutes: int = 15,
+        min_score: int = 100,
+        cutoff_time: datetime | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Uses BigQuery MERGE to bucket 2-minute windows, scoring only windows that closed
         more than 60 seconds ago. Returns only rows inserted during this run.
+        Uses parameterized @start_time and @min_score to eliminate SQL injection and
+        guarantee UTC ISO-8601 timestamp resolution in BigQuery.
         """
+        if cutoff_time is None:
+            now_utc = datetime.now(UTC)
+            cutoff_time = now_utc - timedelta(minutes=lookback_minutes)
+        elif cutoff_time.tzinfo is None:
+            cutoff_time = cutoff_time.replace(tzinfo=UTC)
+
         merge_query = f"""
         DECLARE current_run_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP();
 
@@ -82,7 +110,7 @@ class ThreatDetector:
                 ROW_NUMBER() OVER (PARTITION BY assigned_internal_ip ORDER BY event_timestamp DESC) AS rn
               FROM `{self.project_id}.{self.dataset_id}.user_access_events`
               WHERE DATE(event_timestamp) >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
-                AND event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {lookback_minutes} MINUTE)
+                AND event_timestamp >= @start_time
                 AND event_type = 'login_success'
                 AND assigned_internal_ip IS NOT NULL
             )
@@ -99,7 +127,7 @@ class ThreatDetector:
               network_domain
             FROM `{self.project_id}.{self.dataset_id}.network_events`
             WHERE DATE(event_timestamp) >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
-              AND event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {lookback_minutes} MINUTE)
+              AND event_timestamp >= @start_time
               AND event_timestamp < TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 60 SECOND)
           ),
           BucketedEvents AS (
@@ -128,7 +156,7 @@ class ThreatDetector:
             GROUP BY access.user_id, access.device_id, access.source_ip, window_start, window_end
             -- Only evaluate windows that closed more than 60s ago (late-data allowance)
             HAVING window_end <= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 60 SECOND)
-               AND total_2_min_threat_score >= {min_score}
+               AND total_2_min_threat_score >= @min_score
           )
           SELECT
             CONCAT(user_id, '|', FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', window_end)) AS alert_id,
@@ -177,13 +205,61 @@ class ThreatDetector:
             S.status, S.detected_at, S.updated_at, S.payload
           );
         """
-        try:
-            logger.info("Executing MERGE query against alerts table...")
-            job_config = bigquery.QueryJobConfig(maximum_bytes_billed=self.max_bytes_billed)
-            merge_job = self.bq_client.query(merge_query, job_config=job_config)
-            merge_job.result()
-        except Exception as e:
-            logger.error("Error executing MERGE query: %s", e)
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("start_time", "TIMESTAMP", cutoff_time),
+                bigquery.ScalarQueryParameter("min_score", "INT64", min_score),
+            ],
+            maximum_bytes_billed=self.max_bytes_billed,
+        )
+        merge_success = False
+
+        for attempt in range(1, self.max_merge_attempts + 1):
+            try:
+                logger.info(
+                    "Executing MERGE query against alerts table (attempt %d/%d)...",
+                    attempt,
+                    self.max_merge_attempts,
+                )
+                merge_job = self.bq_client.query(merge_query, job_config=job_config)
+                merge_job.result()
+                merge_success = True
+                break
+            except Exception as e:
+                err_msg = str(e).lower()
+                is_conflict = (
+                    "concurrent update" in err_msg
+                    or "conflict with another transaction" in err_msg
+                    or "concurrent" in err_msg
+                )
+                if attempt < self.max_merge_attempts:
+                    delay = self.merge_retry_delay * (2 ** (attempt - 1))
+                    if is_conflict:
+                        logger.warning(
+                            "Concurrent update conflict detected on MERGE query (attempt %d/%d): %s. Retrying in %.1fs...",
+                            attempt,
+                            self.max_merge_attempts,
+                            e,
+                            delay,
+                        )
+                    else:
+                        logger.warning(
+                            "Transient error executing MERGE query (attempt %d/%d): %s. Retrying in %.1fs...",
+                            attempt,
+                            self.max_merge_attempts,
+                            e,
+                            delay,
+                        )
+                    time.sleep(delay)
+                else:
+                    logger.error(
+                        "Error executing MERGE query after %d attempts: %s",
+                        self.max_merge_attempts,
+                        e,
+                    )
+                    return []
+
+        if not merge_success:
             return []
 
         # Fetch only alerts newly created by this run (status = 'NEW')
@@ -207,8 +283,9 @@ class ThreatDetector:
           AND DATE(window_end) >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
         ORDER BY window_start ASC;
         """
+        fetch_config = bigquery.QueryJobConfig(maximum_bytes_billed=self.max_bytes_billed)
         try:
-            query_job = self.bq_client.query(fetch_query, job_config=job_config)
+            query_job = self.bq_client.query(fetch_query, job_config=fetch_config)
             return [dict(row.items()) for row in query_job.result()]
         except Exception as e:
             logger.error("Error fetching newly created alerts: %s", e)
@@ -259,13 +336,13 @@ class ThreatDetector:
                     "user_id": alert["user_id"],
                     "device_id": alert["device_id"],
                     "source_ip": alert["source_ip"],
-                    "window_start": alert["window_start"],
-                    "window_end": alert["window_end"],
+                    "window_start": format_utc_timestamp(alert["window_start"]),
+                    "window_end": format_utc_timestamp(alert["window_end"]),
                     "total_2_min_threat_score": alert["total_2_min_threat_score"],
                     "high_privilege_request_count": alert.get("high_privilege_request_count", 0),
                     "malicious_command_count": alert.get("malicious_command_count", 0),
                     "malicious_dns_count": alert.get("malicious_dns_count", 0),
-                    "detected_at": alert["detected_at"]
+                    "detected_at": format_utc_timestamp(alert["detected_at"]),
                 }
                 payload_str = json.dumps(payload_dict)
 

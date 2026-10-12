@@ -234,6 +234,15 @@ resource "google_pubsub_topic_iam_member" "pubsub_sa_dlq_publisher" {
   depends_on = [google_project_service_identity.pubsub_sa]
 }
 
+# Pub/Sub SA needs publisher on the raw events DLQ topic
+resource "google_pubsub_topic_iam_member" "pubsub_agent_raw_dlq_publisher" {
+  project    = var.project_id
+  topic      = google_pubsub_topic.raw_events_dlq.name
+  role       = "roles/pubsub.publisher"
+  member     = "serviceAccount:${google_project_service_identity.pubsub_sa.email}"
+  depends_on = [google_project_service_identity.pubsub_sa]
+}
+
 # Pub/Sub SA needs subscriber on the alerts push subscription
 resource "google_pubsub_subscription_iam_member" "pubsub_sa_alerts_subscriber" {
   project      = var.project_id

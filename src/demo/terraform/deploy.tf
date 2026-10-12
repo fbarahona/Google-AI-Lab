@@ -57,6 +57,10 @@ resource "google_cloud_run_v2_service" "adk_agent_service" {
         }
       }
       env {
+        name  = "PROJECT_ID"
+        value = var.project_id
+      }
+      env {
         name  = "GOOGLE_CLOUD_PROJECT"
         value = var.project_id
       }

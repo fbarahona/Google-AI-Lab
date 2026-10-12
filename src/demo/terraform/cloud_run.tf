@@ -27,6 +27,10 @@ resource "google_cloud_run_v2_job" "threat_detector" {
         ]
 
         env {
+          name  = "PROJECT_ID"
+          value = var.project_id
+        }
+        env {
           name  = "GOOGLE_CLOUD_PROJECT"
           value = var.project_id
         }

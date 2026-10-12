@@ -33,6 +33,13 @@ echo "Building unified container image: ${IMAGE_TAG}"
 echo "Project: ${PROJECT_ID} | Region: ${REGION}"
 echo "================================================================="
 
+# Configure Docker authentication credentials for Container & Artifact Registry
+if command -v gcloud >/dev/null 2>&1; then
+  echo "Configuring Docker authentication..."
+  gcloud auth configure-docker --quiet
+  gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet 2>/dev/null || true
+fi
+
 # 1. Build & Push Image via Cloud Build
 gcloud builds submit \
   --project="${PROJECT_ID}" \
