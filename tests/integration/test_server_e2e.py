@@ -24,7 +24,7 @@ import uuid
 from collections.abc import Iterator
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 import requests
 from a2a.client import ClientConfig, create_client
@@ -178,7 +178,7 @@ def test_a2a_chat_stream(server_fixture: subprocess.Popen[str]) -> None:
     async def _stream() -> list[StreamResponse]:
         config = ClientConfig(
             streaming=True,
-            httpx_client=httpx.AsyncClient(timeout=60.0),
+            httpx_client=httpx2.AsyncClient(timeout=60.0),
         )
         client = await create_client(A2A_RPC_URL.rstrip("/"), config)
         message = Message(

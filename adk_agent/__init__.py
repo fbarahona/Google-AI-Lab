@@ -1,6 +1,13 @@
 """
 ADK Multi-Agent Package for Cymbal Cyber.
 """
+try:
+    from httpx2._alias import alias_httpx
+
+    alias_httpx()
+except ImportError:
+    pass
+
 from .agent import (
     app,
     bq_investigation_agent,
