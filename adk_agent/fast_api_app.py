@@ -571,12 +571,13 @@ async def handle_pubsub_trigger(
         )
     except Exception as exc:
         logger.error("Pub/Sub agent investigation failed for session %s: %s", session_id, exc)
-        # On failure: reset status back to NEW so Pub/Sub retries are not rejected with 409
+        # On failure: reset status back to RETRY_PENDING so Pub/Sub retries are not rejected with 409
+        # while preventing the scheduled threat detector from republishing the alert prematurely.
         if alert_id:
             try:
-                await asyncio.to_thread(update_alert_status, alert_id, "NEW", alert_data)
+                await asyncio.to_thread(update_alert_status, alert_id, "RETRY_PENDING", alert_data)
             except Exception as reset_err:
-                logger.warning("Could not reset alert status to NEW on failure: %s", reset_err)
+                logger.warning("Could not reset alert status to RETRY_PENDING on failure: %s", reset_err)
         raise HTTPException(
             status_code=500,
             detail="Internal server error during alert investigation.",

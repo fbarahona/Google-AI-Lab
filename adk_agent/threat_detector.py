@@ -203,18 +203,26 @@ class ThreatDetector:
             logger.error("Error fetching newly created alerts: %s", e)
             return []
 
-    def _update_alert_status(self, alert_id: str, new_status: str):
+    def _update_alert_status(self, alert_id: str, new_status: str, expected_current_status: Optional[str] = None):
         """Transitions alert status in BigQuery using parameterized query."""
+        where_clause = "WHERE alert_id = @alert_id"
+        query_params = [
+            bigquery.ScalarQueryParameter("new_status", "STRING", new_status),
+            bigquery.ScalarQueryParameter("alert_id", "STRING", alert_id),
+        ]
+        if expected_current_status:
+            where_clause += " AND status = @expected_current_status"
+            query_params.append(
+                bigquery.ScalarQueryParameter("expected_current_status", "STRING", expected_current_status)
+            )
+
         update_query = f"""
         UPDATE `{self.project_id}.{self.dataset_id}.alerts`
         SET status = @new_status, updated_at = CURRENT_TIMESTAMP()
-        WHERE alert_id = @alert_id;
+        {where_clause};
         """
         job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter("new_status", "STRING", new_status),
-                bigquery.ScalarQueryParameter("alert_id", "STRING", alert_id),
-            ],
+            query_parameters=query_params,
             maximum_bytes_billed=self.max_bytes_billed,
         )
         try:
@@ -260,7 +268,8 @@ class ThreatDetector:
             )
             future.result(timeout=10)
             logger.info("Published alert '%s' to %s", alert_id, self.topic_path)
-            self._update_alert_status(alert_id, "PUBLISHED")
+            # Mark as PUBLISHED only if status is still NEW (prevents overwriting INVESTIGATING if webhook processed quickly)
+            self._update_alert_status(alert_id, "PUBLISHED", expected_current_status="NEW")
             count += 1
         return count
 
@@ -305,34 +314,38 @@ class ThreatDetector:
             target_ip = dl.get("source_ip") or "0.0.0.0"
             threat_score = int(dl.get("total_2_min_threat_score") or 2000)
 
-            # 1. Insert auto-escalation ticket into soc_tickets FIRST
+            # 1. Upsert auto-escalation ticket into soc_tickets FIRST via MERGE (idempotent)
             ticket_id = f"DLQ-AUTO-ESCALATE-{alert_id.replace('|', '-')}"
             report_text = f"### DLQ Auto-Escalation Report\n\nAlert `{alert_id}` exhausted all Pub/Sub delivery attempts. The automated webhook failed to respond. Immediate human intervention required."
 
-            insert_ticket_sql = f"""
-            INSERT INTO `{self.project_id}.{self.dataset_id}.soc_tickets` (
-              ticket_id, created_at, user_id, device_id, source_ip,
-              threat_score, severity, status, agent_decision, agent_reason,
-              mitre_tactics, indicators_of_compromise, screenshot_url,
-              structured_report, human_decision, human_comment, adjudicated_at
-            )
-            VALUES (
-              @ticket_id,
-              CURRENT_TIMESTAMP(),
-              @user_id,
-              @device_id,
-              @source_ip,
-              @threat_score,
-              'CRITICAL',
-              'ESCALATED',
-              'DEAD_LETTER_AUTO_ESCALATION',
-              'Alert failed max delivery attempts (5) to the ADK agent webhook and landed on DLQ. Auto-escalated for immediate human triage.',
-              @mitre_tactics,
-              @iocs,
-              NULL,
-              @report,
-              NULL, NULL, NULL
-            );
+            merge_ticket_sql = f"""
+            MERGE `{self.project_id}.{self.dataset_id}.soc_tickets` T
+            USING (SELECT @ticket_id AS ticket_id) S
+            ON T.ticket_id = S.ticket_id
+            WHEN NOT MATCHED THEN
+              INSERT (
+                ticket_id, created_at, user_id, device_id, source_ip,
+                threat_score, severity, status, agent_decision, agent_reason,
+                mitre_tactics, indicators_of_compromise, screenshot_url,
+                structured_report, human_decision, human_comment, adjudicated_at
+              )
+              VALUES (
+                @ticket_id,
+                FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', CURRENT_TIMESTAMP()),
+                @user_id,
+                @device_id,
+                @source_ip,
+                @threat_score,
+                'CRITICAL',
+                'ESCALATED',
+                'DEAD_LETTER_AUTO_ESCALATION',
+                'Alert failed max delivery attempts (5) to the ADK agent webhook and landed on DLQ. Auto-escalated for immediate human triage.',
+                @mitre_tactics,
+                @iocs,
+                NULL,
+                @report,
+                NULL, NULL, NULL
+              );
             """
             insert_cfg = bigquery.QueryJobConfig(
                 query_parameters=[
@@ -348,7 +361,7 @@ class ThreatDetector:
                 maximum_bytes_billed=self.max_bytes_billed,
             )
             try:
-                self.bq_client.query(insert_ticket_sql, job_config=insert_cfg).result()
+                self.bq_client.query(merge_ticket_sql, job_config=insert_cfg).result()
                 logger.warning("Auto-escalated DLQ alert '%s' to SOC tickets as '%s'", alert_id, ticket_id)
             except Exception as e:
                 logger.error("Failed to insert auto-escalation ticket for %s: %s; will retry next cycle", alert_id, e)

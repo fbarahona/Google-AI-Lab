@@ -22,6 +22,20 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Set
 
 
+def calculate_redundancy(trajectory: list[dict]) -> float:
+    """
+    Calculates tool trajectory call redundancy score (0.0 to 1.0).
+    A score of 0.0 means zero redundant calls (every call is unique).
+    Uses standard JSON serialization to deduplicate dictionary structures
+    safely without dynamic string eval().
+    """
+    if not trajectory:
+        return 0.0
+    calls = trajectory
+    unique_calls = {json.dumps(call, sort_keys=True) for call in calls}
+    return 1.0 - (len(unique_calls) / len(calls))
+
+
 def is_ticket_fresh(tdata: Dict[str, Any], max_age_seconds: float = 1800.0) -> bool:
     """
     Validates ticket timestamp freshness. Stale ticket files leftover from previous

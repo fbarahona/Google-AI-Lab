@@ -230,7 +230,7 @@ resource "google_pubsub_topic_iam_member" "pubsub_sa_dlq_publisher" {
   project    = var.project_id
   topic      = google_pubsub_topic.alerts_dlq_topic.name
   role       = "roles/pubsub.publisher"
-  member     = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+  member     = "serviceAccount:${google_project_service_identity.pubsub_sa.email}"
   depends_on = [google_project_service_identity.pubsub_sa]
 }
 
@@ -239,7 +239,7 @@ resource "google_pubsub_subscription_iam_member" "pubsub_sa_alerts_subscriber" {
   project      = var.project_id
   subscription = google_pubsub_subscription.adk_agent_trigger.name
   role         = "roles/pubsub.subscriber"
-  member       = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+  member       = "serviceAccount:${google_project_service_identity.pubsub_sa.email}"
   depends_on   = [google_project_service_identity.pubsub_sa]
 }
 
@@ -249,7 +249,7 @@ resource "google_bigquery_table_iam_member" "pubsub_sa_access_events_editor" {
   dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
   table_id   = google_bigquery_table.user_access_events.table_id
   role       = "roles/bigquery.dataEditor"
-  member     = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+  member     = "serviceAccount:${google_project_service_identity.pubsub_sa.email}"
   depends_on = [google_project_service_identity.pubsub_sa]
 }
 
@@ -258,7 +258,7 @@ resource "google_bigquery_table_iam_member" "pubsub_sa_network_events_editor" {
   dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
   table_id   = google_bigquery_table.network_events.table_id
   role       = "roles/bigquery.dataEditor"
-  member     = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+  member     = "serviceAccount:${google_project_service_identity.pubsub_sa.email}"
   depends_on = [google_project_service_identity.pubsub_sa]
 }
 
@@ -267,7 +267,7 @@ resource "google_bigquery_table_iam_member" "pubsub_sa_dlq_editor" {
   dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
   table_id   = google_bigquery_table.alerts_dead_letter.table_id
   role       = "roles/bigquery.dataEditor"
-  member     = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+  member     = "serviceAccount:${google_project_service_identity.pubsub_sa.email}"
   depends_on = [google_project_service_identity.pubsub_sa]
 }
 

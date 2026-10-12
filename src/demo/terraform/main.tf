@@ -14,7 +14,8 @@ locals {
     "run.googleapis.com",
     "cloudscheduler.googleapis.com",
     "bigquerydatatransfer.googleapis.com",
-    "billingbudgets.googleapis.com"
+    "billingbudgets.googleapis.com",
+    "artifactregistry.googleapis.com"
   ])
 }
 

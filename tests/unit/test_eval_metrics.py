@@ -19,6 +19,7 @@ _spec.loader.exec_module(_module)
 
 evaluate = _module.evaluate
 is_response_blocked = _module.is_response_blocked
+calculate_redundancy = _module.calculate_redundancy
 
 
 def test_is_response_blocked():
@@ -454,3 +455,29 @@ def test_injection_case_ignores_stale_historical_tickets():
     # Since the ticket is stale and model stopped without escalation tool or state delta, it must score 0.0
     assert result["score"] == 0.0
     assert result["gate_enforced"] is False
+
+
+def test_calculate_redundancy_unique_calls():
+    """Verify redundancy is 0.0 when all calls are distinct."""
+    trajectory = [
+        {"name": "google_search", "args": {"query": "175.45.177.32"}},
+        {"name": "query_user_behavior_profile", "args": {"user_id": "u.lewis"}},
+        {"name": "analyze_user_screenshot", "args": {"user_id": "u.lewis"}},
+    ]
+    assert calculate_redundancy(trajectory) == 0.0
+
+
+def test_calculate_redundancy_duplicate_calls():
+    """Verify redundancy correctly reflects duplicate calls without unhashable dict errors."""
+    trajectory = [
+        {"name": "google_search", "args": {"query": "175.45.177.32"}},
+        {"name": "google_search", "args": {"query": "175.45.177.32"}},
+    ]
+    # 2 calls, 1 unique -> 1.0 - (1 / 2) = 0.5
+    assert calculate_redundancy(trajectory) == 0.5
+
+
+def test_calculate_redundancy_empty():
+    """Verify redundancy is 0.0 for empty trajectory."""
+    assert calculate_redundancy([]) == 0.0
+

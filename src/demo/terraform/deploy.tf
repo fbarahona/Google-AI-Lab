@@ -2,6 +2,23 @@
 # MISSING DEMO INFRASTRUCTURE (Cloud Run Agent, Dataflow, Continuous Query)
 # ==============================================================================
 
+locals {
+  # Deterministic Cloud Run endpoint URL matching Google Cloud Run URL convention
+  agent_service_url   = "https://cymbal-cyber-adk-agent-${data.google_project.project.number}.${var.region}.run.app"
+  agent_push_endpoint = var.agent_push_endpoint != "" ? var.agent_push_endpoint : "${local.agent_service_url}/apps/adk_agent/trigger/pubsub"
+}
+
+# Dedicated Artifact Registry repository for container images (replaces deprecated Container Registry gcr.io)
+resource "google_artifact_registry_repository" "agent_repo" {
+  project       = var.project_id
+  location      = var.region
+  repository_id = "cymbal-cyber"
+  description   = "Docker repository for Cymbal Cyber agent and detection container images"
+  format        = "DOCKER"
+
+  depends_on = [google_project_service.required]
+}
+
 # 1. Cloud Run Deployment for ADK Multi-Agent Team
 # We deploy the ADK Agent to Cloud Run to natively support Pub/Sub OIDC push tokens
 # without requiring an intermediary token-exchange relay service.
@@ -43,7 +60,7 @@ resource "google_cloud_run_v2_service" "adk_agent_service" {
       }
       env {
         name  = "EXPECTED_OIDC_AUDIENCE"
-        value = var.agent_push_endpoint
+        value = local.agent_push_endpoint
       }
       env {
         name  = "EXPECTED_INVOKER_EMAIL"

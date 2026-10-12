@@ -25,11 +25,11 @@ resource "google_pubsub_subscription" "adk_agent_trigger" {
   }
 
   push_config {
-    push_endpoint = var.agent_push_endpoint != "" ? var.agent_push_endpoint : "${google_cloud_run_v2_service.adk_agent_service.uri}/apps/adk_agent/trigger/pubsub"
+    push_endpoint = local.agent_push_endpoint
 
     oidc_token {
       service_account_email = google_service_account.invoker_sa.email
-      audience              = var.agent_push_endpoint != "" ? var.agent_push_endpoint : "${google_cloud_run_v2_service.adk_agent_service.uri}/apps/adk_agent/trigger/pubsub"
+      audience              = local.agent_push_endpoint
     }
 
     no_wrapper {
@@ -110,9 +110,11 @@ resource "google_pubsub_subscription" "raw_access_to_bq" {
   message_retention_duration = "86400s" # 24 hours
 
   bigquery_config {
-    table            = "${var.project_id}:${google_bigquery_dataset.cyber_dataset.dataset_id}.${google_bigquery_table.user_access_events.table_id}"
-    use_table_schema = true
-    write_metadata   = false
+    table               = "${var.project_id}:${google_bigquery_dataset.cyber_dataset.dataset_id}.${google_bigquery_table.user_access_events.table_id}"
+    use_table_schema    = true
+    use_topic_schema    = false
+    drop_unknown_fields = true
+    write_metadata      = false
   }
 
   depends_on = [
@@ -131,9 +133,11 @@ resource "google_pubsub_subscription" "raw_network_to_bq" {
   message_retention_duration = "86400s" # 24 hours
 
   bigquery_config {
-    table            = "${var.project_id}:${google_bigquery_dataset.cyber_dataset.dataset_id}.${google_bigquery_table.network_events.table_id}"
-    use_table_schema = true
-    write_metadata   = false
+    table               = "${var.project_id}:${google_bigquery_dataset.cyber_dataset.dataset_id}.${google_bigquery_table.network_events.table_id}"
+    use_table_schema    = true
+    use_topic_schema    = false
+    drop_unknown_fields = true
+    write_metadata      = false
   }
 
   depends_on = [

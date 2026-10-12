@@ -319,7 +319,7 @@ resource "google_bigquery_table" "alerts" {
     { name = "high_privilege_request_count", type = "INT64", mode = "NULLABLE", description = "Count of high privilege requests" },
     { name = "malicious_command_count", type = "INT64", mode = "NULLABLE", description = "Count of suspicious commands" },
     { name = "malicious_dns_count", type = "INT64", mode = "NULLABLE", description = "Count of suspicious DNS queries" },
-    { name = "status", type = "STRING", mode = "REQUIRED", description = "NEW | PUBLISHED | INVESTIGATING | DONE | DEAD_LETTERED" },
+    { name = "status", type = "STRING", mode = "REQUIRED", description = "NEW | PUBLISHED | INVESTIGATING | RETRY_PENDING | DONE | DEAD_LETTERED" },
     { name = "detected_at", type = "TIMESTAMP", mode = "REQUIRED", description = "Timestamp when alert was evaluated" },
     { name = "updated_at", type = "TIMESTAMP", mode = "REQUIRED", description = "Timestamp of last status transition" },
     { name = "payload", type = "JSON", mode = "REQUIRED", description = "Complete contract JSON payload" }

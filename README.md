@@ -237,7 +237,7 @@ After provisioning the infrastructure with Terraform (`terraform apply`), build 
 ./src/demo/deploy_cloud.sh <PROJECT_ID> <REGION>
 
 # Option B: Manual gcloud deployment
-IMAGE_TAG="gcr.io/${GOOGLE_CLOUD_PROJECT}/cymbal-cyber-agent:latest"
+IMAGE_TAG="${GOOGLE_CLOUD_LOCATION}-docker.pkg.dev/${GOOGLE_CLOUD_PROJECT}/cymbal-cyber/cymbal-cyber-agent:latest"
 
 # 1. Build & Push unified container image
 gcloud builds submit --project="${GOOGLE_CLOUD_PROJECT}" --tag="${IMAGE_TAG}" .
