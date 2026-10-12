@@ -19,15 +19,8 @@ resource "google_artifact_registry_repository" "agent_repo" {
   depends_on = [google_project_service.required]
 }
 
-# Grant Cloud Build service accounts writer permissions on the repository
-resource "google_artifact_registry_repository_iam_member" "cloudbuild_sa_writer" {
-  project    = var.project_id
-  location   = var.region
-  repository = google_artifact_registry_repository.agent_repo.name
-  role       = "roles/artifactregistry.writer"
-  member     = "serviceAccount:${data.google_project.project.number}@cloudbuild.gserviceaccount.com"
-}
-
+# Grant Compute Engine default service account writer permissions on the repository
+# (Modern Google Cloud default for Cloud Build; legacy @cloudbuild.gserviceaccount.com omitted to prevent apply failures)
 resource "google_artifact_registry_repository_iam_member" "compute_sa_writer" {
   project    = var.project_id
   location   = var.region

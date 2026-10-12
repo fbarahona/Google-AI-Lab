@@ -181,13 +181,13 @@ def create_svg():
     <text x="30" y="81" class="card-sub" fill="#7dd3fc">⚡ Batch Loader: <tspan class="card-mono" fill="#bae6fd">gcs_to_bigquery_loader.py</tspan></text>
   </g>
 
-  <!-- Sink 2: Cloud Pub/Sub -->
+  <!-- Sink 2: Cloud Pub/Sub Direct BigQuery Ingestion -->
   <g transform="translate(590, 270)" filter="url(#shadow)">
     <rect width="380" height="100" rx="14" fill="url(#pipelineGrad)" stroke="#0ea5e9" stroke-width="1.8"/>
-    <text x="20" y="30" class="card-title">📨 Cloud Pub/Sub Topic</text>
-    <text x="20" y="52" class="card-mono">cymbal_cyber_raw_logs</text>
+    <text x="20" y="30" class="card-title">📨 Pub/Sub BQ Subscriptions [Default]</text>
+    <text x="20" y="52" class="card-mono">raw_access_to_bq &amp; raw_network_to_bq</text>
     <rect x="20" y="65" width="340" height="24" rx="6" fill="#082f49" stroke="#0284c7" stroke-width="1"/>
-    <text x="30" y="81" class="card-sub" fill="#7dd3fc">⚡ Dataflow: <tspan class="card-mono" fill="#bae6fd">pubsub_to_bigquery_dataflow.py</tspan></text>
+    <text x="30" y="81" class="card-sub" fill="#7dd3fc">⚡ Direct $0 Ingest • <tspan class="card-mono" fill="#bae6fd">[Optional: Dataflow Beam]</tspan></text>
   </g>
 
   <!-- Sink 3: Direct BigQuery Streaming -->
@@ -239,20 +239,20 @@ def create_svg():
   <path d="M 1040 550 L 1040 585" fill="none" stroke="#f59e0b" stroke-width="2.5" marker-end="url(#arrowYellow)"/>
 
   <!-- ==================== 4. DETECTION & STREAM ANALYTICS ENGINES ==================== -->
-  <!-- Engine 1: Continuous Query -->
+  <!-- Engine 1: Scheduled Threat Detector (Cloud Run Job) -->
   <g transform="translate(240, 590)" filter="url(#shadow)">
-    <rect width="500" height="85" rx="14" fill="url(#detectGrad)" stroke="#f59e0b" stroke-width="1.8"/>
-    <text x="25" y="30" class="card-title">⚡ BigQuery Continuous Query</text>
-    <text x="25" y="50" class="card-mono">continuous_query.sql</text>
-    <text x="25" y="70" class="card-sub" fill="#fde68a">Temporal tumbling window (2m) • Exports alerts &gt;= 100 to Pub/Sub</text>
+    <rect width="500" height="85" rx="14" fill="url(#detectGrad)" stroke="#10b981" stroke-width="1.8"/>
+    <text x="25" y="30" class="card-title">🎯 Scheduled Threat Detector (Cloud Run Job) [Default]</text>
+    <text x="25" y="50" class="card-mono">adk_agent.threat_detector (2m Cloud Scheduler)</text>
+    <text x="25" y="70" class="card-sub" fill="#6ee7b7">Closed 2m windows • Idempotent MERGE • $0 idle reservation cost</text>
   </g>
 
-  <!-- Engine 2: BigQuery Threat Scanner -->
+  <!-- Engine 2: BigQuery Continuous Query [Optional / Benchmark Only] -->
   <g transform="translate(820, 590)" filter="url(#shadow)">
     <rect width="500" height="85" rx="14" fill="url(#detectGrad)" stroke="#f59e0b" stroke-width="1.8"/>
-    <text x="25" y="30" class="card-title">🔍 BigQuery Threat Scanner</text>
-    <text x="25" y="50" class="card-mono">src.demo.adk_agent.threat_scanner</text>
-    <text x="25" y="70" class="card-sub" fill="#fde68a">Active background daemon polling BQ for anomalous threat thresholds</text>
+    <text x="25" y="30" class="card-title">⚡ BigQuery Continuous Query [Optional / Benchmark Only]</text>
+    <text x="25" y="50" class="card-mono">continuous_query.sql (Enterprise Slot Reservation)</text>
+    <text x="25" y="70" class="card-sub" fill="#fde68a">Temporal tumbling window (2m) • Exports alerts &gt;= 100 to Pub/Sub</text>
   </g>
 
   <!-- Connectors from Detection Engines to ADK Orchestrator -->
@@ -448,10 +448,10 @@ def create_png():
 
     # PubSub
     draw.rounded_rectangle([(590, 270), (970, 370)], radius=14, fill=(15, 23, 42), outline=(14, 165, 233), width=2)
-    draw.text((610, 282), "Cloud Pub/Sub Topic", fill=(255, 255, 255), font=card_title_font)
-    draw.text((610, 308), "cymbal_cyber_raw_logs", fill=(147, 197, 253), font=card_mono_font)
+    draw.text((610, 282), "Pub/Sub BQ Subscriptions [Default: $0 Compute]", fill=(255, 255, 255), font=card_title_font)
+    draw.text((610, 308), "raw_access_to_bq & raw_network_to_bq", fill=(147, 197, 253), font=card_mono_font)
     draw.rounded_rectangle([(610, 332), (950, 356)], radius=6, fill=(8, 47, 73), outline=(2, 132, 199), width=1)
-    draw.text((620, 337), "Dataflow: pubsub_to_bigquery_dataflow.py", fill=(186, 230, 253), font=card_mono_font)
+    draw.text((620, 337), "Direct Ingest | [Optional: Dataflow Beam]", fill=(186, 230, 253), font=card_mono_font)
 
     # Direct BQ
     draw.rounded_rectangle([(1080, 270), (1460, 370)], radius=14, fill=(15, 23, 42), outline=(6, 182, 212), width=2)
@@ -486,17 +486,17 @@ def create_png():
     draw_arrow(draw, [(1040, 550), (1040, 590)], color=(245, 158, 11), width=3, direction="down")
 
     # 4. Detection Engines
-    # Continuous Query
-    draw.rounded_rectangle([(240, 590), (740, 675)], radius=14, fill=(28, 25, 23), outline=(245, 158, 11), width=2)
-    draw.text((265, 602), "BigQuery Continuous Query", fill=(255, 255, 255), font=card_title_font)
-    draw.text((265, 626), "continuous_query.sql", fill=(253, 230, 138), font=card_mono_font)
-    draw.text((265, 648), "Tumbling window (2m) -> Exports alerts >= 100 to Pub/Sub", fill=(214, 211, 209), font=card_sub_font)
+    # Scheduled Detector (Default)
+    draw.rounded_rectangle([(240, 590), (740, 675)], radius=14, fill=(2, 44, 34), outline=(16, 185, 129), width=2)
+    draw.text((265, 602), "Scheduled Threat Detector [Default: $0 Idle]", fill=(255, 255, 255), font=card_title_font)
+    draw.text((265, 626), "adk_agent.threat_detector (Cloud Run Job)", fill=(110, 231, 183), font=card_mono_font)
+    draw.text((265, 648), "Closed 2m windows -> Idempotent MERGE -> Pub/Sub", fill=(167, 243, 208), font=card_sub_font)
 
-    # Threat Scanner
+    # Continuous Query (Optional)
     draw.rounded_rectangle([(820, 590), (1320, 675)], radius=14, fill=(28, 25, 23), outline=(245, 158, 11), width=2)
-    draw.text((845, 602), "BigQuery Threat Scanner", fill=(255, 255, 255), font=card_title_font)
-    draw.text((845, 626), "src.demo.adk_agent.threat_scanner", fill=(253, 230, 138), font=card_mono_font)
-    draw.text((845, 648), "Active daemon polling BQ for anomalous threat thresholds", fill=(214, 211, 209), font=card_sub_font)
+    draw.text((845, 602), "BQ Continuous Query [Optional / Benchmark]", fill=(255, 255, 255), font=card_title_font)
+    draw.text((845, 626), "continuous_query.sql (Enterprise Reservation)", fill=(253, 230, 138), font=card_mono_font)
+    draw.text((845, 648), "Tumbling window (2m) -> Exports alerts >= 100 to Pub/Sub", fill=(214, 211, 209), font=card_sub_font)
 
     # Connectors to ADK Orchestrator
     draw_arrow(draw, [(490, 675), (490, 705), (670, 705), (670, 730)], color=(16, 185, 129), width=3, direction="down")

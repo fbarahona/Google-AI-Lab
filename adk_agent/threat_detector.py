@@ -383,7 +383,38 @@ class ThreatDetector:
             except Exception as e:
                 logger.error("Failed to update status for DEAD_LETTERED alert %s: %s", alert_id, e)
 
+        # Log count of unmatched orphaned dead-letter records (e.g. malformed payloads)
+        self._log_unmatched_dead_letters()
+
         return handled
+
+    def _log_unmatched_dead_letters(self) -> int:
+        """
+        Queries and logs the count of orphaned dead-letter records that do not match
+        any alert in the `alerts` table (e.g., malformed payloads or invalid contracts
+        rejected with HTTP 400 that exhausted Pub/Sub retries).
+        """
+        unmatched_query = f"""
+        SELECT COUNT(1) AS unmatched_count
+        FROM `{self.project_id}.{self.dataset_id}.alerts_dead_letter` dlq
+        LEFT JOIN `{self.project_id}.{self.dataset_id}.alerts` a
+          ON JSON_VALUE(dlq.attributes, '$.alert_id') = a.alert_id
+        WHERE a.alert_id IS NULL;
+        """
+        job_config = bigquery.QueryJobConfig(maximum_bytes_billed=self.max_bytes_billed)
+        try:
+            query_job = self.bq_client.query(unmatched_query, job_config=job_config)
+            rows = list(query_job.result())
+            unmatched_count = rows[0]["unmatched_count"] if rows else 0
+            if unmatched_count > 0:
+                logger.warning(
+                    "Detected %d unmatched orphaned message(s) in %s.alerts_dead_letter with no matching alert in alerts table.",
+                    unmatched_count, self.dataset_id,
+                )
+            return int(unmatched_count)
+        except Exception as e:
+            logger.warning("Unmatched dead-letter query failed: %s", e)
+            return 0
 
 
 def main():

@@ -167,13 +167,13 @@
     <text x="30" y="81" class="card-sub" fill="#7dd3fc">⚡ Batch Loader: <tspan class="card-mono" fill="#bae6fd">gcs_to_bigquery_loader.py</tspan></text>
   </g>
 
-  <!-- Sink 2: Cloud Pub/Sub -->
+  <!-- Sink 2: Cloud Pub/Sub Direct BigQuery Ingestion -->
   <g transform="translate(590, 270)" filter="url(#shadow)">
     <rect width="380" height="100" rx="14" fill="url(#pipelineGrad)" stroke="#0ea5e9" stroke-width="1.8"/>
-    <text x="20" y="30" class="card-title">📨 Cloud Pub/Sub Topic</text>
-    <text x="20" y="52" class="card-mono">cymbal_cyber_raw_logs</text>
+    <text x="20" y="30" class="card-title">📨 Pub/Sub BQ Subscriptions [Default]</text>
+    <text x="20" y="52" class="card-mono">raw_access_to_bq &amp; raw_network_to_bq</text>
     <rect x="20" y="65" width="340" height="24" rx="6" fill="#082f49" stroke="#0284c7" stroke-width="1"/>
-    <text x="30" y="81" class="card-sub" fill="#7dd3fc">⚡ Dataflow: <tspan class="card-mono" fill="#bae6fd">pubsub_to_bigquery_dataflow.py</tspan></text>
+    <text x="30" y="81" class="card-sub" fill="#7dd3fc">⚡ Direct $0 Ingest • <tspan class="card-mono" fill="#bae6fd">[Optional: Dataflow Beam]</tspan></text>
   </g>
 
   <!-- Sink 3: Direct BigQuery Streaming -->
@@ -225,20 +225,20 @@
   <path d="M 1040 550 L 1040 585" fill="none" stroke="#f59e0b" stroke-width="2.5" marker-end="url(#arrowYellow)"/>
 
   <!-- ==================== 4. DETECTION & STREAM ANALYTICS ENGINES ==================== -->
-  <!-- Engine 1: Continuous Query -->
+  <!-- Engine 1: Scheduled Threat Detector (Cloud Run Job) -->
   <g transform="translate(240, 590)" filter="url(#shadow)">
-    <rect width="500" height="85" rx="14" fill="url(#detectGrad)" stroke="#f59e0b" stroke-width="1.8"/>
-    <text x="25" y="30" class="card-title">⚡ BigQuery Continuous Query</text>
-    <text x="25" y="50" class="card-mono">continuous_query.sql</text>
-    <text x="25" y="70" class="card-sub" fill="#fde68a">Temporal tumbling window (2m) • Exports alerts &gt;= 100 to Pub/Sub</text>
+    <rect width="500" height="85" rx="14" fill="url(#detectGrad)" stroke="#10b981" stroke-width="1.8"/>
+    <text x="25" y="30" class="card-title">🎯 Scheduled Threat Detector (Cloud Run Job) [Default]</text>
+    <text x="25" y="50" class="card-mono">adk_agent.threat_detector (2m Cloud Scheduler)</text>
+    <text x="25" y="70" class="card-sub" fill="#6ee7b7">Closed 2m windows • Idempotent MERGE • $0 idle reservation cost</text>
   </g>
 
-  <!-- Engine 2: BigQuery Threat Scanner -->
+  <!-- Engine 2: BigQuery Continuous Query [Optional / Benchmark Only] -->
   <g transform="translate(820, 590)" filter="url(#shadow)">
     <rect width="500" height="85" rx="14" fill="url(#detectGrad)" stroke="#f59e0b" stroke-width="1.8"/>
-    <text x="25" y="30" class="card-title">🔍 BigQuery Threat Scanner</text>
-    <text x="25" y="50" class="card-mono">src.demo.adk_agent.threat_scanner</text>
-    <text x="25" y="70" class="card-sub" fill="#fde68a">Active background daemon polling BQ for anomalous threat thresholds</text>
+    <text x="25" y="30" class="card-title">⚡ BigQuery Continuous Query [Optional / Benchmark Only]</text>
+    <text x="25" y="50" class="card-mono">continuous_query.sql (Enterprise Slot Reservation)</text>
+    <text x="25" y="70" class="card-sub" fill="#fde68a">Temporal tumbling window (2m) • Exports alerts &gt;= 100 to Pub/Sub</text>
   </g>
 
   <!-- Connectors from Detection Engines to ADK Orchestrator -->

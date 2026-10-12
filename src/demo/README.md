@@ -156,12 +156,15 @@ python -m src.demo.data_generator.log_generator --mode threat --threat-type fals
 ---
 
 ### 2. Data Pipelines to BigQuery (`src/demo/data_pipeline/`)
-- **Pub/Sub to BigQuery Dataflow Streaming Pipeline:** [`data_pipeline/pubsub_to_bigquery_dataflow.py`](data_pipeline/pubsub_to_bigquery_dataflow.py)
-  Apache Beam pipeline streaming from `cymbal_cyber_raw_logs` into BigQuery tables.
+- **Pub/Sub to BigQuery Direct Subscriptions [Default]:** Direct table ingestion configured in Terraform (`raw_access_to_bq` & `raw_network_to_bq`) using table schemas (`use_table_schema = true`) and filtered by `attributes.event_family` (`access` and `network`). Provides serverless, zero-compute-cost streaming ingestion directly into `user_access_events` and `network_events`.
+- **Scheduled Threat Detector (Cloud Run Job) [Default]:** [`adk_agent/threat_detector.py`](/workspaces/Google/adk_agent/threat_detector.py)
+  Scheduled micro-batch detector triggered every 2 minutes by Cloud Scheduler. Evaluates 2-minute tumbling windows closed >60s ago via idempotent BigQuery `MERGE`, publishing alert contract JSON to Pub/Sub with $0 continuous slot reservation cost.
+- **Pub/Sub to BigQuery Dataflow Streaming Pipeline [Optional / Benchmark Only]:** [`data_pipeline/pubsub_to_bigquery_dataflow.py`](data_pipeline/pubsub_to_bigquery_dataflow.py)
+  Apache Beam pipeline streaming from `cymbal_cyber_raw_logs` into BigQuery tables. Optional custom ETL alternative; gated off by default to avoid streaming VM charges. (Do not run concurrently with direct subscriptions to prevent duplicate rows).
+- **BigQuery Continuous Query [Optional / Benchmark Only]:** [`data_pipeline/continuous_query.sql`](data_pipeline/continuous_query.sql)
+  Continuous stream query running temporal joins and aggregating 2-minute tumbling windows into `cymbal_cyber_alerts`. Requires 100 Enterprise Edition reservation slots.
 - **GCS to BigQuery Batch Loader:** [`data_pipeline/gcs_to_bigquery_loader.py`](data_pipeline/gcs_to_bigquery_loader.py)
   Loads NDJSON log files from Cloud Storage into partitioned/clustered tables.
-- **BigQuery Continuous Query:** [`data_pipeline/continuous_query.sql`](data_pipeline/continuous_query.sql)
-  Continuous stream query running temporal joins and aggregating 2-minute tumbling windows into `cymbal_cyber_alerts`.
 
 ---
 
@@ -267,16 +270,18 @@ terraform apply -var="project_id=<PROJECT_ID>" -auto-approve
 **Resources provisioned:**
 - **APIs:** BigQuery, Vertex AI, Pub/Sub, Storage, Cloud Run, Dataflow, IAM Credentials, Resource Manager.
 - **IAM:** Least-privilege dedicated service accounts:
-  1. `continuous_query_sa` (`bq-continuous-query-sa`): BigQuery dataset READER, Pub/Sub alerts topic publisher.
-  2. `agent_sa` (`cymbal-adk-agent-sa`): Dataset READER, table-level dataEditor on `soc_tickets` and `adk_threat_assessment`, GCS screenshots viewer, GCS escalations user, self-token-creation.
-  3. `invoker_sa` (`pubsub-invoker-sa`): Cloud Run invoker role for authenticated Pub/Sub push notifications.
-  4. `dataflow_sa` (`cymbal-dataflow-pipeline-sa`): Dataflow worker, dataset WRITER, raw logs subscriber, staging admin.
-- **Compute:** Cloud Run deployment (`cymbal-cyber-adk-agent`) hosting the multi-agent FastAPI app with 600s execution timeout.
+  1. `detector_sa` (`threat-detector-job-sa`) **[Default]**: Scheduled Threat Detector Cloud Run Job identity. BigQuery jobUser, dataset READER, table dataEditor on `alerts`, `alerts_dead_letter`, and `soc_tickets`, Pub/Sub alerts topic publisher.
+  2. `agent_sa` (`cymbal-adk-agent-sa`) **[Default]**: Multi-Agent runtime identity. Dataset READER, table dataEditor on `soc_tickets`, `adk_threat_assessment`, and `alerts` (status updates), GCS screenshots viewer, GCS escalations user, self-token-creation for V4 signed URLs.
+  3. `invoker_sa` (`pubsub-invoker-sa`) **[Default]**: Cloud Run invoker role for authenticated Pub/Sub push notifications.
+  4. `pubsub_sa` (`service-<PROJECT_NUMBER>@gcp-sa-pubsub.iam.gserviceaccount.com`) **[Default]**: Google-managed Pub/Sub service agent. Table dataEditor on `user_access_events`, `network_events`, and `alerts_dead_letter`, dataset `metadataViewer` (for `use_table_schema`), DLQ topic publisher, and push subscription subscriber.
+  5. `continuous_query_sa` (`bq-continuous-query-sa`) **[Optional / Benchmark Only]**: Headless identity running BigQuery Continuous Queries. Dataset READER, Pub/Sub alerts topic publisher.
+  6. `dataflow_sa` (`cymbal-dataflow-pipeline-sa`) **[Optional / Benchmark Only]**: Dataflow worker, dataset WRITER, raw logs subscriber, staging admin (only provisioned when `enable_dataflow_streaming = true`).
+- **Compute:** Cloud Run deployment (`cymbal-cyber-adk-agent`) hosting the multi-agent FastAPI app with 600s execution timeout, and Cloud Run Job (`threat-detector`) executing scheduled micro-batch detections.
   *(Architectural Note: Cloud Run was chosen over Vertex AI Agent Runtime to natively support Pub/Sub OIDC push tokens without an external token-exchange relay).*
 - **Storage:** 4 GCS Buckets (staging, escalations, screenshots, raw_logs) configured with `public_access_prevention = "enforced"`.
 - **BigQuery:** Dataset `Cymbal_Cyber` with `delete_contents_on_destroy = true`, partitioned & clustered tables, centralized scalar UDFs (`calculate_threat_score`, `is_malicious_domain`, `is_malicious_command`), and optional Enterprise continuous query reservation (`enable_continuous_query`).
-- **Pub/Sub:** Topics `cymbal_cyber_alerts` and `cymbal_cyber_raw_logs` with subscriptions, metadata forwarding, and OIDC push configurations.
-- **Dataflow:** Streaming pipeline using `PubSub_Subscription_to_BigQuery` ingesting raw logs directly into BigQuery.
+- **Pub/Sub:** Topics `cymbal_cyber_alerts`, `cymbal_cyber_alerts_dlq`, and `cymbal_cyber_raw_logs` with direct BigQuery subscriptions, dead-letter policies, and OIDC push configurations.
+- **Dataflow:** Optional Apache Beam streaming pipeline (`PubSub_Subscription_to_BigQuery`) ingesting raw logs directly into BigQuery.
 
 ---
 
@@ -284,7 +289,7 @@ terraform apply -var="project_id=<PROJECT_ID>" -auto-approve
 
 **⚠️ Running Costs Warning & Gating:**
 While the local Python runner is free, deploying the live infrastructure via Terraform defaults to a **zero-continuous-cost serverless baseline**:
-- **Default Trigger Path ($0/mo continuous):** Cloud Scheduler triggers Cloud Run (`/apps/adk_agent/trigger/scan`) every 2 minutes using OIDC tokens to scan BigQuery for unassessed threat events without requiring slot reservations.
+- **Default Trigger Path ($0/mo continuous):** Cloud Scheduler triggers the `threat-detector` Cloud Run Job every 2 minutes via OAuth, evaluating 2-minute tumbling windows via BigQuery MERGE and pushing detected alerts to the `cymbal_cyber_alerts` Pub/Sub topic without requiring slot reservations.
 - **BigQuery Continuous Queries (`enable_continuous_query = true`):** Requires a 100-slot Enterprise Edition reservation. Slot reservations bill continuously 24/7 at **~$0.06/slot-hour = ~$6.00/hour (~$4,320/month) whether or not a query is running**. Canceling the continuous query job saves no money; only disabling the reservation in Terraform (`enable_continuous_query = false && terraform apply`) stops slot charges. When enabled, launch the streaming query using:
   ```bash
   ./data_pipeline/launch_continuous_query.sh <PROJECT_ID>

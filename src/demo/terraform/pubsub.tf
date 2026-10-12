@@ -84,7 +84,8 @@ resource "google_pubsub_subscription" "alerts_dlq_to_bq" {
 
   depends_on = [
     google_bigquery_table.alerts_dead_letter,
-    google_bigquery_table_iam_member.pubsub_sa_dlq_editor
+    google_bigquery_table_iam_member.pubsub_sa_dlq_editor,
+    google_bigquery_dataset_iam_member.pubsub_sa_dataset_metadata
   ]
 }
 
@@ -120,7 +121,8 @@ resource "google_pubsub_subscription" "raw_access_to_bq" {
 
   depends_on = [
     google_bigquery_table.user_access_events,
-    google_bigquery_table_iam_member.pubsub_sa_access_events_editor
+    google_bigquery_table_iam_member.pubsub_sa_access_events_editor,
+    google_bigquery_dataset_iam_member.pubsub_sa_dataset_metadata
   ]
 }
 
@@ -143,7 +145,8 @@ resource "google_pubsub_subscription" "raw_network_to_bq" {
 
   depends_on = [
     google_bigquery_table.network_events,
-    google_bigquery_table_iam_member.pubsub_sa_network_events_editor
+    google_bigquery_table_iam_member.pubsub_sa_network_events_editor,
+    google_bigquery_dataset_iam_member.pubsub_sa_dataset_metadata
   ]
 }
 

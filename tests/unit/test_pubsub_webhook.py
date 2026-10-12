@@ -258,4 +258,4 @@ def test_pubsub_push_rejects_non_json_binary_base64_payload():
 
     response = client.post("/apps/adk_agent/trigger/pubsub", json=payload)
     assert response.status_code == 400
-    assert "Bad Request" in response.json().get("detail", "")
+    assert response.json().get("detail") == "Malformed Pub/Sub payload"

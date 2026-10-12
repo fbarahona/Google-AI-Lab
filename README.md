@@ -100,12 +100,12 @@ This project deploys the ADK Multi-Agent Team to **Google Cloud Run** rather tha
    - **`bq_investigation_agent`**: 24-hour behavioral profiling querying BigQuery (`user_access_events` and `network_events`).
    - **`visual_analysis_agent`**: Multimodal Gemini vision analysis and OCR inspecting user desktop forensic screenshots.
    - **`soc_ticketing_agent`**: Consolidates forensic findings into a structured Security Incident Report and dispatches formal incident tickets.
-2. **Scheduled Threat Detector (`adk_agent/threat_detector.py`)**:
-   - Production micro-batch detector running as a Cloud Run Job. Aggregates 2-minute tumbling windows in BigQuery via idempotent MERGE, publishes unified alert contract JSON to Pub/Sub, and auto-escalates dead-lettered alerts. (Legacy scanner retained at `adk_agent/threat_scanner.py`).
+2. **Scheduled Threat Detector (`adk_agent/threat_detector.py`) [Default]**:
+   - Production micro-batch detector running as a Cloud Run Job. Aggregates 2-minute tumbling windows in BigQuery via idempotent MERGE, publishes unified alert contract JSON to Pub/Sub, and auto-escalates dead-lettered alerts with $0 slot reservation cost. (Legacy scanner retained at `adk_agent/threat_scanner.py`).
 3. **Synthetic Log Generator (`src/demo/data_generator/`)**:
    - High-fidelity synthetic event generator simulating access and network logs with ad-hoc threat injection (both APT attacks and benign administrative false positives).
 4. **Data Engineering Pipelines (`src/demo/data_pipeline/`)**:
-   - Ingestion and streaming pipelines: Direct Pub/Sub-to-BigQuery subscriptions, BigQuery Continuous Queries, and an optional Dataflow Beam pipeline (custom ETL alternative to direct subscriptions; do not run concurrently with direct subscriptions to avoid duplicate event rows).
+   - Ingestion and streaming pipelines: Direct Pub/Sub-to-BigQuery subscriptions **[Default]**, BigQuery Continuous Queries **[Optional / Benchmark Only]**, and an optional Dataflow Beam pipeline **[Optional / Benchmark Only]** (custom ETL alternative to direct subscriptions; do not run concurrently with direct subscriptions to avoid duplicate event rows).
 5. **Interactive SOC Analyst Console (`src/demo/soc_ticketing/`)**:
    - Full-featured Streamlit console supporting queue management, visual screenshot preview, ADK forensic report inspection, and analyst triage.
 6. **Zero-Cloud Local Runner (`src/demo/local_runner.py`)**:

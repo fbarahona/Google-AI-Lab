@@ -462,7 +462,7 @@ async def handle_pubsub_trigger(
         logger.warning("Rejected malformed Pub/Sub payload: %s", err)
         raise HTTPException(
             status_code=400,
-            detail=f"Bad Request: Malformed Pub/Sub payload ({err})",
+            detail="Malformed Pub/Sub payload",
         ) from err
     user_id = alert_data.get("user_id") or "pubsub-automator"
     session_id = f"pubsub-{user_id}-{int(time.time())}"

@@ -77,7 +77,7 @@ def generate_malicious_threat_scenario(
 
     # 2. Correlated successful compromise and subsequent hostile activity
     for _ in range(num_correlated_pairs):
-        login_ts = now - timedelta(minutes=random.randint(1, 5), seconds=random.randint(1, 45))
+        login_ts = now - timedelta(minutes=random.randint(3, 8), seconds=random.randint(1, 45))
         access_events.append({
             "event_timestamp": login_ts.isoformat(),
             "event_type": "login_success",
