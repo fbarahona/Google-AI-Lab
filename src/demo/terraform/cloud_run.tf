@@ -15,7 +15,7 @@ resource "google_cloud_run_v2_job" "threat_detector" {
     template {
       service_account = google_service_account.detector_sa.email
       max_retries     = 1
-      timeout         = "300s"
+      timeout         = "240s"
 
       containers {
         # Placeholder until the agent image is built/pushed (same image as the webhook service)
@@ -73,13 +73,13 @@ resource "google_cloud_run_v2_job" "threat_detector" {
   ]
 }
 
-# Cloud Scheduler Job running the Threat Detector every 2 minutes
+# Cloud Scheduler Job running the Threat Detector every 5 minutes
 resource "google_cloud_scheduler_job" "threat_detector_schedule" {
   project          = var.project_id
-  name             = "threat-detector-2min-trigger"
+  name             = "threat-detector-trigger"
   region           = var.region
-  description      = "Triggers the threat-detector Cloud Run Job every 2 minutes for idempotent micro-batch threat evaluation."
-  schedule         = "*/2 * * * *"
+  description      = "Triggers the threat-detector Cloud Run Job every 5 minutes for idempotent micro-batch threat evaluation."
+  schedule         = "*/5 * * * *"
   time_zone        = "UTC"
   attempt_deadline = "320s"
 

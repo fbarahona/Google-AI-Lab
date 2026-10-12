@@ -203,3 +203,48 @@ def test_webhook_oidc_rejects_invalid_bearer_token_in_cloud_mode(monkeypatch):
     response = client.post("/apps/adk_agent/trigger/pubsub", json={"message": {}}, headers=headers)
     assert response.status_code == 403
     assert "Invalid OIDC bearer token" in response.json()["detail"]
+
+
+def test_webhook_oidc_accepts_service_uri_audience(monkeypatch):
+    """Verify that when EXPECTED_OIDC_AUDIENCE is set to the Cloud Run service URI,
+    OIDC token verification validates tokens addressed to the root service URI."""
+    from unittest.mock import patch
+
+    monkeypatch.setenv("LOCAL_MODE", "false")
+    monkeypatch.setenv("DISABLE_AUTH", "false")
+    monkeypatch.setenv("EXPECTED_OIDC_AUDIENCE", "https://cymbal-cyber-adk-agent-12345.us-east1.run.app")
+    monkeypatch.setenv("EXPECTED_INVOKER_EMAIL", "pubsub-invoker-sa@proj.iam.gserviceaccount.com")
+
+    client = TestClient(app)
+
+    with patch("google.oauth2.id_token.verify_oauth2_token") as mock_verify:
+        mock_verify.return_value = {
+            "email": "pubsub-invoker-sa@proj.iam.gserviceaccount.com",
+            "email_verified": True,
+            "aud": "https://cymbal-cyber-adk-agent-12345.us-east1.run.app",
+        }
+        headers = {"Authorization": "Bearer valid.google.token"}
+        response = client.post("/apps/adk_agent/trigger/pubsub", json={"message": {}}, headers=headers)
+        # Should not be rejected by OIDC auth (401 or 403)
+        assert response.status_code not in (401, 403)
+        assert mock_verify.called
+
+
+# ==============================================================================
+# 4. CLOUD RUN PORT CONFIGURATION TESTS
+# ==============================================================================
+
+def test_cloud_run_port_configuration_default(monkeypatch):
+    """Verify that port defaults to 8080 when PORT env var is unset."""
+    from adk_agent.fast_api_app import get_app_port
+
+    monkeypatch.delenv("PORT", raising=False)
+    assert get_app_port() == 8080
+
+
+def test_cloud_run_port_configuration_custom(monkeypatch):
+    """Verify that custom PORT env var is respected."""
+    from adk_agent.fast_api_app import get_app_port
+
+    monkeypatch.setenv("PORT", "9090")
+    assert get_app_port() == 9090

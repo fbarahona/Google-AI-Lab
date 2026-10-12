@@ -363,11 +363,29 @@ def verify_incoming_oidc_token(request: Request) -> dict[str, Any]:
         claims = None
         expected_audience = os.getenv("EXPECTED_OIDC_AUDIENCE")
         if expected_audience:
-            claims = id_token.verify_oauth2_token(
-                token,
-                google_requests.Request(),
-                audience=expected_audience,
-            )
+            candidate_audiences = [expected_audience]
+            clean_aud = expected_audience.replace("https://", "").replace("http://", "")
+            if "/" in clean_aud:
+                parts = expected_audience.split("/")
+                root_uri = f"{parts[0]}//{parts[2]}"
+                candidate_audiences.append(root_uri)
+            else:
+                candidate_audiences.append(f"{expected_audience.rstrip('/')}/apps/adk_agent/trigger/pubsub")
+                candidate_audiences.append(f"{expected_audience.rstrip('/')}/trigger/pubsub")
+
+            last_exc = None
+            for aud in candidate_audiences:
+                try:
+                    claims = id_token.verify_oauth2_token(
+                        token,
+                        google_requests.Request(),
+                        audience=aud,
+                    )
+                    break
+                except Exception as e:
+                    last_exc = e
+            if not claims and last_exc:
+                raise last_exc
         else:
             # Fallback: derive candidate audiences accounting for Cloud Run TLS termination / proxy headers
             host = request.headers.get("x-forwarded-host") or request.headers.get("host")
@@ -617,8 +635,14 @@ async def handle_pubsub_trigger(
         _IN_PROGRESS_MESSAGES.pop(message_id, None)
 
 
+def get_app_port() -> int:
+    """Resolves the application listening port, defaulting to Cloud Run standard 8080."""
+    return int(os.getenv("PORT", 8080))
+
+
 # Main execution
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port)

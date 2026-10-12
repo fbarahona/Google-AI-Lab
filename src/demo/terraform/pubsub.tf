@@ -29,7 +29,7 @@ resource "google_pubsub_subscription" "adk_agent_trigger" {
 
     oidc_token {
       service_account_email = google_service_account.invoker_sa.email
-      audience              = local.agent_push_endpoint
+      audience              = local.agent_service_url
     }
 
     no_wrapper {

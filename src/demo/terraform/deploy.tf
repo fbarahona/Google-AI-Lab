@@ -74,7 +74,7 @@ resource "google_cloud_run_v2_service" "adk_agent_service" {
       }
       env {
         name  = "EXPECTED_OIDC_AUDIENCE"
-        value = local.agent_push_endpoint
+        value = local.agent_service_url
       }
       env {
         name  = "EXPECTED_INVOKER_EMAIL"
