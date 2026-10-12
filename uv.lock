@@ -509,6 +509,7 @@ dependencies = [
     { name = "gcsfs" },
     { name = "google-adk", extra = ["bigquery-analytics", "gcp", "otel-gcp"] },
     { name = "google-cloud-logging" },
+    { name = "httpx2" },
     { name = "opentelemetry-resourcedetector-gcp" },
     { name = "python-dotenv" },
 ]
@@ -541,6 +542,7 @@ requires-dist = [
     { name = "google-adk", extras = ["eval"], marker = "extra == 'eval'", specifier = ">=2.9.2,<3.0.0" },
     { name = "google-cloud-aiplatform", extras = ["evaluation"], marker = "extra == 'eval'", specifier = ">=1.156.0,<2.0.0" },
     { name = "google-cloud-logging", specifier = ">=3.12.0,<4.0.0" },
+    { name = "httpx2", specifier = ">=2.13.1" },
     { name = "opentelemetry-resourcedetector-gcp", specifier = "<=1.12.0a0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "ruff", marker = "extra == 'lint'", specifier = ">=0.4.6,<1.0.0" },
