@@ -248,3 +248,19 @@ def test_cloud_run_port_configuration_custom(monkeypatch):
 
     monkeypatch.setenv("PORT", "9090")
     assert get_app_port() == 9090
+
+
+# ==============================================================================
+# 5. INVESTIGATION AGENT SQL ELIMINATION TESTS
+# ==============================================================================
+
+def test_bq_investigation_agent_does_not_have_execute_sql():
+    """Verify that bq_investigation_agent does not expose execute_sql,
+    enforcing that the LLM cannot write or execute arbitrary SQL queries."""
+    from adk_agent.agent import bq_investigation_agent
+
+    tool_names = [getattr(t, "__name__", getattr(t, "name", str(t))) for t in bq_investigation_agent.tools]
+    assert "get_entity_behavioral_profile" in tool_names
+    assert "execute_sql" not in tool_names
+    assert len(bq_investigation_agent.tools) == 1
+

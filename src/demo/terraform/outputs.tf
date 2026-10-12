@@ -108,6 +108,11 @@ output "pubsub_raw_events_dlq_topic" {
   value       = google_pubsub_topic.raw_events_dlq.id
 }
 
+output "pubsub_raw_events_dlq_subscription" {
+  description = "Dead-letter pull subscription retaining raw log ingestion failure messages for 7 days."
+  value       = google_pubsub_subscription.raw_events_dlq_sub.id
+}
+
 output "table_alerts" {
   description = "BigQuery alerts table (keyed by alert_id, status lifecycle)."
   value       = "${var.project_id}.${google_bigquery_dataset.cyber_dataset.dataset_id}.${google_bigquery_table.alerts.table_id}"

@@ -22,8 +22,10 @@ def test_bq_investigation_agent_specification():
     """Validates the exact required name, description, and tools for bq_investigation_agent."""
     assert bq_investigation_agent.name == "bq_investigation_agent"
     assert "BigQuery" in bq_investigation_agent.description
-    tool_names = [getattr(t, "name", str(t)) for t in bq_investigation_agent.tools]
+    tool_names = [getattr(t, "__name__", getattr(t, "name", str(t))) for t in bq_investigation_agent.tools]
     assert any("get_entity_behavioral_profile" in tn for tn in tool_names)
+    assert not any("execute_sql" in tn for tn in tool_names)
+    assert len(bq_investigation_agent.tools) == 1
 
 
 def test_visual_analysis_agent_specification():

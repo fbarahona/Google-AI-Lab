@@ -626,6 +626,7 @@ def get_entity_behavioral_profile(
 def execute_sql(
     query: str,
     tool_context: ToolContext | None = None,
+    *,
     allow_metadata: bool = False,
     allowed_dataset: str | None = None
 ) -> str:
@@ -634,11 +635,16 @@ def execute_sql(
     Sandboxes dataset references, blocks unauthorized access to INFORMATION_SCHEMA,
     and enforces maximum_bytes_billed scan ceilings.
 
+    Security Policy:
+        Administrative tool for analyst queries. Sandboxing parameters (allow_metadata,
+        allowed_dataset) are keyword-only internal arguments that cannot be manipulated
+        by agent tool callers.
+
     Args:
         query: BigQuery SQL query to execute.
         tool_context: ADK ToolContext for tracking execution state.
-        allow_metadata: Set to True only when specifically authorized for schema introspection.
-        allowed_dataset: Specific dataset to restrict queries to (defaults to security dataset).
+        allow_metadata: (Internal only) Set to True only when authorized for schema introspection.
+        allowed_dataset: (Internal only) Specific dataset to restrict queries to (defaults to security dataset).
 
     Returns:
         JSON string of query results.

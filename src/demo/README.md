@@ -5,7 +5,7 @@ This demonstration showcases a reference demo with production-style patterns for
 It seamlessly bridges **Cloud Architecture**, **Stream Data Engineering**, **Agentic Multi-Agent AI**, and **SOC Operations**:
 - **Synthetic Log Generator:** Modular Python tool generating access and network logs with ad-hoc threat injection (both APT attacks and administrative false positives).
 - **Zero-Cost Direct Ingestion:** Pub/Sub to BigQuery subscriptions using direct table schemas (`use_table_schema=true`, `drop_unknown_fields=true`) filtered by `attributes.event_family` (`access` and `network`), replacing expensive always-on Dataflow VMs.
-- **Budget-Optimized Detection Engine:** A scheduled micro-batch Cloud Run Job (`threat-detector`) running every 2 minutes via Cloud Scheduler, evaluating 2-minute tumbling windows closed >60s ago and idempotently executing `MERGE` on `alert_id`. Cuts always-on cost from ~$4,300/month to near zero.
+- **Budget-Optimized Detection Engine:** A scheduled micro-batch Cloud Run Job (`threat-detector`) running every 5 minutes via Cloud Scheduler, evaluating 2-minute tumbling windows closed >60s ago and idempotently executing `MERGE` on `alert_id`. Cuts always-on cost from ~$4,300/month to near zero (alert latency ~5 to 7 minutes with late-data allowance).
 - **Optional Continuous Query & Dataflow Engines:** Continuous queries (with BigQuery reservations) and Dataflow streaming pipelines remain available as optional, on-demand toggles for high-throughput live demos.
 - **Unified Alert Contract:** All detection engines publish identical contract messages (`alert_id`, `engine`, `schema_version`, window timestamps, indicator counts) to topic `cymbal_cyber_alerts`.
 - **Dead-Letter Auto-Escalation:** Alerts failing 5 webhook delivery attempts are routed to `cymbal_cyber_alerts_dlq`, logged to BigQuery `alerts_dead_letter`, and auto-escalated to SOC tickets.
@@ -48,7 +48,7 @@ It seamlessly bridges **Cloud Architecture**, **Stream Data Engineering**, **Age
                                     ├── adk_threat_assessment
                                     └── soc_tickets
                                                  │
-                                                 │ Cloud Scheduler (every 2m)
+                                                 │ Cloud Scheduler (every 5m)
                                                  ▼
                                     ┌─────────────────────────────┐
                                     │ Cloud Run Job: threat-detector
@@ -158,7 +158,7 @@ python -m src.demo.data_generator.log_generator --mode threat --threat-type fals
 ### 2. Data Pipelines to BigQuery (`src/demo/data_pipeline/`)
 - **Pub/Sub to BigQuery Direct Subscriptions [Default]:** Direct table ingestion configured in Terraform (`raw_access_to_bq` & `raw_network_to_bq`) using table schemas (`use_table_schema = true`, `drop_unknown_fields = true`) and filtered by `attributes.event_family` (`access` and `network`). Provides serverless, zero-compute-cost streaming ingestion directly into `user_access_events` and `network_events`.
 - **Scheduled Threat Detector (Cloud Run Job) [Default]:** [`adk_agent/threat_detector.py`](/workspaces/Google/adk_agent/threat_detector.py)
-  Scheduled micro-batch detector triggered every 2 minutes by Cloud Scheduler. Evaluates 2-minute tumbling windows closed >60s ago via idempotent BigQuery `MERGE`, publishing alert contract JSON to Pub/Sub with $0 continuous slot reservation cost.
+  Scheduled micro-batch detector triggered every 5 minutes by Cloud Scheduler. Evaluates 2-minute tumbling windows closed >60s ago via idempotent BigQuery `MERGE`, publishing alert contract JSON to Pub/Sub with $0 continuous slot reservation cost (alert latency ~5 to 7 minutes with late-data allowance).
 - **Pub/Sub to BigQuery Dataflow Streaming Pipeline [Optional / Benchmark Only]:** [`data_pipeline/pubsub_to_bigquery_dataflow.py`](data_pipeline/pubsub_to_bigquery_dataflow.py)
   Apache Beam pipeline streaming from `cymbal_cyber_raw_logs` into BigQuery tables. Optional custom ETL alternative; gated off by default to avoid streaming VM charges. (Do not run concurrently with direct subscriptions to prevent duplicate rows).
 - **BigQuery Continuous Query [Optional / Benchmark Only]:** [`data_pipeline/continuous_query.sql`](data_pipeline/continuous_query.sql)
@@ -277,7 +277,7 @@ terraform apply -var="project_id=<PROJECT_ID>" -auto-approve
 
 **⚠️ Running Costs Warning & Gating:**
 While the local Python runner is free, deploying the live infrastructure via Terraform defaults to a **zero-continuous-cost serverless baseline**:
-- **Default Trigger Path ($0/mo continuous):** Cloud Scheduler triggers the `threat-detector` Cloud Run Job every 2 minutes via OAuth, evaluating 2-minute tumbling windows via BigQuery MERGE and pushing detected alerts to the `cymbal_cyber_alerts` Pub/Sub topic without requiring slot reservations.
+- **Default Trigger Path ($0/mo continuous):** Cloud Scheduler triggers the `threat-detector` Cloud Run Job every 5 minutes via OAuth, evaluating 2-minute tumbling windows closed >60s ago via BigQuery MERGE and pushing detected alerts to the `cymbal_cyber_alerts` Pub/Sub topic without requiring slot reservations. With the 5-minute scheduler interval and 60-second late-data allowance, expect alert latency of ~5 to 7 minutes from initial event occurrence.
 - **BigQuery Continuous Queries (`enable_continuous_query = true`):** Requires a 100-slot Enterprise Edition reservation. Slot reservations bill continuously 24/7 at **~$0.06/slot-hour = ~$6.00/hour (~$4,320/month) whether or not a query is running**. Canceling the continuous query job saves no money; only disabling the reservation in Terraform (`enable_continuous_query = false && terraform apply`) stops slot charges. When enabled, launch the streaming query using:
   ```bash
   ./data_pipeline/launch_continuous_query.sh <PROJECT_ID>

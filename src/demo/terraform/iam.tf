@@ -252,6 +252,24 @@ resource "google_pubsub_subscription_iam_member" "pubsub_sa_alerts_subscriber" {
   depends_on   = [google_project_service_identity.pubsub_sa]
 }
 
+# Pub/Sub SA needs subscriber on raw access events BQ subscription for dead-letter forwarding
+resource "google_pubsub_subscription_iam_member" "pubsub_sa_raw_access_subscriber" {
+  project      = var.project_id
+  subscription = google_pubsub_subscription.raw_access_to_bq.name
+  role         = "roles/pubsub.subscriber"
+  member       = "serviceAccount:${google_project_service_identity.pubsub_sa.email}"
+  depends_on   = [google_project_service_identity.pubsub_sa]
+}
+
+# Pub/Sub SA needs subscriber on raw network events BQ subscription for dead-letter forwarding
+resource "google_pubsub_subscription_iam_member" "pubsub_sa_raw_network_subscriber" {
+  project      = var.project_id
+  subscription = google_pubsub_subscription.raw_network_to_bq.name
+  role         = "roles/pubsub.subscriber"
+  member       = "serviceAccount:${google_project_service_identity.pubsub_sa.email}"
+  depends_on   = [google_project_service_identity.pubsub_sa]
+}
+
 # Least-privilege table-level dataEditor scoped strictly to the three tables written by Pub/Sub subscriptions
 resource "google_bigquery_table_iam_member" "pubsub_sa_access_events_editor" {
   project    = var.project_id

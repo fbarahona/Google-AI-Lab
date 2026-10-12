@@ -30,7 +30,7 @@ A reference demo with production-style patterns demonstrating real-time cybersec
                                     ├── adk_threat_assessment
                                     └── soc_tickets
                                                  │
-                                                 │ Cloud Scheduler (every 2m)
+                                                 │ Cloud Scheduler (every 5m)
                                                  ▼
                                     ┌─────────────────────────────┐
                                     │ Cloud Run Job: threat-detector
@@ -259,7 +259,7 @@ gcloud run jobs execute threat-detector \
 
 > **⚠️ Cloud Resource Billing Warning:**  
 > The zero-cloud local runner (`python -m src.demo.local_runner`) is free and requires zero cloud infrastructure. For cloud deployment, Terraform defaults to a **zero-continuous-cost serverless baseline** by disabling Enterprise slot reservations and continuous Dataflow workers:
-> - **Default Trigger Path ($0/mo continuous):** Cloud Scheduler triggers the `threat-detector` Cloud Run Job every 2 minutes via OAuth, evaluating 2-minute tumbling windows via BigQuery MERGE and pushing detected alerts to the `cymbal_cyber_alerts` Pub/Sub topic without requiring slot reservations.
+> - **Default Trigger Path ($0/mo continuous):** Cloud Scheduler triggers the `threat-detector` Cloud Run Job every 5 minutes via OAuth, evaluating 2-minute tumbling windows closed >60s ago via BigQuery MERGE and pushing detected alerts to the `cymbal_cyber_alerts` Pub/Sub topic without requiring slot reservations. With the 5-minute scheduler cadence and 60-second late-data allowance, alerts arrive ~5 to 7 minutes after event occurrence.
 > - **BigQuery Continuous Queries (`enable_continuous_query = true`):** Requires a 100-slot Enterprise Edition reservation. Slot reservations bill 24/7 at **~$0.06/slot-hour = ~$6.00/hour (~$4,320/month) whether or not a query is running**. Canceling the continuous query job saves no money; only disabling the reservation in Terraform (`enable_continuous_query = false && terraform apply`) stops slot billing. When enabled, submit the query via:
 >   ```bash
 >   ./src/demo/data_pipeline/launch_continuous_query.sh <PROJECT_ID>

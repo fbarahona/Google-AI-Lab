@@ -4,7 +4,7 @@ Cymbal Cyber Multi-Agent Framework
 Defines the structure and orchestration logic of the ADK multi-agent system:
 - Orchestrator: Coordinates parallel investigation and final SOC resolution
 - Sub-Agent 1: google_search_agent (Researches IP addresses from security alerts via Google Search)
-- Sub-Agent 2: bq_investigation_agent (Answers questions about BigQuery data by executing SQL queries)
+- Sub-Agent 2: bq_investigation_agent (Analyzes BigQuery behavioral telemetry using parameterized profile queries)
 - Sub-Agent 3: visual_analysis_agent (Performs multimodal forensic visual analysis of user desktop screenshots)
 - Sub-Agent 4: soc_ticketing_agent (Consolidates findings and passes tickets to the SOC ticketing system)
 """
@@ -50,7 +50,6 @@ try:
         create_rich_ticket_id,
         dispatch_to_soc_ticketing_system,
         escalate_to_human,
-        execute_sql,
         generate_signed_url,
         get_entity_behavioral_profile,
         get_gcs_uri_for_user,
@@ -63,7 +62,6 @@ except ImportError:
         create_rich_ticket_id,
         dispatch_to_soc_ticketing_system,
         escalate_to_human,
-        execute_sql,
         generate_signed_url,
         get_entity_behavioral_profile,
         get_gcs_uri_for_user,
@@ -328,6 +326,10 @@ bq_investigation_agent = Agent(
     You are a Level 1 Security Operations Center (SOC) BigQuery data investigator.
     Your task is to analyze behavioral anomalies and metrics for the entity involved in the alert.
 
+    **SECURITY POLICY & TOOL CONSTRAINTS:**
+    You MUST NOT construct or execute arbitrary SQL queries. All telemetry analysis MUST be performed exclusively
+    via `get_entity_behavioral_profile`, which executes strictly parameterized BigQuery queries against historical access and network logs.
+
     **Instructions:**
     1. Call `get_entity_behavioral_profile` passing `entity_type="user"` (or "device" / "ip") and the `entity_id` from the alert.
     2. Analyze the returned behavioral metrics:
@@ -336,8 +338,7 @@ bq_investigation_agent = Agent(
     3. Summarize your findings into clear behavioral risk indicators and conclude whether telemetry confirms an anomaly or indicates benign activity.
     """,
     output_key="bigquery_investigation_results",
-    tools=[get_entity_behavioral_profile, execute_sql],
-    before_tool_callback=forbidden_dml_check,
+    tools=[get_entity_behavioral_profile],
     before_agent_callback=before_sub_agent_starts,
     after_agent_callback=log_agent_completion
 )
