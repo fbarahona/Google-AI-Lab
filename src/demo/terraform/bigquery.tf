@@ -12,10 +12,10 @@ resource "google_bigquery_dataset" "cyber_dataset" {
 
 # 1. user_access_events Table
 resource "google_bigquery_table" "user_access_events" {
-  project             = var.project_id
-  dataset_id          = google_bigquery_dataset.cyber_dataset.dataset_id
-  table_id            = "user_access_events"
-  description         = "Logs user login attempts and session creation, linking users to assigned internal IPs."
+  project                  = var.project_id
+  dataset_id               = google_bigquery_dataset.cyber_dataset.dataset_id
+  table_id                 = "user_access_events"
+  description              = "Logs user login attempts and session creation, linking users to assigned internal IPs."
   deletion_protection      = false
   require_partition_filter = true
 
@@ -41,10 +41,10 @@ resource "google_bigquery_table" "user_access_events" {
 
 # 2. network_events Table
 resource "google_bigquery_table" "network_events" {
-  project             = var.project_id
-  dataset_id          = google_bigquery_dataset.cyber_dataset.dataset_id
-  table_id            = "network_events"
-  description         = "Logs granular network activity like DNS queries, connections, and file transfers."
+  project                  = var.project_id
+  dataset_id               = google_bigquery_dataset.cyber_dataset.dataset_id
+  table_id                 = "network_events"
+  description              = "Logs granular network activity like DNS queries, connections, and file transfers."
   deletion_protection      = false
   require_partition_filter = true
 
@@ -293,10 +293,10 @@ resource "google_bigquery_table" "user_screenshots_view" {
 
 # 8. Detection Alerts Table (Partitioned by window_end, clustered by user_id)
 resource "google_bigquery_table" "alerts" {
-  project             = var.project_id
-  dataset_id          = google_bigquery_dataset.cyber_dataset.dataset_id
-  table_id            = "alerts"
-  description         = "De-duplicated alert events detected by scheduled micro-batch detector, Dataflow, or CQ."
+  project                  = var.project_id
+  dataset_id               = google_bigquery_dataset.cyber_dataset.dataset_id
+  table_id                 = "alerts"
+  description              = "De-duplicated alert events detected by scheduled micro-batch detector, Dataflow, or CQ."
   deletion_protection      = false
   require_partition_filter = false
 
