@@ -17,6 +17,7 @@
 set -euo pipefail
 
 PROJECT_ID="${1:-${GOOGLE_CLOUD_PROJECT:-}}"
+PROJECT_ID="$(echo -n "${PROJECT_ID}" | tr -d '[:space:]' | tr -d '"' | tr -d "'" | tr '[:upper:]' '[:lower:]')"
 
 if [[ -z "$PROJECT_ID" ]]; then
   echo "Error: GCP Project ID must be specified as an argument or set in GOOGLE_CLOUD_PROJECT." >&2

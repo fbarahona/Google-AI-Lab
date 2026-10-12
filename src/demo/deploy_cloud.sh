@@ -11,6 +11,10 @@ set -euo pipefail
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-${1:-}}"
 REGION="${GOOGLE_CLOUD_LOCATION:-${2:-us-east1}}"
 
+# Strip accidental whitespace, quotes, and force lowercase for Docker/Artifact Registry compliance
+export PROJECT_ID="$(echo -n "${PROJECT_ID}" | tr -d '[:space:]' | tr -d '"' | tr -d "'" | tr '[:upper:]' '[:lower:]')"
+export REGION="$(echo -n "${REGION}" | tr -d '[:space:]' | tr -d '"' | tr -d "'" | tr '[:upper:]' '[:lower:]')"
+
 if [ -z "${PROJECT_ID}" ]; then
   echo "Error: GOOGLE_CLOUD_PROJECT environment variable or argument is required."
   echo "Usage: ./src/demo/deploy_cloud.sh <PROJECT_ID> [REGION]"

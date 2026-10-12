@@ -19,12 +19,14 @@ set -euo pipefail
 # ==============================================================================
 
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-${1:-}}"
+PROJECT_ID="$(echo -n "${PROJECT_ID}" | tr -d '[:space:]' | tr -d '"' | tr -d "'" | tr '[:upper:]' '[:lower:]')"
 if [[ -z "${PROJECT_ID}" ]]; then
   echo "❌ Error: GOOGLE_CLOUD_PROJECT environment variable is not set and no project ID argument provided."
   echo "Usage: $0 [PROJECT_ID]"
   exit 1
 fi
 REGION="${GOOGLE_CLOUD_LOCATION:-us-east1}"
+REGION="$(echo -n "${REGION}" | tr -d '[:space:]' | tr -d '"' | tr -d "'" | tr '[:upper:]' '[:lower:]')"
 DATASET_ID="${BIGQUERY_DATASET:-Cymbal_Cyber}"
 BUCKET_NAME="cymbal_cyber_adk_staging_bucket_${PROJECT_ID}"
 JOB_NAME="demo-pubsub-to-bigquery-$(date +%s)"
