@@ -41,6 +41,14 @@ resource "google_cloud_run_v2_service" "adk_agent_service" {
         name  = "GCS_SIGNER_SA"
         value = google_service_account.agent_sa.email
       }
+      env {
+        name  = "EXPECTED_OIDC_AUDIENCE"
+        value = var.agent_push_endpoint
+      }
+      env {
+        name  = "EXPECTED_INVOKER_EMAIL"
+        value = google_service_account.invoker_sa.email
+      }
     }
   }
 

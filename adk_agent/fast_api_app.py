@@ -20,6 +20,7 @@ import logging
 import os
 import time
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from a2a.server.tasks import InMemoryTaskStore
@@ -122,15 +123,23 @@ def extract_pubsub_payload(raw_body: Any) -> Dict[str, Any]:
     if "message" in raw_body and isinstance(raw_body["message"], dict):
         msg = raw_body["message"]
         data = msg.get("data")
+        payload = {}
         if data:
             try:
                 decoded = base64.b64decode(data).decode("utf-8")
-                return json.loads(decoded)
+                payload = json.loads(decoded)
             except Exception:
                 try:
-                    return json.loads(data)
+                    payload = json.loads(data)
                 except Exception:
-                    return {"raw_message_data": data}
+                    payload = {"raw_message_data": data}
+        if isinstance(payload, dict):
+            attrs = msg.get("attributes")
+            if isinstance(attrs, dict):
+                for k, v in attrs.items():
+                    if k not in payload:
+                        payload[k] = v
+        return payload
 
     return raw_body
 
@@ -169,7 +178,8 @@ def get_alert_status_info(alert_id: str) -> Optional[Dict[str, Any]]:
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
                 bigquery.ScalarQueryParameter("alert_id", "STRING", alert_id),
-            ]
+            ],
+            maximum_bytes_billed=100 * 1024 * 1024,
         )
         rows = list(bq.query(query, job_config=job_config).result())
         if rows:
@@ -180,9 +190,15 @@ def get_alert_status_info(alert_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def update_alert_status(alert_id: str, new_status: str):
+def update_alert_status(
+    alert_id: str,
+    new_status: str,
+    alert_data: Optional[Dict[str, Any]] = None,
+):
     """
-    Updates alerts.status to INVESTIGATING or DONE with timestamp audit.
+    Updates alerts.status to INVESTIGATING, DONE, or NEW with timestamp audit.
+    If alert_data is provided, uses MERGE to ensure Continuous Query and Dataflow
+    alerts are inserted into the alerts table if they do not already exist.
     """
     if os.getenv("LOCAL_MODE", "false").lower() == "true" or not alert_id:
         return
@@ -190,17 +206,73 @@ def update_alert_status(alert_id: str, new_status: str):
         from google.cloud import bigquery
         from adk_agent.tools import get_bq_client, PROJECT_ID, DATASET_ID
         bq = get_bq_client()
-        query = f"""
-            UPDATE `{PROJECT_ID}.{DATASET_ID}.alerts`
-            SET status = @new_status, updated_at = CURRENT_TIMESTAMP()
-            WHERE alert_id = @alert_id
-        """
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter("new_status", "STRING", new_status),
-                bigquery.ScalarQueryParameter("alert_id", "STRING", alert_id),
-            ]
-        )
+
+        if alert_data:
+            user_id = alert_data.get("user_id") or (alert_id.split("|")[0] if "|" in alert_id else "unknown")
+            engine = alert_data.get("engine") or "cq"
+            device_id = alert_data.get("device_id") or "endpoint-unknown"
+            source_ip = alert_data.get("source_ip") or "0.0.0.0"
+            window_start = alert_data.get("window_start") or ""
+            window_end = alert_data.get("window_end") or (alert_id.split("|")[1] if "|" in alert_id else "")
+            threat_score = int(alert_data.get("total_2_min_threat_score") or alert_data.get("threat_score") or 0)
+            high_priv = alert_data.get("high_privilege_request_count")
+            malicious_cmd = alert_data.get("malicious_command_count")
+            malicious_dns = alert_data.get("malicious_dns_count")
+            payload_str = json.dumps(alert_data)
+
+            query = f"""
+                MERGE `{PROJECT_ID}.{DATASET_ID}.alerts` T
+                USING (SELECT @alert_id AS alert_id) S
+                ON T.alert_id = S.alert_id
+                WHEN MATCHED THEN
+                  UPDATE SET status = @new_status, updated_at = CURRENT_TIMESTAMP()
+                WHEN NOT MATCHED THEN
+                  INSERT (
+                    alert_id, engine, user_id, device_id, source_ip,
+                    window_start, window_end, total_2_min_threat_score,
+                    high_privilege_request_count, malicious_command_count, malicious_dns_count,
+                    status, detected_at, updated_at, payload
+                  )
+                  VALUES (
+                    @alert_id, @engine, @user_id, @device_id, @source_ip,
+                    COALESCE(SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', @window_start), TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 MINUTE)),
+                    COALESCE(SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', @window_end), CURRENT_TIMESTAMP()),
+                    @threat_score,
+                    @high_priv_count, @malicious_cmd_count, @malicious_dns_count,
+                    @new_status, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), PARSE_JSON(@payload)
+                  )
+            """
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("new_status", "STRING", new_status),
+                    bigquery.ScalarQueryParameter("alert_id", "STRING", alert_id),
+                    bigquery.ScalarQueryParameter("engine", "STRING", engine),
+                    bigquery.ScalarQueryParameter("user_id", "STRING", user_id),
+                    bigquery.ScalarQueryParameter("device_id", "STRING", device_id),
+                    bigquery.ScalarQueryParameter("source_ip", "STRING", source_ip),
+                    bigquery.ScalarQueryParameter("window_start", "STRING", window_start),
+                    bigquery.ScalarQueryParameter("window_end", "STRING", window_end),
+                    bigquery.ScalarQueryParameter("threat_score", "INT64", threat_score),
+                    bigquery.ScalarQueryParameter("high_priv_count", "INT64", high_priv),
+                    bigquery.ScalarQueryParameter("malicious_cmd_count", "INT64", malicious_cmd),
+                    bigquery.ScalarQueryParameter("malicious_dns_count", "INT64", malicious_dns),
+                    bigquery.ScalarQueryParameter("payload", "STRING", payload_str),
+                ],
+                maximum_bytes_billed=100 * 1024 * 1024,
+            )
+        else:
+            query = f"""
+                UPDATE `{PROJECT_ID}.{DATASET_ID}.alerts`
+                SET status = @new_status, updated_at = CURRENT_TIMESTAMP()
+                WHERE alert_id = @alert_id
+            """
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("new_status", "STRING", new_status),
+                    bigquery.ScalarQueryParameter("alert_id", "STRING", alert_id),
+                ],
+                maximum_bytes_billed=100 * 1024 * 1024,
+            )
         bq.query(query, job_config=job_config).result()
         logger.info("Updated alert_id '%s' status to '%s' in BigQuery.", alert_id, new_status)
     except Exception as e:
@@ -264,18 +336,80 @@ def verify_incoming_oidc_token(request: Request) -> Dict[str, Any]:
         from google.oauth2 import id_token
         from google.auth.transport import requests as google_requests
 
-        expected_audience = os.getenv("EXPECTED_OIDC_AUDIENCE") or str(request.url).split("?")[0]
-        claims = id_token.verify_oauth2_token(
-            token,
-            google_requests.Request(),
-            audience=expected_audience,
-        )
+        claims = None
+        expected_audience = os.getenv("EXPECTED_OIDC_AUDIENCE")
+        if expected_audience:
+            claims = id_token.verify_oauth2_token(
+                token,
+                google_requests.Request(),
+                audience=expected_audience,
+            )
+        else:
+            # Fallback: derive candidate audiences accounting for Cloud Run TLS termination / proxy headers
+            host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+            proto = request.headers.get("x-forwarded-proto", "https")
+            candidate_audiences = []
+            if host:
+                candidate_audiences.append(f"{proto}://{host}{request.url.path}")
+                candidate_audiences.append(f"https://{host}{request.url.path}")
+                candidate_audiences.append(f"{proto}://{host}")
+                candidate_audiences.append(f"https://{host}")
+
+            raw_url = str(request.url).split("?")[0]
+            candidate_audiences.append(raw_url)
+            if raw_url.startswith("http://"):
+                candidate_audiences.append("https://" + raw_url[7:])
+
+            last_exc = None
+            for aud in candidate_audiences:
+                try:
+                    claims = id_token.verify_oauth2_token(
+                        token,
+                        google_requests.Request(),
+                        audience=aud,
+                    )
+                    break
+                except Exception as e:
+                    last_exc = e
+
+            if not claims:
+                raise last_exc or ValueError("OIDC token verification failed for all candidate audiences.")
+
+        # Verify caller email is verified by Google
+        if not claims.get("email_verified"):
+            logger.warning("Inbound OIDC JWT rejected: email_verified claim is not true.")
+            raise HTTPException(
+                status_code=403,
+                detail="Invalid OIDC bearer token: caller email is not verified.",
+            )
+
+        # Verify caller email matches authorized invoker service account
+        expected_invoker = os.getenv("EXPECTED_INVOKER_EMAIL")
+        if not expected_invoker:
+            proj = os.getenv("GOOGLE_CLOUD_PROJECT")
+            invoker_id = os.getenv("INVOKER_SA_NAME", "pubsub-invoker-sa")
+            if proj and proj not in ("local-demo", "test-proj"):
+                expected_invoker = f"{invoker_id}@{proj}.iam.gserviceaccount.com"
+
+        if expected_invoker:
+            caller_email = claims.get("email")
+            if caller_email != expected_invoker:
+                logger.warning(
+                    "Inbound OIDC JWT rejected: caller email '%s' does not match expected invoker '%s'.",
+                    caller_email,
+                    expected_invoker,
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="Forbidden: caller service account is not authorized.",
+                )
+
         return claims
     except Exception as exc:
         logger.warning("Inbound OIDC JWT validation failed: %s", exc)
         raise HTTPException(
             status_code=403,
-            detail=f"Invalid OIDC bearer token: {exc}",
+            detail="Invalid OIDC bearer token.",
         )
 
 
@@ -350,7 +484,7 @@ async def handle_pubsub_trigger(
 
     # Durable BigQuery alerts table status check
     if alert_id:
-        status_info = get_alert_status_info(alert_id)
+        status_info = await asyncio.to_thread(get_alert_status_info, alert_id)
         if status_info:
             current_status = status_info.get("status")
             updated_at = status_info.get("updated_at")
@@ -409,7 +543,7 @@ async def handle_pubsub_trigger(
     # Transition status to INVESTIGATING
     _IN_PROGRESS_MESSAGES[message_id] = time.time()
     if alert_id:
-        update_alert_status(alert_id, "INVESTIGATING")
+        await asyncio.to_thread(update_alert_status, alert_id, "INVESTIGATING", alert_data)
 
     # 4. Synchronous Execution by Default (with guaranteed state cleanup in finally)
     try:
@@ -423,7 +557,7 @@ async def handle_pubsub_trigger(
 
         # Mark as DONE on successful investigation
         if alert_id:
-            update_alert_status(alert_id, "DONE")
+            await asyncio.to_thread(update_alert_status, alert_id, "DONE", alert_data)
         _COMPLETED_MESSAGES[message_id] = time.time()
 
         return JSONResponse(
@@ -437,10 +571,15 @@ async def handle_pubsub_trigger(
         )
     except Exception as exc:
         logger.error("Pub/Sub agent investigation failed for session %s: %s", session_id, exc)
-        # On failure: do NOT mark DONE so retries or DLQ can take over
+        # On failure: reset status back to NEW so Pub/Sub retries are not rejected with 409
+        if alert_id:
+            try:
+                await asyncio.to_thread(update_alert_status, alert_id, "NEW", alert_data)
+            except Exception as reset_err:
+                logger.warning("Could not reset alert status to NEW on failure: %s", reset_err)
         raise HTTPException(
             status_code=500,
-            detail=f"Agent investigation failed: {exc}",
+            detail="Internal server error during alert investigation.",
         )
     finally:
         _IN_PROGRESS_MESSAGES.pop(message_id, None)

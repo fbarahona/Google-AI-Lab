@@ -133,8 +133,12 @@ DESTRUCTIVE_SQL_TOKENS = {"DROP", "ALTER", "DELETE", "UPDATE", "INSERT", "TRUNCA
 
 def validate_safe_sql_query(sql: str) -> None:
     """
-    Pre-execution guardrail validating that SQL queries intended for read-only forensic analysis
-    do not contain destructive DML/DDL operations. Raises ValueError if violations are detected.
+    Defense-in-depth pre-execution guardrail validating that SQL queries intended
+    for read-only forensic analysis do not contain destructive DML/DDL operations.
+
+    While standard tool methods use parameterized query templates, this validator
+    serves as a secondary defense boundary against future dynamic SQL queries or
+    custom analyst query extensions. Raises ValueError if violations are detected.
     """
     if not sql:
         return
@@ -584,10 +588,9 @@ def get_gcs_uri_for_user(user: str) -> str:
     logger.info("Searching for screenshot GCS URI for user: %s", user)
     clean_user = sanitize_entity_value(user, field_name="user")
     sql = f"""
-        SELECT t2.gcs_uri
-        FROM `{PROJECT_ID}.{DATASET_ID}.user_access_events` AS t1
-        JOIN `{PROJECT_ID}.{DATASET_ID}.user_screenshots_view` AS t2 ON t1.user_id = t2.user_id
-        WHERE t1.user_id = @user_id
+        SELECT gcs_uri
+        FROM `{PROJECT_ID}.{DATASET_ID}.user_screenshots_view`
+        WHERE user_id = @user_id
         LIMIT 1;
     """
     validate_safe_sql_query(sql)

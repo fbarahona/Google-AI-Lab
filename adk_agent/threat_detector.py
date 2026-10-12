@@ -25,16 +25,24 @@ from google.cloud import pubsub_v1
 logger = logging.getLogger("ThreatDetectorJob")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
-PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "oso-ai-503519")
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo")
 DATASET_ID = os.getenv("BIGQUERY_DATASET", "Cymbal_Cyber")
 ALERTS_TOPIC = os.getenv("ALERTS_TOPIC", "cymbal_cyber_alerts")
+DEFAULT_MAX_BYTES_BILLED = int(os.getenv("BQ_MAX_BYTES_BILLED", "524288000"))  # 500 MB scan ceiling
 
 
 class ThreatDetector:
-    def __init__(self, project_id: str = PROJECT_ID, dataset_id: str = DATASET_ID, topic_id: str = ALERTS_TOPIC):
+    def __init__(
+        self,
+        project_id: str = PROJECT_ID,
+        dataset_id: str = DATASET_ID,
+        topic_id: str = ALERTS_TOPIC,
+        max_bytes_billed: int = DEFAULT_MAX_BYTES_BILLED,
+    ):
         self.project_id = project_id
         self.dataset_id = dataset_id
         self.topic_id = topic_id
+        self.max_bytes_billed = max_bytes_billed
         self.bq_client = bigquery.Client(project=project_id)
         self.publisher = pubsub_v1.PublisherClient()
         self.topic_path = self.publisher.topic_path(project_id, topic_id)
@@ -67,7 +75,21 @@ class ThreatDetector:
 
         MERGE `{self.project_id}.{self.dataset_id}.alerts` T
         USING (
-          WITH BucketedEvents AS (
+          WITH ActiveSessions AS (
+            SELECT user_id, device_id, source_ip, assigned_internal_ip, user_agent
+            FROM (
+              SELECT
+                user_id, device_id, source_ip, assigned_internal_ip, user_agent,
+                ROW_NUMBER() OVER (PARTITION BY assigned_internal_ip ORDER BY event_timestamp DESC) AS rn
+              FROM `{self.project_id}.{self.dataset_id}.user_access_events`
+              WHERE DATE(event_timestamp) >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
+                AND event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {lookback_minutes} MINUTE)
+                AND event_type = 'login_success'
+                AND assigned_internal_ip IS NOT NULL
+            )
+            WHERE rn = 1
+          ),
+          BucketedEvents AS (
             SELECT
               access.user_id,
               access.device_id,
@@ -87,12 +109,11 @@ class ThreatDetector:
               COUNTIF(network.permission_level_requested IN ('root', 'admin')) AS high_privilege_request_count,
               COUNTIF(`{self.project_id}.{self.dataset_id}.is_malicious_command`(network.command_line)) AS malicious_command_count,
               COUNTIF(`{self.project_id}.{self.dataset_id}.is_malicious_domain`(network.network_domain)) AS malicious_dns_count
-            FROM `{self.project_id}.{self.dataset_id}.user_access_events` AS access
+            FROM ActiveSessions AS access
             INNER JOIN `{self.project_id}.{self.dataset_id}.network_events` AS network
               ON access.assigned_internal_ip = network.source_ip
-            WHERE access.event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {lookback_minutes} MINUTE)
+            WHERE DATE(network.event_timestamp) >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
               AND network.event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {lookback_minutes} MINUTE)
-              AND access.event_type = 'login_success'
             GROUP BY access.user_id, access.device_id, access.source_ip, window_start, window_end
             -- Only evaluate windows that closed more than 60s ago (late-data allowance)
             HAVING window_end <= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 60 SECOND)
@@ -147,7 +168,8 @@ class ThreatDetector:
         """
         try:
             logger.info("Executing MERGE query against alerts table...")
-            merge_job = self.bq_client.query(merge_query)
+            job_config = bigquery.QueryJobConfig(maximum_bytes_billed=self.max_bytes_billed)
+            merge_job = self.bq_client.query(merge_query, job_config=job_config)
             merge_job.result()
         except Exception as e:
             logger.error("Error executing MERGE query: %s", e)
@@ -171,19 +193,40 @@ class ThreatDetector:
           TO_JSON_STRING(payload) AS payload_str
         FROM `{self.project_id}.{self.dataset_id}.alerts`
         WHERE status = 'NEW'
-          AND detected_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 5 MINUTE)
+          AND DATE(window_end) >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
         ORDER BY window_start ASC;
         """
         try:
-            query_job = self.bq_client.query(fetch_query)
+            query_job = self.bq_client.query(fetch_query, job_config=job_config)
             return [dict(row.items()) for row in query_job.result()]
         except Exception as e:
             logger.error("Error fetching newly created alerts: %s", e)
             return []
 
+    def _update_alert_status(self, alert_id: str, new_status: str):
+        """Transitions alert status in BigQuery using parameterized query."""
+        update_query = f"""
+        UPDATE `{self.project_id}.{self.dataset_id}.alerts`
+        SET status = @new_status, updated_at = CURRENT_TIMESTAMP()
+        WHERE alert_id = @alert_id;
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("new_status", "STRING", new_status),
+                bigquery.ScalarQueryParameter("alert_id", "STRING", alert_id),
+            ],
+            maximum_bytes_billed=self.max_bytes_billed,
+        )
+        try:
+            self.bq_client.query(update_query, job_config=job_config).result()
+            logger.info("Updated alert '%s' status to %s.", alert_id, new_status)
+        except Exception as e:
+            logger.error("Failed to update status for alert %s to %s: %s", alert_id, new_status, e)
+
     def _publish_alerts(self, alerts: List[Dict[str, Any]]) -> int:
         """
-        Publishes alerts to cymbal_cyber_alerts matching the unified Alert Contract.
+        Publishes alerts to cymbal_cyber_alerts matching the unified Alert Contract,
+        and marks them as PUBLISHED in BigQuery to prevent duplication.
         """
         count = 0
         for alert in alerts:
@@ -217,6 +260,7 @@ class ThreatDetector:
             )
             future.result(timeout=10)
             logger.info("Published alert '%s' to %s", alert_id, self.topic_path)
+            self._update_alert_status(alert_id, "PUBLISHED")
             count += 1
         return count
 
@@ -231,15 +275,20 @@ class ThreatDetector:
         SELECT DISTINCT
           JSON_VALUE(dlq.attributes, '$.alert_id') AS alert_id,
           dlq.data AS payload,
-          dlq.publish_time AS dead_lettered_at
+          dlq.publish_time AS dead_lettered_at,
+          a.user_id,
+          a.device_id,
+          a.source_ip,
+          a.total_2_min_threat_score
         FROM `{self.project_id}.{self.dataset_id}.alerts_dead_letter` dlq
         INNER JOIN `{self.project_id}.{self.dataset_id}.alerts` a
           ON JSON_VALUE(dlq.attributes, '$.alert_id') = a.alert_id
         WHERE a.status != 'DEAD_LETTERED'
         LIMIT 20;
         """
+        dlq_job_config = bigquery.QueryJobConfig(maximum_bytes_billed=self.max_bytes_billed)
         try:
-            query_job = self.bq_client.query(dlq_query)
+            query_job = self.bq_client.query(dlq_query, job_config=dlq_job_config)
             dead_letters = [dict(row.items()) for row in query_job.result()]
         except Exception as e:
             logger.warning("DLQ inspection query failed (table may be empty or uncreated yet): %s", e)
@@ -251,19 +300,15 @@ class ThreatDetector:
             if not alert_id:
                 continue
 
-            # 1. Update alerts table status to DEAD_LETTERED
-            update_query = f"""
-            UPDATE `{self.project_id}.{self.dataset_id}.alerts`
-            SET status = 'DEAD_LETTERED', updated_at = CURRENT_TIMESTAMP()
-            WHERE alert_id = '{alert_id}';
-            """
-            try:
-                self.bq_client.query(update_query).result()
-            except Exception as e:
-                logger.error("Failed to update status for DEAD_LETTERED alert %s: %s", alert_id, e)
+            target_user = dl.get("user_id") or (alert_id.split("|")[0] if "|" in alert_id else "unknown_user")
+            target_device = dl.get("device_id") or "unknown_device"
+            target_ip = dl.get("source_ip") or "0.0.0.0"
+            threat_score = int(dl.get("total_2_min_threat_score") or 2000)
 
-            # 2. Insert auto-escalation ticket into soc_tickets
+            # 1. Insert auto-escalation ticket into soc_tickets FIRST
             ticket_id = f"DLQ-AUTO-ESCALATE-{alert_id.replace('|', '-')}"
+            report_text = f"### DLQ Auto-Escalation Report\n\nAlert `{alert_id}` exhausted all Pub/Sub delivery attempts. The automated webhook failed to respond. Immediate human intervention required."
+
             insert_ticket_sql = f"""
             INSERT INTO `{self.project_id}.{self.dataset_id}.soc_tickets` (
               ticket_id, created_at, user_id, device_id, source_ip,
@@ -272,29 +317,58 @@ class ThreatDetector:
               structured_report, human_decision, human_comment, adjudicated_at
             )
             VALUES (
-              '{ticket_id}',
+              @ticket_id,
               CURRENT_TIMESTAMP(),
-              SPLIT('{alert_id}', '|')[OFFSET(0)],
-              'endpoint-unknown',
-              '0.0.0.0',
-              2000,
+              @user_id,
+              @device_id,
+              @source_ip,
+              @threat_score,
               'CRITICAL',
               'ESCALATED',
               'DEAD_LETTER_AUTO_ESCALATION',
               'Alert failed max delivery attempts (5) to the ADK agent webhook and landed on DLQ. Auto-escalated for immediate human triage.',
-              ['Execution', 'Defense Evasion'],
-              ['DLQ Failure', '{alert_id}'],
+              @mitre_tactics,
+              @iocs,
               NULL,
-              '### DLQ Auto-Escalation Report\\n\\nAlert `{alert_id}` exhausted all Pub/Sub delivery attempts. The automated webhook failed to respond. Immediate human intervention required.',
+              @report,
               NULL, NULL, NULL
             );
             """
+            insert_cfg = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("ticket_id", "STRING", ticket_id),
+                    bigquery.ScalarQueryParameter("user_id", "STRING", target_user),
+                    bigquery.ScalarQueryParameter("device_id", "STRING", target_device),
+                    bigquery.ScalarQueryParameter("source_ip", "STRING", target_ip),
+                    bigquery.ScalarQueryParameter("threat_score", "INT64", threat_score),
+                    bigquery.ArrayQueryParameter("mitre_tactics", "STRING", ["Execution", "Defense Evasion"]),
+                    bigquery.ArrayQueryParameter("iocs", "STRING", ["DLQ Failure", alert_id]),
+                    bigquery.ScalarQueryParameter("report", "STRING", report_text),
+                ],
+                maximum_bytes_billed=self.max_bytes_billed,
+            )
             try:
-                self.bq_client.query(insert_ticket_sql).result()
+                self.bq_client.query(insert_ticket_sql, job_config=insert_cfg).result()
                 logger.warning("Auto-escalated DLQ alert '%s' to SOC tickets as '%s'", alert_id, ticket_id)
+            except Exception as e:
+                logger.error("Failed to insert auto-escalation ticket for %s: %s; will retry next cycle", alert_id, e)
+                continue
+
+            # 2. Update alerts table status to DEAD_LETTERED only after ticket insert succeeded
+            update_query = f"""
+            UPDATE `{self.project_id}.{self.dataset_id}.alerts`
+            SET status = 'DEAD_LETTERED', updated_at = CURRENT_TIMESTAMP()
+            WHERE alert_id = @alert_id;
+            """
+            update_cfg = bigquery.QueryJobConfig(
+                query_parameters=[bigquery.ScalarQueryParameter("alert_id", "STRING", alert_id)],
+                maximum_bytes_billed=self.max_bytes_billed,
+            )
+            try:
+                self.bq_client.query(update_query, job_config=update_cfg).result()
                 handled += 1
             except Exception as e:
-                logger.error("Failed to insert auto-escalation ticket for %s: %s", alert_id, e)
+                logger.error("Failed to update status for DEAD_LETTERED alert %s: %s", alert_id, e)
 
         return handled
 

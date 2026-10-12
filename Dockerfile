@@ -27,8 +27,10 @@ COPY ./src ./src
 RUN uv sync --frozen
 
 ARG AGENT_VERSION=0.0.0
+ENV PATH="/code/.venv/bin:$PATH"
 ENV AGENT_VERSION=${AGENT_VERSION}
 
 EXPOSE 8080
 
-CMD ["uv", "run", "uvicorn", "adk_agent.fast_api_app:app", "--host", "0.0.0.0", "--port", "8080"]
+ENTRYPOINT ["python"]
+CMD ["-m", "uvicorn", "adk_agent.fast_api_app:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers", "--forwarded-allow-ips", "*"]

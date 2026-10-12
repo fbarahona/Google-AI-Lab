@@ -131,7 +131,7 @@ python -m adk_agent.threat_detector --lookback 15 --min-score 100
 2. **Build and Implement:** Implement agent logic in `adk_agent/`. Use `agents-cli playground` for interactive validation.
 3. **Evaluation Loop:** Run `agents-cli eval run` against datasets in `tests/eval/`. Inspect cluster failures with `agents-cli eval analyze` and auto-tune with `agents-cli eval optimize`.
 4. **Pre-Deployment Tests:** Run `uv run pytest src/demo/tests/ tests/unit/`.
-5. **Deploy:** Run `agents-cli deploy` only after human approval.
+5. **Deploy:** Deploy container image to Cloud Run service and threat detector job with `./src/demo/deploy_cloud.sh` (or `gcloud run jobs update threat-detector --image <image>`).
 
 ---
 

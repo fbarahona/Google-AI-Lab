@@ -100,12 +100,12 @@ This project deploys the ADK Multi-Agent Team to **Google Cloud Run** rather tha
    - **`bq_investigation_agent`**: 24-hour behavioral profiling querying BigQuery (`user_access_events` and `network_events`).
    - **`visual_analysis_agent`**: Multimodal Gemini vision analysis and OCR inspecting user desktop forensic screenshots.
    - **`soc_ticketing_agent`**: Consolidates forensic findings into a structured Security Incident Report and dispatches formal incident tickets.
-2. **BigQuery Threat Scanner (`adk_agent/threat_scanner.py`)**:
-   - Background daemon monitoring the BigQuery dataset for anomalous security alerts and activating the ADK orchestrator.
+2. **Scheduled Threat Detector (`adk_agent/threat_detector.py`)**:
+   - Production micro-batch detector running as a Cloud Run Job. Aggregates 2-minute tumbling windows in BigQuery via idempotent MERGE, publishes unified alert contract JSON to Pub/Sub, and auto-escalates dead-lettered alerts. (Legacy scanner retained at `adk_agent/threat_scanner.py`).
 3. **Synthetic Log Generator (`src/demo/data_generator/`)**:
    - High-fidelity synthetic event generator simulating access and network logs with ad-hoc threat injection (both APT attacks and benign administrative false positives).
 4. **Data Engineering Pipelines (`src/demo/data_pipeline/`)**:
-   - Stream and batch ingestion pathways via BigQuery Continuous Queries, Pub/Sub to Dataflow, and GCS batch loading.
+   - Ingestion and streaming pipelines: Direct Pub/Sub-to-BigQuery subscriptions, BigQuery Continuous Queries, and an optional Dataflow Beam pipeline (custom ETL alternative to direct subscriptions; do not run concurrently with direct subscriptions to avoid duplicate event rows).
 5. **Interactive SOC Analyst Console (`src/demo/soc_ticketing/`)**:
    - Full-featured Streamlit console supporting queue management, visual screenshot preview, ADK forensic report inspection, and analyst triage.
 6. **Zero-Cloud Local Runner (`src/demo/local_runner.py`)**:
@@ -122,7 +122,8 @@ This project deploys the ADK Multi-Agent Team to **Google Cloud Run** rather tha
 ├── adk_agent/                      # Canonical ADK Multi-Agent package
 │   ├── agent.py                    # Multi-agent orchestrator & 4 sub-agents
 │   ├── tools.py                    # Tools (BigQuery, OSINT, Vision OCR, SOC ticketing)
-│   ├── threat_scanner.py           # BigQuery active anomaly scanning daemon
+│   ├── threat_detector.py          # Scheduled micro-batch detector (Cloud Run Job)
+│   ├── threat_scanner.py           # [Legacy] Standalone anomaly scanning daemon
 │   ├── logging_utils.py            # Structured logging utilities
 │   ├── fast_api_app.py             # FastAPI backend server
 │   └── app_utils/                  # A2A and service helpers
@@ -176,13 +177,13 @@ Run the interactive web playground to chat with and debug the ADK agents:
 LOCAL_MODE=true agents-cli playground
 ```
 
-### 4. Run the BigQuery Threat Scanner
+### 4. Run the Scheduled Threat Detector (or Legacy Scanner)
 ```bash
-# Run a single scan pass:
-python -m adk_agent.threat_scanner --once
+# Run a single micro-batch detection cycle (Cloud Run Job):
+python -m adk_agent.threat_detector --lookback 15 --min-score 100
 
-# Run continuous background daemon:
-python -m adk_agent.threat_scanner --daemon --interval 30
+# Legacy standalone scanner:
+python -m adk_agent.threat_scanner --once
 ```
 
 ### 5. Run Automated Tests
@@ -227,16 +228,45 @@ This project is configured with `agents-cli` for managing the agent development 
 
 ---
 
+## 🚀 Cloud Deployment (Cloud Run Service & Threat Detector Job)
+
+After provisioning the infrastructure with Terraform (`terraform apply`), build and deploy the unified container image to both the ADK Agent Service and the scheduled Threat Detector Cloud Run Job:
+
+```bash
+# Option A: One-command deployment script
+./src/demo/deploy_cloud.sh <PROJECT_ID> <REGION>
+
+# Option B: Manual gcloud deployment
+IMAGE_TAG="gcr.io/${GOOGLE_CLOUD_PROJECT}/cymbal-cyber-agent:latest"
+
+# 1. Build & Push unified container image
+gcloud builds submit --project="${GOOGLE_CLOUD_PROJECT}" --tag="${IMAGE_TAG}" .
+
+# 2. Update Cloud Run Service (ADK Agent Webhook)
+gcloud run deploy cymbal-cyber-adk-agent \
+  --project="${GOOGLE_CLOUD_PROJECT}" \
+  --region="${GOOGLE_CLOUD_LOCATION}" \
+  --image="${IMAGE_TAG}"
+
+# 3. Update Cloud Run Job (Threat Detector micro-batch job)
+gcloud run jobs update threat-detector \
+  --project="${GOOGLE_CLOUD_PROJECT}" \
+  --region="${GOOGLE_CLOUD_LOCATION}" \
+  --image="${IMAGE_TAG}"
+```
+
+---
+
 ## 💰 FinOps: Cost Control & Teardown
 
 > **⚠️ Cloud Resource Billing Warning:**  
 > The zero-cloud local runner (`python -m src.demo.local_runner`) is free and requires zero cloud infrastructure. For cloud deployment, Terraform defaults to a **zero-continuous-cost serverless baseline** by disabling Enterprise slot reservations and continuous Dataflow workers:
-> - **Default Trigger Path ($0/mo continuous):** Cloud Scheduler triggers `/apps/adk_agent/trigger/scan` on Cloud Run every 2 minutes using OIDC tokens, querying BigQuery for unassessed threat events without requiring slot reservations.
+> - **Default Trigger Path ($0/mo continuous):** Cloud Scheduler triggers the `threat-detector` Cloud Run Job every 2 minutes via OAuth, evaluating 2-minute tumbling windows via BigQuery MERGE and pushing detected alerts to the `cymbal_cyber_alerts` Pub/Sub topic without requiring slot reservations.
 > - **BigQuery Continuous Queries (`enable_continuous_query = true`):** Requires a 100-slot Enterprise Edition reservation. Slot reservations bill 24/7 at **~$0.06/slot-hour = ~$6.00/hour (~$4,320/month) whether or not a query is running**. Canceling the continuous query job saves no money; only disabling the reservation in Terraform (`enable_continuous_query = false && terraform apply`) stops slot billing. When enabled, submit the query via:
 >   ```bash
 >   ./src/demo/data_pipeline/launch_continuous_query.sh <PROJECT_ID>
 >   ```
-> - **Dataflow Streaming (`enable_dataflow_streaming = true`):** Provisions continuous streaming worker VMs and throughput (**~$100–$300/month**). Gated off by default.
+> - **Dataflow Streaming Pipeline (`scripts/run_dataflow_demo.sh`):** An optional Apache Beam ETL ingestion pipeline from Pub/Sub into BigQuery event tables. Replaces direct Pub/Sub BigQuery subscriptions (do not run both concurrently to avoid duplicate events). Provisions continuous streaming worker VMs and throughput (**~$100–$300/month**). Gated off by default.
 > - **Cloud Run & Vertex AI:** Billed on-demand per request execution duration and token usage.
 
 ### Automated Budget Alert

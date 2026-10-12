@@ -8,19 +8,35 @@
 
 set -euo pipefail
 
-PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-oso-ai-503519}"
+# ==============================================================================
+# ARCHITECTURAL NOTICE (Ingestion Alternative):
+# This Apache Beam Dataflow pipeline provides an alternative, custom ETL ingestion
+# pipeline from Pub/Sub to BigQuery.
+#
+# DO NOT run this pipeline concurrently with the direct Pub/Sub BigQuery subscriptions
+# deployed in Terraform. Running both simultaneously ingests duplicate log events into
+# user_access_events and network_events, inflating aggregation scores.
+# ==============================================================================
+
+PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-${1:-}}"
+if [[ -z "${PROJECT_ID}" ]]; then
+  echo "❌ Error: GOOGLE_CLOUD_PROJECT environment variable is not set and no project ID argument provided."
+  echo "Usage: $0 [PROJECT_ID]"
+  exit 1
+fi
 REGION="${GOOGLE_CLOUD_LOCATION:-us-east1}"
 DATASET_ID="${BIGQUERY_DATASET:-Cymbal_Cyber}"
 BUCKET_NAME="cymbal_cyber_adk_staging_bucket_${PROJECT_ID}"
 JOB_NAME="demo-pubsub-to-bigquery-$(date +%s)"
 
 echo "=========================================================="
-echo "🚀 Launching Optional On-Demand Dataflow Streaming Demo"
+echo "🚀 Launching Optional On-Demand Dataflow Streaming Ingestion"
 echo "=========================================================="
 echo "Project ID:    ${PROJECT_ID}"
 echo "Region:        ${REGION}"
 echo "Job Name:      ${JOB_NAME}"
 echo "Staging GCS:   gs://${BUCKET_NAME}/dataflow_staging"
+echo "Notice:        Replaces direct Pub/Sub-to-BQ subscriptions for ETL demo"
 echo "=========================================================="
 
 python3 src/demo/data_pipeline/pubsub_to_bigquery_dataflow.py \

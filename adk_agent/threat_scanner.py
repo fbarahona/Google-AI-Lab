@@ -1,13 +1,17 @@
 """
-BigQuery Threat Scanner Service
-===============================
-Actively scans BigQuery dataset (Cymbal_Cyber) for new threat events,
-extracts anomalies, and invokes the ADK Agent Orchestrator to investigate
-and pass confirmed threats to the SOC Ticketing System.
+[LEGACY] BigQuery Threat Scanner Service
+=========================================
+NOTE: This module is retained for backward-compatibility with standalone direct runner workflows.
+For scheduled production micro-batch detection, use `adk_agent.threat_detector` (Cloud Run Job),
+which implements 2-minute tumbling window bucketing, BigQuery MERGE idempotency,
+Pub/Sub event publication, and DLQ auto-escalation.
 
-Usage:
+Usage (Legacy):
   python -m adk_agent.threat_scanner --once
   python -m adk_agent.threat_scanner --daemon --interval 30
+
+Preferred Production Alternative:
+  python -m adk_agent.threat_detector --lookback 15 --min-score 100
 """
 
 import os
