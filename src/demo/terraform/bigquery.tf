@@ -16,12 +16,12 @@ resource "google_bigquery_table" "user_access_events" {
   dataset_id          = google_bigquery_dataset.cyber_dataset.dataset_id
   table_id            = "user_access_events"
   description         = "Logs user login attempts and session creation, linking users to assigned internal IPs."
-  deletion_protection = false
+  deletion_protection      = false
+  require_partition_filter = true
 
   time_partitioning {
-    type                     = "DAY"
-    field                    = "event_timestamp"
-    require_partition_filter = true
+    type  = "DAY"
+    field = "event_timestamp"
   }
 
   clustering = ["user_id", "assigned_internal_ip", "event_type"]
@@ -45,12 +45,12 @@ resource "google_bigquery_table" "network_events" {
   dataset_id          = google_bigquery_dataset.cyber_dataset.dataset_id
   table_id            = "network_events"
   description         = "Logs granular network activity like DNS queries, connections, and file transfers."
-  deletion_protection = false
+  deletion_protection      = false
+  require_partition_filter = true
 
   time_partitioning {
-    type                     = "DAY"
-    field                    = "event_timestamp"
-    require_partition_filter = true
+    type  = "DAY"
+    field = "event_timestamp"
   }
 
   clustering = ["source_ip", "user_id", "event_type"]
@@ -297,12 +297,12 @@ resource "google_bigquery_table" "alerts" {
   dataset_id          = google_bigquery_dataset.cyber_dataset.dataset_id
   table_id            = "alerts"
   description         = "De-duplicated alert events detected by scheduled micro-batch detector, Dataflow, or CQ."
-  deletion_protection = false
+  deletion_protection      = false
+  require_partition_filter = false
 
   time_partitioning {
-    type                     = "DAY"
-    field                    = "window_end"
-    require_partition_filter = false
+    type  = "DAY"
+    field = "window_end"
   }
 
   clustering = ["user_id", "status", "engine"]
@@ -336,14 +336,17 @@ resource "google_bigquery_table" "alerts_dead_letter" {
 
   time_partitioning {
     type  = "DAY"
-    field = "dead_lettered_at"
+    field = "publish_time"
   }
 
+  # Schema required by Pub/Sub BigQuery subscriptions with write_metadata = true
+  # and use_topic_schema = false. alert_id is read from the attributes JSON.
   schema = jsonencode([
-    { name = "alert_id", type = "STRING", mode = "NULLABLE", description = "Extracted alert_id attribute" },
-    { name = "payload", type = "STRING", mode = "REQUIRED", description = "Raw message body string" },
-    { name = "attributes", type = "STRING", mode = "NULLABLE", description = "JSON string of message attributes" },
-    { name = "dead_lettered_at", type = "TIMESTAMP", mode = "REQUIRED", description = "Timestamp appended to DLQ table" }
+    { name = "subscription_name", type = "STRING", mode = "NULLABLE", description = "Pub/Sub subscription name" },
+    { name = "message_id", type = "STRING", mode = "NULLABLE", description = "Pub/Sub message ID" },
+    { name = "publish_time", type = "TIMESTAMP", mode = "NULLABLE", description = "Time the message landed on the DLQ topic" },
+    { name = "data", type = "STRING", mode = "NULLABLE", description = "Raw alert contract JSON body" },
+    { name = "attributes", type = "STRING", mode = "NULLABLE", description = "JSON string of message attributes (includes alert_id)" }
   ])
 }
 

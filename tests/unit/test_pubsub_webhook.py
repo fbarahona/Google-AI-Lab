@@ -11,6 +11,14 @@ from starlette.testclient import TestClient
 from adk_agent.fast_api_app import app, extract_pubsub_payload
 
 
+@pytest.fixture(autouse=True)
+def setup_local_mode(monkeypatch):
+    """Enable local mode and disable cloud telemetry during webhook unit tests."""
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    monkeypatch.setenv("DISABLE_AUTH", "true")
+    monkeypatch.setenv("OTEL_TO_CLOUD", "false")
+
+
 def test_extract_pubsub_payload_wrapped_base64():
     """Verify that wrapped Pub/Sub messages with base64 data are decoded properly."""
     raw_alert = {
@@ -197,10 +205,10 @@ def test_pubsub_push_endpoint_with_mock_runner():
     app.state.runner = None
 
 
-def test_scheduled_scan_endpoint():
-    """Test POST to /apps/adk_agent/trigger/scan endpoint."""
+def test_legacy_scan_endpoint_retired():
+    """The legacy /trigger/scan endpoint was retired in the Budget Detection
+    Architecture; detection now runs as the scheduled `threat_detector` Cloud
+    Run Job, so the endpoint must no longer be exposed."""
     client = TestClient(app)
     response = client.post("/apps/adk_agent/trigger/scan")
-    assert response.status_code in [200, 500]
-    data = response.json()
-    assert "status" in data
+    assert response.status_code in [404, 405]

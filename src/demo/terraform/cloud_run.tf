@@ -1,58 +1,15 @@
-# Cloud Run Service for ADK Multi-Agent Webhook
-resource "google_cloud_run_v2_service" "adk_agent_service" {
-  project  = var.project_id
-  name     = "cymbal-cyber-adk-agent"
-  location = var.region
-  ingress  = "INGRESS_TRAFFIC_ALL"
-
-  template {
-    service_account = google_service_account.agent_sa.email
-
-    scaling {
-      min_instance_count = 0
-      max_instance_count = 3
-    }
-
-    containers {
-      image = "gcr.io/${var.project_id}/cymbal-cyber-adk-agent:latest"
-
-      env {
-        name  = "GOOGLE_CLOUD_PROJECT"
-        value = var.project_id
-      }
-      env {
-        name  = "GOOGLE_CLOUD_LOCATION"
-        value = var.region
-      }
-      env {
-        name  = "BIGQUERY_DATASET"
-        value = var.dataset_id
-      }
-      env {
-        name  = "GEMINI_MODEL"
-        value = "gemini-2.0-flash"
-      }
-
-      resources {
-        limits = {
-          cpu    = "2"
-          memory = "2Gi"
-        }
-      }
-    }
-  }
-
-  depends_on = [
-    google_project_service.required,
-    google_service_account.agent_sa
-  ]
-}
+# ==============================================================================
+# SCHEDULED MICRO-BATCH THREAT DETECTOR (Budget Detection Architecture)
+# ==============================================================================
+# NOTE: The ADK agent webhook service (google_cloud_run_v2_service.adk_agent_service)
+# is defined in deploy.tf. Do not redeclare it here.
 
 # Scheduled Micro-Batch Threat Detector Cloud Run Job
 resource "google_cloud_run_v2_job" "threat_detector" {
-  project  = var.project_id
-  name     = "threat-detector"
-  location = var.region
+  project             = var.project_id
+  name                = "threat-detector"
+  location            = var.region
+  deletion_protection = false
 
   template {
     template {
@@ -61,7 +18,8 @@ resource "google_cloud_run_v2_job" "threat_detector" {
       timeout         = "300s"
 
       containers {
-        image = "gcr.io/${var.project_id}/cymbal-cyber-adk-agent:latest"
+        # Placeholder until the agent image is built/pushed (same image as the webhook service)
+        image = "us-docker.pkg.dev/cloudrun/container/job"
         command = [
           "python",
           "-m",
@@ -95,6 +53,14 @@ resource "google_cloud_run_v2_job" "threat_detector" {
     }
   }
 
+  lifecycle {
+    ignore_changes = [
+      template[0].template[0].containers[0].image,
+      client,
+      client_version,
+    ]
+  }
+
   depends_on = [
     google_project_service.required,
     google_service_account.detector_sa,
@@ -105,12 +71,13 @@ resource "google_cloud_run_v2_job" "threat_detector" {
 
 # Cloud Scheduler Job running the Threat Detector every 2 minutes
 resource "google_cloud_scheduler_job" "threat_detector_schedule" {
-  project     = var.project_id
-  name        = "threat-detector-2min-trigger"
-  region      = var.region
-  description = "Triggers the threat-detector Cloud Run Job every 2 minutes for idempotent micro-batch threat evaluation."
-  schedule    = "*/2 * * * *"
-  time_zone   = "UTC"
+  project          = var.project_id
+  name             = "threat-detector-2min-trigger"
+  region           = var.region
+  description      = "Triggers the threat-detector Cloud Run Job every 2 minutes for idempotent micro-batch threat evaluation."
+  schedule         = "*/2 * * * *"
+  time_zone        = "UTC"
+  attempt_deadline = "320s"
 
   http_target {
     http_method = "POST"
@@ -129,12 +96,11 @@ resource "google_cloud_scheduler_job" "threat_detector_schedule" {
   ]
 }
 
-# Grant Invoker SA run.jobs.run on the detector job
+# Grant Invoker SA permission to run the detector job
 resource "google_cloud_run_v2_job_iam_member" "scheduler_invokes_detector" {
-  project = var.project_id
+  project  = var.project_id
   location = var.region
-  name    = google_cloud_run_v2_job.threat_detector.name
-  role    = "roles/run.invoker"
-  member  = "serviceAccount:${google_service_account.invoker_sa.email}"
+  name     = google_cloud_run_v2_job.threat_detector.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.invoker_sa.email}"
 }
-

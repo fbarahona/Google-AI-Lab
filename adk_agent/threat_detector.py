@@ -229,12 +229,12 @@ class ThreatDetector:
         """
         dlq_query = f"""
         SELECT DISTINCT
-          dlq.alert_id,
-          dlq.payload,
-          dlq.dead_lettered_at
+          JSON_VALUE(dlq.attributes, '$.alert_id') AS alert_id,
+          dlq.data AS payload,
+          dlq.publish_time AS dead_lettered_at
         FROM `{self.project_id}.{self.dataset_id}.alerts_dead_letter` dlq
         INNER JOIN `{self.project_id}.{self.dataset_id}.alerts` a
-          ON dlq.alert_id = a.alert_id
+          ON JSON_VALUE(dlq.attributes, '$.alert_id') = a.alert_id
         WHERE a.status != 'DEAD_LETTERED'
         LIMIT 20;
         """

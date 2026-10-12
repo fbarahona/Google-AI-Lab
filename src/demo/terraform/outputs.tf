@@ -88,9 +88,29 @@ output "pubsub_raw_logs_topic" {
   value       = google_pubsub_topic.raw_logs_topic.id
 }
 
-output "pubsub_raw_logs_subscription" {
-  description = "Pub/Sub subscription for Dataflow streaming raw logs."
-  value       = google_pubsub_subscription.raw_logs_to_bq_sub.id
+output "pubsub_raw_access_bq_subscription" {
+  description = "Pub/Sub BigQuery subscription writing access events to user_access_events."
+  value       = google_pubsub_subscription.raw_access_to_bq.id
+}
+
+output "pubsub_raw_network_bq_subscription" {
+  description = "Pub/Sub BigQuery subscription writing network events to network_events."
+  value       = google_pubsub_subscription.raw_network_to_bq.id
+}
+
+output "pubsub_alerts_dlq_topic" {
+  description = "Dead-letter topic for alerts that exhausted webhook delivery attempts."
+  value       = google_pubsub_topic.alerts_dlq_topic.id
+}
+
+output "table_alerts" {
+  description = "BigQuery alerts table (keyed by alert_id, status lifecycle)."
+  value       = "${var.project_id}.${google_bigquery_dataset.cyber_dataset.dataset_id}.${google_bigquery_table.alerts.table_id}"
+}
+
+output "threat_detector_job" {
+  description = "Scheduled micro-batch threat detector Cloud Run Job."
+  value       = google_cloud_run_v2_job.threat_detector.name
 }
 
 output "bigquery_connection_id" {
