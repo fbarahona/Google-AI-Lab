@@ -3,7 +3,7 @@ Unit tests for SOC Ticketing System models and operations.
 """
 import shutil
 from unittest.mock import MagicMock
-import pytest
+
 from src.demo.soc_ticketing.models import SocTicket
 from src.demo.soc_ticketing.ticketing_service import SocTicketingService
 
@@ -35,7 +35,7 @@ def test_soc_ticketing_service_dispatch(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCAL_QUEUE_DIR", str(tmp_path))
     monkeypatch.setenv("LOCAL_MODE", "false")
     service = SocTicketingService(project_id="test-project", dataset_id="Test_Dataset")
-    
+
     # Mock GCP clients
     mock_storage = MagicMock()
     mock_bucket = MagicMock()
@@ -78,7 +78,7 @@ def test_soc_ticketing_fetch_historic_and_verdict(tmp_path, monkeypatch):
     shutil.copytree("./local_demo_data/escalations/history", str(hist_dir), dirs_exist_ok=True)
 
     service = SocTicketingService(project_id="test-project", dataset_id="Test_Dataset")
-    
+
     # 1. Fetch historic tickets (should return seeded + archived records)
     historic = service.fetch_historic_tickets()
     assert len(historic) >= 5

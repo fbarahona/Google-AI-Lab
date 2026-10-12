@@ -13,15 +13,13 @@ Runs every 2 minutes (via Cloud Scheduler -> Cloud Run Job):
 
 from __future__ import annotations
 
-import os
-import sys
+import argparse
 import json
 import logging
-import argparse
-from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
-from google.cloud import bigquery
-from google.cloud import pubsub_v1
+import os
+from typing import Any
+
+from google.cloud import bigquery, pubsub_v1
 
 logger = logging.getLogger("ThreatDetectorJob")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -66,7 +64,7 @@ class ThreatDetector:
                     published_count, dlq_count)
         return published_count
 
-    def _merge_and_fetch_new_alerts(self, lookback_minutes: int, min_score: int) -> List[Dict[str, Any]]:
+    def _merge_and_fetch_new_alerts(self, lookback_minutes: int, min_score: int) -> list[dict[str, Any]]:
         """
         Uses BigQuery MERGE to bucket 2-minute windows, scoring only windows that closed
         more than 60 seconds ago. Returns only rows inserted during this run.
@@ -205,7 +203,7 @@ class ThreatDetector:
             logger.error("Error fetching newly created alerts: %s", e)
             return []
 
-    def _update_alert_status(self, alert_id: str, new_status: str, expected_current_status: Optional[str] = None):
+    def _update_alert_status(self, alert_id: str, new_status: str, expected_current_status: str | None = None):
         """Transitions alert status in BigQuery using parameterized query."""
         where_clause = "WHERE alert_id = @alert_id"
         query_params = [
@@ -233,7 +231,7 @@ class ThreatDetector:
         except Exception as e:
             logger.error("Failed to update status for alert %s to %s: %s", alert_id, new_status, e)
 
-    def _publish_alerts(self, alerts: List[Dict[str, Any]]) -> int:
+    def _publish_alerts(self, alerts: list[dict[str, Any]]) -> int:
         """
         Publishes alerts to cymbal_cyber_alerts matching the unified Alert Contract,
         and marks them as PUBLISHED in BigQuery to prevent duplication.

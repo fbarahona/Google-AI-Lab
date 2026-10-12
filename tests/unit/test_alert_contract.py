@@ -3,7 +3,7 @@ Unit tests for alert contract schema validation and malformed Pub/Sub payload re
 """
 
 import base64
-import json
+
 import pytest
 from starlette.testclient import TestClient
 

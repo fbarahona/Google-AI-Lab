@@ -1,8 +1,8 @@
 """
 SOC Ticketing System Package.
 """
-from .models import SocTicket, DetectionAlert
+from .models import DetectionAlert, SocTicket
 from .ticketing_service import SocTicketingService
 
-__all__ = ["SocTicket", "DetectionAlert", "SocTicketingService"]
+__all__ = ["DetectionAlert", "SocTicket", "SocTicketingService"]
 

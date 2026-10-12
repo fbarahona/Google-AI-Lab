@@ -1,10 +1,9 @@
 """
 Logging utilities for Cymbal Cyber ADK agents.
 """
+import logging
 import os
 import sys
-import logging
-from typing import Optional
 
 logger = logging.getLogger("CymbalCyberADK")
 
@@ -27,7 +26,7 @@ def setup_logging():
             logger.warning("Could not initialize Google Cloud Logging: %s", e)
 
 
-def log_agent_event(message: str, agent_name: Optional[str] = None):
+def log_agent_event(message: str, agent_name: str | None = None):
     """Logs an agent lifecycle or tool execution event."""
     prefix = f"[{agent_name}] " if agent_name else ""
     logger.info("%s%s", prefix, message)

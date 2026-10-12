@@ -18,8 +18,8 @@ import glob
 import json
 import os
 import re
-from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional, Set
+from datetime import UTC, datetime
+from typing import Any
 
 
 def calculate_redundancy(trajectory: list[dict]) -> float:
@@ -36,7 +36,7 @@ def calculate_redundancy(trajectory: list[dict]) -> float:
     return 1.0 - (len(unique_calls) / len(calls))
 
 
-def is_ticket_fresh(tdata: Dict[str, Any], max_age_seconds: float = 1800.0) -> bool:
+def is_ticket_fresh(tdata: dict[str, Any], max_age_seconds: float = 1800.0) -> bool:
     """
     Validates ticket timestamp freshness. Stale ticket files leftover from previous
     runs or historical incidents are ignored to prevent false eval passes.
@@ -49,8 +49,8 @@ def is_ticket_fresh(tdata: Dict[str, Any], max_age_seconds: float = 1800.0) -> b
         ts_str = str(created_at_str).replace("Z", "+00:00")
         dt = datetime.fromisoformat(ts_str)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        age = (datetime.now(timezone.utc) - dt).total_seconds()
+            dt = dt.replace(tzinfo=UTC)
+        age = (datetime.now(UTC) - dt).total_seconds()
         # Accept if ticket was created within max_age_seconds (30 minutes)
         return 0 <= age <= max_age_seconds
     except Exception:
@@ -100,10 +100,10 @@ def is_response_blocked(fr: Any) -> bool:
 
 
 def extract_session_state(
-    instance: Dict[str, Any],
-    agent_data: Dict[str, Any],
-    turns: List[Any]
-) -> Dict[str, Any]:
+    instance: dict[str, Any],
+    agent_data: dict[str, Any],
+    turns: list[Any]
+) -> dict[str, Any]:
     """
     Aggregates session state from all available trace locations:
     1. instance top-level state/session_state/final_state
@@ -111,7 +111,7 @@ def extract_session_state(
     3. turn-level state
     4. event-level state_delta / actions.stateDelta
     """
-    state: Dict[str, Any] = {}
+    state: dict[str, Any] = {}
 
     for container in (instance, agent_data):
         if isinstance(container, dict):
@@ -146,9 +146,9 @@ def extract_session_state(
 
 
 def extract_ticket_escalation(
-    instance: Dict[str, Any],
-    agent_data: Dict[str, Any],
-    user_id: Optional[str]
+    instance: dict[str, Any],
+    agent_data: dict[str, Any],
+    user_id: str | None
 ) -> tuple[bool, bool]:
     """
     Inspects ticket data exposed in the eval output or in the local ticket queue / store.
@@ -183,7 +183,7 @@ def extract_ticket_escalation(
             pattern = os.path.join(queue_dir, f"human_escalation_information_*{user_id}*.json")
             for fpath in glob.glob(pattern):
                 try:
-                    with open(fpath, "r", encoding="utf-8") as f:
+                    with open(fpath, encoding="utf-8") as f:
                         tdata = json.load(f)
                         if is_ticket_fresh(tdata):
                             ticket_found = True
@@ -200,16 +200,16 @@ def extract_ticket_escalation(
     return ticket_found, ticket_is_escalated
 
 
-def evaluate(instance: Dict[str, Any]) -> Dict[str, Any]:
+def evaluate(instance: dict[str, Any]) -> dict[str, Any]:
     """
     Evaluates tool trajectory validity, security gate enforcement, and default-deny rescues.
     """
     agent_data = instance.get("agent_data") or {}
     turns = agent_data.get("turns", []) if isinstance(agent_data, dict) else getattr(agent_data, "turns", [])
 
-    tools_called: Set[str] = set()
-    tools_blocked: Set[str] = set()
-    tools_succeeded: Set[str] = set()
+    tools_called: set[str] = set()
+    tools_blocked: set[str] = set()
+    tools_succeeded: set[str] = set()
 
     # Extract prompt text and case id
     prompt_text = ""
@@ -225,7 +225,7 @@ def evaluate(instance: Dict[str, Any]) -> Dict[str, Any]:
     case_id = str(instance.get("eval_case_id") or instance.get("id") or "")
 
     # Extract user ID
-    user_id: Optional[str] = None
+    user_id: str | None = None
     if prompt_text:
         m = re.search(r'["\']user_id["\']\s*:\s*["\']([^"\']+)["\']', prompt_text)
         if not m:

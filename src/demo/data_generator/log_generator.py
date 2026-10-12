@@ -20,27 +20,19 @@ Usage Examples:
   python -m src.demo.data_generator.log_generator --mode benign --destination pubsub --topic cymbal_cyber_raw_logs
 """
 
-import os
-import sys
-import time
-import random
-import logging
 import argparse
-from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Any, Optional, Tuple, Set
+import logging
+import os
+import random
+import time
+from datetime import UTC, datetime
+from typing import Any
 
-from .models import UserAccessEvent, NetworkEvent
+from .sinks import BaseSink, BigQuerySink, GoogleCloudStorageSink, LocalSink, PubSubSink
 from .threat_scenarios import (
-    generate_malicious_threat_scenario,
     generate_false_positive_threat_scenario,
-    generate_prompt_injection_threat_scenario
-)
-from .sinks import (
-    BaseSink,
-    LocalSink,
-    GoogleCloudStorageSink,
-    PubSubSink,
-    BigQuerySink
+    generate_malicious_threat_scenario,
+    generate_prompt_injection_threat_scenario,
 )
 
 logging.basicConfig(
@@ -78,11 +70,11 @@ BENIGN_COMMANDS = ["ipconfig /all", "ping 8.8.8.8", "ls -la /home", "df -h", "ho
 class SyntheticLogEngine:
     """Core simulation engine for generating enterprise user and device activity."""
 
-    def __init__(self, project_id: Optional[str] = None, dataset_id: str = "Cymbal_Cyber"):
+    def __init__(self, project_id: str | None = None, dataset_id: str = "Cymbal_Cyber"):
         self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo")
         self.dataset_id = dataset_id
-        self.user_profiles: Dict[str, Dict[str, Any]] = {}
-        self.available_internal_ips: Set[str] = set()
+        self.user_profiles: dict[str, dict[str, Any]] = {}
+        self.available_internal_ips: set[str] = set()
         self._init_state()
 
     def _init_state(self):
@@ -109,11 +101,11 @@ class SyntheticLogEngine:
                 "last_login_time": None
             }
 
-    def generate_single_event_pair(self) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    def generate_single_event_pair(self) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         """Generates a realistic single stateful access or network event."""
         user = random.choice(list(self.user_profiles.keys()))
         profile = self.user_profiles[user]
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Logged in -> generate network traffic or occasional logout
         if profile["current_internal_ip"]:
@@ -190,7 +182,7 @@ class SyntheticLogEngine:
                 }
                 return acc_event, None
 
-    def generate_benign_batch(self, count: int) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    def generate_benign_batch(self, count: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Generates a batch of benign access and network events."""
         access_batch = []
         network_batch = []
@@ -208,8 +200,8 @@ class SyntheticLogEngine:
     def inject_threat(
         self,
         threat_type: str = "malicious",
-        user_id: Optional[str] = None
-    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        user_id: str | None = None
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Ad-hoc method to inject synthetic threats."""
         if threat_type == "malicious":
             target = user_id or "u.lewis"

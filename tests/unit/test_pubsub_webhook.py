@@ -5,6 +5,7 @@ Verifies payload unwrapping, base64 decoding, and webhook acknowledgement.
 
 import base64
 import json
+
 import pytest
 from starlette.testclient import TestClient
 
@@ -218,8 +219,8 @@ def test_dedup_cache_bounded_capacity(monkeypatch):
     """Verify that in-memory deduplication cache enforces MAX_DEDUP_CACHE_SIZE and evicts oldest entries."""
     from adk_agent.fast_api_app import (
         _COMPLETED_MESSAGES,
-        _record_completed_message,
         MAX_DEDUP_CACHE_SIZE,
+        _record_completed_message,
     )
 
     _COMPLETED_MESSAGES.clear()
@@ -258,5 +259,3 @@ def test_pubsub_push_rejects_non_json_binary_base64_payload():
     response = client.post("/apps/adk_agent/trigger/pubsub", json=payload)
     assert response.status_code == 400
     assert "Bad Request" in response.json().get("detail", "")
-
-

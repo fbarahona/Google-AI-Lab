@@ -9,12 +9,12 @@ Unit tests for the Budget Detection Architecture:
 
 import base64
 import json
+
 import pytest
-from datetime import datetime, timezone
 from starlette.testclient import TestClient
 
-from src.demo.soc_ticketing.models import DetectionAlert, SocTicket
 from adk_agent.fast_api_app import app, extract_pubsub_payload
+from src.demo.soc_ticketing.models import DetectionAlert, SocTicket
 
 
 def test_detection_alert_contract_schema():
@@ -126,5 +126,3 @@ def test_webhook_rejects_non_json_binary_base64_payload(monkeypatch):
     response = client.post("/apps/adk_agent/trigger/pubsub", json=payload)
     assert response.status_code == 400
     assert "Bad Request" in response.json().get("detail", "")
-
-

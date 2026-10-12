@@ -3,17 +3,18 @@ Interactive Altair and Pydeck Charts for SOC Monitoring Dashboard.
 Matches the enterprise SOC As-A-Service dashboard layout.
 """
 
-import pandas as pd
+from typing import Any
+
 import altair as alt
+import pandas as pd
 import pydeck as pdk
-from typing import Dict, Any, List
 
 
 def create_donut_chart(
-    data: List[Dict[str, Any]],
+    data: list[dict[str, Any]],
     category_col: str,
     value_col: str,
-    color_map: Dict[str, str],
+    color_map: dict[str, str],
     center_label: str = "Alerts",
     center_total: int = 12
 ) -> alt.LayerChart:
@@ -70,7 +71,7 @@ def create_donut_chart(
     return chart
 
 
-def create_category_bar_chart(category_data: List[Dict[str, Any]]) -> alt.Chart:
+def create_category_bar_chart(category_data: list[dict[str, Any]]) -> alt.Chart:
     """
     Horizontal bar chart displaying Open Alerts by Category.
     """
@@ -232,7 +233,7 @@ def create_threat_trend_chart() -> alt.Chart:
     }
 
     for metric, vals in series.items():
-        for d, v in zip(dates, vals):
+        for d, v in zip(dates, vals, strict=False):
             rows.append({"date": d, "metric": metric, "count": v})
 
     df = pd.DataFrame(rows)
@@ -256,7 +257,7 @@ def create_threat_trend_chart() -> alt.Chart:
     return chart
 
 
-def create_threat_map_deck(threat_points: List[Dict[str, Any]] = None) -> pdk.Deck:
+def create_threat_map_deck(threat_points: list[dict[str, Any]] | None = None) -> pdk.Deck:
     """
     Interactive Global Threat Map matching the Fortinet world map style.
     """

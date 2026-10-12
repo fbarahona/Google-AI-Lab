@@ -8,16 +8,13 @@ Comprehensive enterprise SOC portal matching the SOC As-A-Service dashboard:
 """
 
 import os
-import re
-import json
+import sys
 import time
+from pathlib import Path
+
 import pandas as pd
 import streamlit as st
-from datetime import datetime, timezone
 from streamlit_autorefresh import st_autorefresh
-
-import sys
-from pathlib import Path
 
 # Ensure directory is on sys.path if run directly via `streamlit run`
 _CURRENT_DIR = Path(__file__).resolve().parent
@@ -28,25 +25,25 @@ if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
 try:
-    from .ticketing_service import SocTicketingService
     from .dashboard_charts import (
-        create_donut_chart,
         create_category_bar_chart,
-        create_log_rate_chart,
+        create_donut_chart,
         create_log_breakdown_chart,
+        create_log_rate_chart,
+        create_threat_map_deck,
         create_threat_trend_chart,
-        create_threat_map_deck
     )
+    from .ticketing_service import SocTicketingService
 except ImportError:
-    from ticketing_service import SocTicketingService
     from dashboard_charts import (
-        create_donut_chart,
         create_category_bar_chart,
-        create_log_rate_chart,
+        create_donut_chart,
         create_log_breakdown_chart,
+        create_log_rate_chart,
+        create_threat_map_deck,
         create_threat_trend_chart,
-        create_threat_map_deck
     )
+    from ticketing_service import SocTicketingService
 
 # Page configuration
 st.set_page_config(
@@ -71,7 +68,7 @@ st.markdown("""
         background-color: #070b13;
         border-right: 1px solid #1e293b;
     }
-    
+
     /* Metric Card Enhancements */
     div[data-testid="stMetric"] {
         background-color: #111a2d;
@@ -213,7 +210,7 @@ with st.sidebar:
         "New Tickets",
         "Historic Tickets"
     ]
-    
+
     selected_nav = st.radio(
         "Navigation",
         nav_options,
@@ -246,7 +243,7 @@ with st.sidebar:
 # VIEW 1: MONITORING OVERVIEW (MATCHING UPLOADED DASHBOARD)
 # ==============================================================================
 if st.session_state.active_nav_tab == "Monitoring Overview":
-    
+
     # Top Breadcrumb and Time Bar
     col_bread, col_time = st.columns([3, 1])
     with col_bread:
@@ -261,39 +258,39 @@ if st.session_state.active_nav_tab == "Monitoring Overview":
     # 1. Top KPI Summary Funnel
     total_escalated = len(new_tickets) + len([t for t in historic_tickets if t.get("human_decision") == "Genuine Threat"])
     triaged_count = len(historic_tickets)
-    
+
     kpi_html = f"""
     <div class="kpi-container">
         <div class="kpi-item">
             <div class="kpi-val">10</div>
             <div class="kpi-lbl">Monitored Devices</div>
         </div>
-        <div class="kpi-divider">›</div>
+        <div class="kpi-divider">&rsaquo;</div>
         <div class="kpi-item">
             <div class="kpi-val">2.6K</div>
             <div class="kpi-lbl">Monitored Endpoints</div>
         </div>
-        <div class="kpi-divider">›</div>
+        <div class="kpi-divider">&rsaquo;</div>
         <div class="kpi-item">
             <div class="kpi-val">2.6K</div>
             <div class="kpi-lbl">Monitored Users</div>
         </div>
-        <div class="kpi-divider">›</div>
+        <div class="kpi-divider">&rsaquo;</div>
         <div class="kpi-item">
             <div class="kpi-val">166.6K</div>
             <div class="kpi-lbl">Processed Logs</div>
         </div>
-        <div class="kpi-divider">›</div>
+        <div class="kpi-divider">&rsaquo;</div>
         <div class="kpi-item">
             <div class="kpi-val">160</div>
             <div class="kpi-lbl">Security Events</div>
         </div>
-        <div class="kpi-divider">›</div>
+        <div class="kpi-divider">&rsaquo;</div>
         <div class="kpi-item">
             <div class="kpi-val" style="color: #ff9800;">{max(23, triaged_count)}</div>
             <div class="kpi-lbl">Triaged Alerts</div>
         </div>
-        <div class="kpi-divider">›</div>
+        <div class="kpi-divider">&rsaquo;</div>
         <div class="kpi-item">
             <div class="kpi-val" style="color: #f44336;">{max(12, total_escalated)}</div>
             <div class="kpi-lbl">Escalated Alerts</div>
@@ -414,7 +411,7 @@ elif st.session_state.active_nav_tab == "New Tickets":
 
     if not new_tickets:
         st.info("🟢 No pending incident tickets in the queue. All alerts have been adjudicated!")
-        if st.button("➕ Inject Test Threat Scenario (Local Runner)"):
+        if st.button("+ Inject Test Threat Scenario (Local Runner)"):
             with st.spinner("Injecting attack scenario..."):
                 from ..data_generator.log_generator import SyntheticLogEngine
                 from ..soc_ticketing.models import SocTicket
@@ -443,7 +440,7 @@ elif st.session_state.active_nav_tab == "New Tickets":
 
         with col_list:
             st.subheader(f"Queue ({len(new_tickets)})")
-            
+
             # Select first by default if none selected
             valid_ids = [t.get("ticket_id") for t in new_tickets]
             if st.session_state.selected_ticket_id not in valid_ids:
@@ -457,7 +454,7 @@ elif st.session_state.active_nav_tab == "New Tickets":
 
                 is_selected = (tid == st.session_state.selected_ticket_id)
                 btn_border = "primary" if is_selected else "secondary"
-                
+
                 label = f"🚨 {tid}\nUser: {user} | Score: {score} | {sev}"
                 if st.button(label, key=f"q_{tid}", type=btn_border, width="stretch"):
                     st.session_state.selected_ticket_id = tid
@@ -466,7 +463,7 @@ elif st.session_state.active_nav_tab == "New Tickets":
 
         with col_inspect:
             current_ticket = next((t for t in new_tickets if t.get("ticket_id") == st.session_state.selected_ticket_id), None)
-            
+
             if not current_ticket:
                 st.info("Select a ticket from the queue on the left.")
             else:
@@ -480,7 +477,7 @@ elif st.session_state.active_nav_tab == "New Tickets":
 
                 with st.container(border=True):
                     st.markdown(f"#### Incident Dossier: `{tid}`")
-                    
+
                     # Metadata badges
                     m_col1, m_col2, m_col3, m_col4 = st.columns(4)
                     m_col1.metric("Target Entity", user)
@@ -609,7 +606,7 @@ elif st.session_state.active_nav_tab == "Historic Tickets":
         if inspect_item:
             with st.container(border=True):
                 st.markdown(f"### Ticket Audit Record: `{selected_tid}`")
-                
+
                 i_c1, i_c2, i_c3 = st.columns(3)
                 i_c1.markdown(f"**Entity / User:** `{inspect_item.get('user_id')}`")
                 i_c2.markdown(f"**Originating IP:** `{inspect_item.get('source_ip')}` ({inspect_item.get('geo_country', 'External')})")

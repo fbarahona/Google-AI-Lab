@@ -8,15 +8,16 @@ Pipeline Architecture:
   Pub/Sub (cymbal_cyber_raw_logs) -> Parse & Route DoFn -> BigQuery (user_access_events / network_events)
 """
 
+import argparse
 import json
 import logging
-import argparse
-from typing import Dict, Any, Tuple
+import os
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-def parse_and_route_record(message_bytes: bytes) -> Tuple[str, Dict[str, Any]]:
+def parse_and_route_record(message_bytes: bytes) -> tuple[str, dict[str, Any]]:
     """
     Parses incoming Pub/Sub JSON message and determines destination table.
     Expects message structure: {"table": "user_access_events"|"network_events", "data": {...}}
@@ -43,8 +44,8 @@ def parse_and_route_record(message_bytes: bytes) -> Tuple[str, Dict[str, Any]]:
 
 
 def build_pipeline_runner(
-    project_id: Optional[str] = None,
-    input_subscription: Optional[str] = None,
+    project_id: str | None = None,
+    input_subscription: str | None = None,
     dataset_id: str = "Cymbal_Cyber",
     runner: str = "DirectRunner"
 ):
@@ -56,7 +57,11 @@ def build_pipeline_runner(
     input_subscription = input_subscription or f"projects/{project_id}/subscriptions/raw_logs_to_bq_sub"
     try:
         import apache_beam as beam
-        from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions, GoogleCloudOptions
+        from apache_beam.options.pipeline_options import (
+            GoogleCloudOptions,
+            PipelineOptions,
+            StandardOptions,
+        )
     except ImportError:
         logger.warning("apache-beam is not installed in the local environment. Returning None.")
         return None
@@ -67,7 +72,7 @@ def build_pipeline_runner(
 
     google_cloud_options = pipeline_options.view_as(GoogleCloudOptions)
     google_cloud_options.project = project_id
-    google_cloud_options.job_name = f"pubsub-to-bigquery-stream"
+    google_cloud_options.job_name = "pubsub-to-bigquery-stream"
 
     access_table_spec = f"{project_id}:{dataset_id}.user_access_events"
     network_table_spec = f"{project_id}:{dataset_id}.network_events"

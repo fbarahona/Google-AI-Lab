@@ -21,8 +21,8 @@ import os
 import time
 from collections import OrderedDict
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from a2a.server.tasks import InMemoryTaskStore
 from dotenv import load_dotenv
@@ -98,7 +98,7 @@ app.title = "google"
 app.description = "API for interacting with the Agent google"
 
 
-def extract_pubsub_payload(raw_body: Any) -> Dict[str, Any]:
+def extract_pubsub_payload(raw_body: Any) -> dict[str, Any]:
     """
     Decodes and extracts the alert payload from incoming Pub/Sub push requests.
     Handles:
@@ -111,12 +111,12 @@ def extract_pubsub_payload(raw_body: Any) -> Dict[str, Any]:
         try:
             raw_body = json.loads(raw_body.decode("utf-8"))
         except Exception as exc:
-            raise ValueError(f"Malformed request body: payload is not valid JSON ({exc})")
+            raise ValueError(f"Malformed request body: payload is not valid JSON ({exc})") from exc
     elif isinstance(raw_body, str):
         try:
             raw_body = json.loads(raw_body)
         except Exception as exc:
-            raise ValueError(f"Malformed request body: payload is not valid JSON ({exc})")
+            raise ValueError(f"Malformed request body: payload is not valid JSON ({exc})") from exc
 
     if not isinstance(raw_body, dict):
         raise ValueError("Malformed request body: root must be a JSON object")
@@ -132,7 +132,7 @@ def extract_pubsub_payload(raw_body: Any) -> Dict[str, Any]:
                 decoded_text = decoded_bytes.decode("utf-8")
                 payload = json.loads(decoded_text)
             except Exception as exc:
-                raise ValueError(f"Malformed Pub/Sub message data: payload is not valid JSON ({exc})")
+                raise ValueError(f"Malformed Pub/Sub message data: payload is not valid JSON ({exc})") from exc
         if not isinstance(payload, dict):
             raise ValueError("Malformed Pub/Sub message data: inner JSON must be an object")
         attrs = msg.get("attributes")
@@ -180,7 +180,7 @@ def _record_in_progress_message(message_id: str):
         _IN_PROGRESS_MESSAGES.popitem(last=False)
 
 
-def get_alert_status_info(alert_id: str) -> Optional[Dict[str, Any]]:
+def get_alert_status_info(alert_id: str) -> dict[str, Any] | None:
     """
     Checks BigQuery `alerts` table for the alert_id status.
     Returns dict with status, updated_at timestamp, or None if not found.
@@ -189,7 +189,8 @@ def get_alert_status_info(alert_id: str) -> Optional[Dict[str, Any]]:
         return None
     try:
         from google.cloud import bigquery
-        from adk_agent.tools import get_bq_client, PROJECT_ID, DATASET_ID
+
+        from adk_agent.tools import DATASET_ID, PROJECT_ID, get_bq_client
         bq = get_bq_client()
         query = f"""
             SELECT status, updated_at
@@ -215,7 +216,7 @@ def get_alert_status_info(alert_id: str) -> Optional[Dict[str, Any]]:
 def update_alert_status(
     alert_id: str,
     new_status: str,
-    alert_data: Optional[Dict[str, Any]] = None,
+    alert_data: dict[str, Any] | None = None,
 ):
     """
     Updates alerts.status to INVESTIGATING, DONE, or NEW with timestamp audit.
@@ -226,7 +227,8 @@ def update_alert_status(
         return
     try:
         from google.cloud import bigquery
-        from adk_agent.tools import get_bq_client, PROJECT_ID, DATASET_ID
+
+        from adk_agent.tools import DATASET_ID, PROJECT_ID, get_bq_client
         bq = get_bq_client()
 
         if alert_data:
@@ -337,7 +339,7 @@ async def _run_agent_investigation(
     return "\n".join(outputs)
 
 
-def verify_incoming_oidc_token(request: Request) -> Dict[str, Any]:
+def verify_incoming_oidc_token(request: Request) -> dict[str, Any]:
     """
     Validates Google-issued OpenID Connect (OIDC) JWT bearer tokens for Pub/Sub push
     and Cloud Scheduler endpoints to guarantee caller identity authenticity.
@@ -355,8 +357,8 @@ def verify_incoming_oidc_token(request: Request) -> Dict[str, Any]:
 
     token = auth_header.split(" ", 1)[1].strip()
     try:
-        from google.oauth2 import id_token
         from google.auth.transport import requests as google_requests
+        from google.oauth2 import id_token
 
         claims = None
         expected_audience = os.getenv("EXPECTED_OIDC_AUDIENCE")
@@ -432,7 +434,7 @@ def verify_incoming_oidc_token(request: Request) -> Dict[str, Any]:
         raise HTTPException(
             status_code=403,
             detail="Invalid OIDC bearer token.",
-        )
+        ) from exc
 
 
 @app.post("/apps/adk_agent/trigger/pubsub")
@@ -441,7 +443,7 @@ async def handle_pubsub_trigger(
     request: Request,
     background_tasks: BackgroundTasks,
     sync: bool = True,
-    caller_claims: Dict[str, Any] = Depends(verify_incoming_oidc_token),
+    caller_claims: dict[str, Any] = Depends(verify_incoming_oidc_token),
 ):
     """
     Webhook receiving Pub/Sub push notifications for BigQuery Continuous Query security alerts.
@@ -461,7 +463,7 @@ async def handle_pubsub_trigger(
         raise HTTPException(
             status_code=400,
             detail=f"Bad Request: Malformed Pub/Sub payload ({err})",
-        )
+        ) from err
     user_id = alert_data.get("user_id") or "pubsub-automator"
     session_id = f"pubsub-{user_id}-{int(time.time())}"
     prompt_text = f"Investigate incoming continuous security alert: {json.dumps(alert_data)}"
@@ -537,7 +539,7 @@ async def handle_pubsub_trigger(
                 if updated_at:
                     try:
                         if isinstance(updated_at, datetime):
-                            elapsed = (datetime.now(timezone.utc) - updated_at).total_seconds()
+                            elapsed = (datetime.now(UTC) - updated_at).total_seconds()
                         else:
                             elapsed = 0
                         if elapsed > 600:
@@ -610,7 +612,7 @@ async def handle_pubsub_trigger(
         raise HTTPException(
             status_code=500,
             detail="Internal server error during alert investigation.",
-        )
+        ) from exc
     finally:
         _IN_PROGRESS_MESSAGES.pop(message_id, None)
 

@@ -4,8 +4,8 @@ Storage sinks for synthetic log output (GCS, Pub/Sub, BigQuery, Local).
 import abc
 import json
 import logging
-from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -16,8 +16,8 @@ class BaseSink(abc.ABC):
     @abc.abstractmethod
     def write_events(
         self,
-        access_events: List[Dict[str, Any]],
-        network_events: List[Dict[str, Any]]
+        access_events: list[dict[str, Any]],
+        network_events: list[dict[str, Any]]
     ) -> int:
         """Writes batches of access and network events. Returns total count written."""
         pass
@@ -26,14 +26,14 @@ class BaseSink(abc.ABC):
 class LocalSink(BaseSink):
     """Writes logs to local files (JSON/NDJSON) or stdout."""
 
-    def __init__(self, output_dir: Optional[str] = None, print_stdout: bool = False):
+    def __init__(self, output_dir: str | None = None, print_stdout: bool = False):
         self.output_dir = output_dir
         self.print_stdout = print_stdout
 
     def write_events(
         self,
-        access_events: List[Dict[str, Any]],
-        network_events: List[Dict[str, Any]]
+        access_events: list[dict[str, Any]],
+        network_events: list[dict[str, Any]]
     ) -> int:
         total = len(access_events) + len(network_events)
         if self.print_stdout:
@@ -45,7 +45,7 @@ class LocalSink(BaseSink):
         if self.output_dir:
             import os
             os.makedirs(self.output_dir, exist_ok=True)
-            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+            timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
             if access_events:
                 path = os.path.join(self.output_dir, f"access_events_{timestamp}.jsonl")
                 with open(path, "w", encoding="utf-8") as f:
@@ -72,10 +72,10 @@ class GoogleCloudStorageSink(BaseSink):
 
     def write_events(
         self,
-        access_events: List[Dict[str, Any]],
-        network_events: List[Dict[str, Any]]
+        access_events: list[dict[str, Any]],
+        network_events: list[dict[str, Any]]
     ) -> int:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         date_partition = now.strftime("%Y/%m/%d")
         ts_suffix = now.strftime("%H%M%S_%f")
         total = 0
@@ -109,8 +109,8 @@ class PubSubSink(BaseSink):
 
     def write_events(
         self,
-        access_events: List[Dict[str, Any]],
-        network_events: List[Dict[str, Any]]
+        access_events: list[dict[str, Any]],
+        network_events: list[dict[str, Any]]
     ) -> int:
         total = 0
         for ev in access_events:
@@ -148,8 +148,8 @@ class BigQuerySink(BaseSink):
 
     def write_events(
         self,
-        access_events: List[Dict[str, Any]],
-        network_events: List[Dict[str, Any]]
+        access_events: list[dict[str, Any]],
+        network_events: list[dict[str, Any]]
     ) -> int:
         total = 0
         if access_events:

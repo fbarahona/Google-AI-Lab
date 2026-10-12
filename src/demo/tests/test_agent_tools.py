@@ -21,7 +21,6 @@ from adk_agent.tools import (
     escalate_to_human,
     generate_signed_url,
     get_entity_behavioral_profile,
-    get_gcs_uri_for_user,
     get_visual_analysis_for_user,
     log_false_positive,
     read_png_text_chunks,

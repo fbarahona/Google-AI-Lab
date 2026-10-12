@@ -4,20 +4,20 @@ Includes BigQuery queries, GCS signed URLs, multimodal visual analysis with Gemi
 and SOC ticketing dispatch.
 """
 
-import os
 import json
-import time
-import re
 import logging
-from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, Optional
+import os
+import re
+import time
+from datetime import timedelta
+from typing import Any
 
 import google.auth
+from google import genai
+from google.adk.tools import ToolContext
 from google.auth import impersonated_credentials
 from google.cloud import bigquery, storage
-from google import genai
 from google.genai import types
-from google.adk.tools import ToolContext
 
 # Integrations fallback
 try:
@@ -357,7 +357,7 @@ def _compute_profile_from_local_logs(entity_type: str, entity_id: str) -> dict[s
 
     if os.path.exists(access_file):
         try:
-            with open(access_file, "r", encoding="utf-8") as f:
+            with open(access_file, encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -387,7 +387,7 @@ def _compute_profile_from_local_logs(entity_type: str, entity_id: str) -> dict[s
 
     if os.path.exists(network_file):
         try:
-            with open(network_file, "r", encoding="utf-8") as f:
+            with open(network_file, encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -440,7 +440,7 @@ def get_entity_behavioral_profile(
     entity_type: str,
     entity_id: str,
     window_to_investigate: str = "24 HOUR",
-    tool_context: Optional[ToolContext] = None
+    tool_context: ToolContext | None = None
 ) -> dict[str, Any]:
     """
     Retrieves the 24-hour behavioral profile and correlated anomaly metrics for an entity
@@ -515,7 +515,7 @@ def get_entity_behavioral_profile(
     return res
 
 
-def get_visual_analysis_for_user(gcs_uri: str, tool_context: Optional[ToolContext] = None) -> str:
+def get_visual_analysis_for_user(gcs_uri: str, tool_context: ToolContext | None = None) -> str:
     """
     Performs multimodal inspection of a desktop screenshot using Gemini.
     Performs OCR on terminals, identifies command prompts, and evaluates suspicious UI activity.
@@ -658,7 +658,7 @@ def dispatch_to_soc_ticketing_system(
     structured_report: str,
     severity: str = "HIGH",
     screenshot_url: str = "",
-    tool_context: Optional[ToolContext] = None
+    tool_context: ToolContext | None = None
 ) -> str:
     """
     Passes a confirmed or suspected threat incident ticket directly to the SOC Ticketing System.
@@ -697,7 +697,7 @@ def dispatch_to_soc_ticketing_system(
 def log_false_positive(
     alert_payload: str,
     agent_comment: str,
-    tool_context: Optional[ToolContext] = None
+    tool_context: ToolContext | None = None
 ) -> str:
     """Logs the alert as an autonomously resolved False Positive in BigQuery."""
     logger.info("Logging false positive: %s", agent_comment)
@@ -731,7 +731,7 @@ def escalate_to_human(
     alert_payload: str,
     agent_reason_for_escalation: str,
     context_data: str,
-    tool_context: Optional[ToolContext] = None
+    tool_context: ToolContext | None = None
 ) -> str:
     """
     Dispatches the incident ticket to the SOC ticketing queue for human analyst adjudication.

@@ -3,10 +3,10 @@ Threat scenarios generator for synthetic cybersecurity simulations:
 - Malicious threats (APT, C2 beaconing, unauthorized privilege escalation, foreign IPs)
 - Benign false positive threats (Admin scripts, automated backup jobs, developer tools)
 """
-import random
 import hashlib
-from datetime import datetime, timezone, timedelta
-from typing import List, Tuple, Dict, Any
+import random
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 MALICIOUS_USERS = ["u.lewis", "g.harris", "a.smith", "m.jones", "k.brown", "t.wilson"]
 MALICIOUS_DEVICE = ["ws-hr-05"]
@@ -48,20 +48,20 @@ def generate_malicious_threat_scenario(
     device_id: str = MALICIOUS_DEVICE[0],
     num_correlated_pairs: int = 15,
     num_brute_force_attempts: int = 35
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
     Generates a high-fidelity attack scenario simulating credential compromise,
     lateral movement, C2 beaconing, and privilege escalation.
     """
-    access_events: List[Dict[str, Any]] = []
-    network_events: List[Dict[str, Any]] = []
+    access_events: list[dict[str, Any]] = []
+    network_events: list[dict[str, Any]] = []
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     internal_ip = f"10.50.{random.randint(1, 254)}.{random.randint(2, 254)}"
     attacker_ip = random.choice(MALICIOUS_PUBLIC_IPS)
 
     # 1. Brute-force password spray login failures preceding breach
-    for i in range(num_brute_force_attempts):
+    for _ in range(num_brute_force_attempts):
         fail_ts = now - timedelta(minutes=random.randint(10, 30), seconds=random.randint(1, 60))
         access_events.append({
             "event_timestamp": fail_ts.isoformat(),
@@ -76,7 +76,7 @@ def generate_malicious_threat_scenario(
         })
 
     # 2. Correlated successful compromise and subsequent hostile activity
-    for i in range(num_correlated_pairs):
+    for _ in range(num_correlated_pairs):
         login_ts = now - timedelta(minutes=random.randint(1, 5), seconds=random.randint(1, 45))
         access_events.append({
             "event_timestamp": login_ts.isoformat(),
@@ -159,16 +159,16 @@ def generate_false_positive_threat_scenario(
     target_user: str = "l.taylor",
     device_id: str = "ws-hr-01",
     num_events: int = 10
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
     Generates an activity spike that may look anomalous at first glance
     (e.g., developer automation via curl, backup script) but represents a benign false positive.
     The source IP is a standard corporate IP, with benign domains and no malware.
     """
-    access_events: List[Dict[str, Any]] = []
-    network_events: List[Dict[str, Any]] = []
+    access_events: list[dict[str, Any]] = []
+    network_events: list[dict[str, Any]] = []
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     internal_ip = f"10.1.{random.randint(1, 254)}.{random.randint(2, 254)}"
     corporate_public_ip = f"74.125.{random.randint(1, 100)}.{random.randint(1, 254)}"
 
@@ -236,17 +236,17 @@ def generate_prompt_injection_threat_scenario(
     target_user: str = "c.wilson",
     device_id: str = "ws-dev-10",
     num_events: int = 12
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
     Generates a sophisticated threat scenario attempting Visual Prompt Injection:
     The attacker runs real reconnaissance and exfiltration commands while leaving a
     deceptive visual payload on the desktop screenshot claiming an 'Authorized Pentest'
     to coerce the multi-agent triage system into closing the alert as a false positive.
     """
-    access_events: List[Dict[str, Any]] = []
-    network_events: List[Dict[str, Any]] = []
+    access_events: list[dict[str, Any]] = []
+    network_events: list[dict[str, Any]] = []
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     internal_ip = f"10.50.{random.randint(1, 254)}.{random.randint(2, 254)}"
     attacker_ip = "194.26.135.68"  # Hostile foreign IP
 

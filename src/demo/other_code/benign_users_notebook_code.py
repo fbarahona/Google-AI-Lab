@@ -1,13 +1,13 @@
 # @title Cymbal Cyber - Benign Continuous Event Generator
 
-import time
 import datetime
-import random
-import json
-import logging
 import hashlib
-from google.cloud import bigquery
+import logging
+import random
+import time
+
 import google.auth
+from google.cloud import bigquery
 
 # --- Core Configuration ---
 try:
@@ -63,7 +63,7 @@ BENIGN_COMMANDS = ['ipconfig /all', 'ping 8.8.8.8', 'ls -la /home', 'df -h', 'ho
 NORMAL_USER_AGENTS = ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"]
 
 # --- IP Pool for Session Management ---
-AVAILABLE_INTERNAL_IPS = set([f"10.1.{random.randint(0, 255)}.{random.randint(2, 254)}" for _ in range(200)])
+AVAILABLE_INTERNAL_IPS = {f"10.1.{random.randint(0, 255)}.{random.randint(2, 254)}" for _ in range(200)}
 USER_PROFILES = {}
 
 # --- User Profile Generation ---
@@ -100,7 +100,7 @@ def generate_and_route_events():
     """
     chosen_user = random.choice(list(USER_PROFILES.keys()))
     profile = USER_PROFILES[chosen_user]
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
 
     # --- Case 1: User is Logged IN ---
     if profile["current_internal_ip"]:
@@ -198,13 +198,13 @@ def stream_network_events_insertjson(rate: int):
         client = bigquery.Client(project=PROJECT_ID, credentials=credentials)
         client.get_table(ACCESS_TABLE_ID)
         client.get_table(NETWORK_TABLE_ID)
-        logging.info(f"Successfully connected to BigQuery.")
+        logging.info("Successfully connected to BigQuery.")
     except Exception as e:
         logging.error(f"Failed to initialize BigQuery client or find tables: {e}", exc_info=True)
         logging.error("Please ensure table IDs are correct and you have 'BigQuery Data Editor' permissions.")
         return
 
-    logging.info(f"--- ✅ Starting Benign Traffic Streamer (v9 - No Location) ✅ ---")
+    logging.info("--- ✅ Starting Benign Traffic Streamer (v9 - No Location) ✅ ---")
     logging.info(f"Streaming Access Events to: {ACCESS_TABLE_ID}")
     logging.info(f"Streaming Network Events to: {NETWORK_TABLE_ID}")
     logging.info(">>> IMPORTANT: To stop, use Colab 'Interrupt execution' button <<<")

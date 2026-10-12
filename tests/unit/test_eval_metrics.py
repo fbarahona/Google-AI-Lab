@@ -8,9 +8,7 @@ Unit tests for tool trajectory evaluation metric and security gate nuances:
 
 import importlib.util
 import json
-import os
 from pathlib import Path
-import pytest
 
 _tool_trajectory_path = Path(__file__).resolve().parent.parent / "eval" / "tool_trajectory.py"
 _spec = importlib.util.spec_from_file_location("tool_trajectory", _tool_trajectory_path)

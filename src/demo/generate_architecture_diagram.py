@@ -3,8 +3,8 @@ Script to generate System Architecture Diagram as both SVG and PNG image files.
 Based on src/demo/README.md for Google Cloud Platform (<PROJECT_ID>).
 """
 
-import os
 from pathlib import Path
+
 from PIL import Image, ImageDraw, ImageFont
 
 OUTPUT_DIR = Path("/workspaces/Google/src/demo")
@@ -121,7 +121,7 @@ def create_svg():
 
   <!-- Background -->
   <rect width="1560" height="1200" fill="url(#bgGrad)"/>
-  
+
   <!-- Subtle Grid Pattern Lines -->
   <g opacity="0.05" stroke="#ffffff" stroke-width="1">
     <line x1="0" y1="150" x2="1560" y2="150"/>
@@ -147,7 +147,7 @@ def create_svg():
     <rect width="480" height="92" rx="16" fill="url(#generatorGrad)" stroke="#a855f7" stroke-width="2" filter="url(#cardGlowPurple)"/>
     <text x="25" y="32" class="card-title">⚙️ Synthetic Log Generator &amp; Threat Injector</text>
     <text x="25" y="54" class="card-mono">src.demo.data_generator.log_generator</text>
-    
+
     <!-- Pills for Generator modes -->
     <rect x="25" y="64" width="86" height="20" rx="6" fill="#3b0764" stroke="#c084fc" stroke-width="1"/>
     <text x="35" y="78" class="badge" fill="#e9d5ff">Benign Mode</text>
@@ -281,10 +281,10 @@ def create_svg():
     <text x="18" y="28" class="agent-header">🔎 google_search_agent</text>
     <text x="18" y="48" class="badge" fill="#bae6fd">OSINT &amp; Public Threat Intelligence</text>
     <line x1="18" y1="58" x2="302" y2="58" stroke="#0284c7" stroke-width="1"/>
-    
+
     <text x="18" y="78" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Role:</tspan> Investigates external IPs &amp; C2 domains</text>
     <text x="18" y="96" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Target:</tspan> Geolocation, foreign ASN, Tor exits</text>
-    
+
     <rect x="18" y="112" width="284" height="28" rx="6" fill="#082f49" stroke="#0ea5e9" stroke-width="1"/>
     <text x="28" y="130" class="pill-text" fill="#7dd3fc">🛠️ Tool: google_search</text>
   </g>
@@ -295,10 +295,10 @@ def create_svg():
     <text x="18" y="28" class="agent-header">🗄️ bq_investigation_agent</text>
     <text x="18" y="48" class="badge" fill="#c7d2fe">BigQuery Historical Profiling</text>
     <line x1="18" y1="58" x2="302" y2="58" stroke="#4338ca" stroke-width="1"/>
-    
+
     <text x="18" y="78" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Role:</tspan> Queries 24h behavioural activity baseline</text>
     <text x="18" y="96" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Target:</tspan> Failed auth, privilege esc, lateral move</text>
-    
+
     <rect x="18" y="112" width="284" height="28" rx="6" fill="#1e1b4b" stroke="#6366f1" stroke-width="1"/>
     <text x="28" y="130" class="pill-text" fill="#a5b4fc">🛠️ Tools: BigQueryToolset, SQL</text>
   </g>
@@ -309,10 +309,10 @@ def create_svg():
     <text x="18" y="28" class="agent-header">👁️ visual_analysis_agent</text>
     <text x="18" y="48" class="badge" fill="#a7f3d0">Gemini Multimodal Forensic OCR</text>
     <line x1="18" y1="58" x2="302" y2="58" stroke="#047857" stroke-width="1"/>
-    
+
     <text x="18" y="78" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Role:</tspan> Forensics on user workstation screenshots</text>
     <text x="18" y="96" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Target:</tspan> Mimikatz, PowerShell, payload downloads</text>
-    
+
     <rect x="18" y="112" width="284" height="28" rx="6" fill="#022c22" stroke="#10b981" stroke-width="1"/>
     <text x="28" y="130" class="pill-text" fill="#6ee7b7">🛠️ Tools: Vision OCR, Signed URLs</text>
   </g>
@@ -323,10 +323,10 @@ def create_svg():
     <text x="18" y="28" class="agent-header">📋 soc_ticketing_agent</text>
     <text x="18" y="48" class="badge" fill="#fed7aa">Triage, Escalation &amp; Dispatch</text>
     <line x1="18" y1="58" x2="302" y2="58" stroke="#c2410c" stroke-width="1"/>
-    
+
     <text x="18" y="78" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Role:</tspan> Synthesizes evidence &amp; determines action</text>
     <text x="18" y="96" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Target:</tspan> Dispatches incident ticket or flags FP</text>
-    
+
     <rect x="18" y="112" width="284" height="28" rx="6" fill="#451a03" stroke="#ea580c" stroke-width="1"/>
     <text x="28" y="130" class="pill-text" fill="#fdba74">🛠️ Tools: dispatch_to_soc, log_fp</text>
   </g>
@@ -340,7 +340,7 @@ def create_svg():
     <rect width="1200" height="95" rx="16" fill="url(#socConsoleGrad)" stroke="#f43f5e" stroke-width="2"/>
     <text x="25" y="32" class="card-title">🚨 SOC Ticketing System &amp; Streamlit Analyst Console</text>
     <text x="25" y="52" class="card-mono">src.demo.soc_ticketing • streamlit_soc_console.py</text>
-    
+
     <g transform="translate(25, 62)">
       <rect x="0" y="0" width="360" height="24" rx="6" fill="#3f0713" stroke="#be123c" stroke-width="1"/>
       <text x="10" y="16" class="pill-text" fill="#fecdd3">📦 Storage: soc_tickets + GCS Escalations</text>
@@ -362,7 +362,7 @@ def draw_arrow(draw, points, color, width=2, arrow_size=8, direction="down"):
     # Draw line segments
     for i in range(len(points) - 1):
         draw.line([points[i], points[i+1]], fill=color, width=width)
-    
+
     # Draw arrowhead at the end point
     end_x, end_y = points[-1]
     if direction == "down":
@@ -417,7 +417,7 @@ def create_png():
     draw.rounded_rectangle([(520, 115), (1040, 210)], radius=16, fill=(30, 27, 75), outline=(168, 85, 247), width=2)
     draw.text((545, 125), "Synthetic Log Generator & Threat Injector", fill=(255, 255, 255), font=card_title_font)
     draw.text((545, 148), "src.demo.data_generator.log_generator", fill=(192, 132, 252), font=card_mono_font)
-    
+
     # Badges
     badges = [
         ("Benign Mode", 545, 95, (59, 7, 100), (233, 213, 255)),
@@ -469,7 +469,7 @@ def create_png():
     draw.rounded_rectangle([(200, 440), (1360, 550)], radius=18, fill=(15, 23, 42), outline=(96, 165, 250), width=2)
     draw.text((230, 452), "BigQuery Enterprise Security Lakehouse (Dataset: Cymbal_Cyber)", fill=(255, 255, 255), font=card_title_font)
     draw.text((230, 476), "Time-partitioned and clustered analytics tables for real-time threat intelligence", fill=(148, 163, 184), font=card_sub_font)
-    
+
     bq_tables = [
         ("user_access_events", 230, 190, (59, 130, 246)),
         ("network_events", 440, 165, (59, 130, 246)),
@@ -529,7 +529,7 @@ def create_png():
         draw.text((ax + 16, 908), role_badge, fill=stroke_col, font=badge_font)
         draw.line([(ax + 16, 924), (ax + 304, 924)], fill=(100, 116, 139), width=1)
         draw.text((ax + 16, 934), desc, fill=(226, 232, 240), font=card_sub_font)
-        
+
         # Tool box
         draw.rounded_rectangle([(ax + 16, 970), (ax + 304, 1005)], radius=6, fill=(15, 23, 42), outline=stroke_col, width=1)
         draw.text((ax + 26, 982), tools, fill=stroke_col, font=card_mono_font)

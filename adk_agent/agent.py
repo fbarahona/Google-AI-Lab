@@ -9,29 +9,32 @@ Defines the structure and orchestration logic of the ADK multi-agent system:
 - Sub-Agent 4: soc_ticketing_agent (Consolidates findings and passes tickets to the SOC ticketing system)
 """
 
+import json
 import os
 import re
-import json
+import sys
 import time
 import warnings
-from typing import Dict, Any, Optional
+from pathlib import Path
+from typing import Any
+
+from dotenv import load_dotenv
 
 # --- ADK Imports ---
-from google.adk.agents import Agent, SequentialAgent, ParallelAgent
-from google.adk.tools import BaseTool, ToolContext, google_search
+from google.adk.agents import Agent, ParallelAgent, SequentialAgent
+from google.adk.agents.callback_context import CallbackContext
 from google.adk.apps import App
 from google.adk.plugins.base_plugin import BasePlugin
-from google.adk.agents.callback_context import CallbackContext
+from google.adk.tools import BaseTool, ToolContext, google_search
 
 try:
-    from google.adk.plugins.bigquery_agent_analytics_plugin import BigQueryAgentAnalyticsPlugin
+    from google.adk.plugins.bigquery_agent_analytics_plugin import (
+        BigQueryAgentAnalyticsPlugin,
+    )
     HAS_ANALYTICS = True
 except Exception:
     BigQueryAgentAnalyticsPlugin = None
     HAS_ANALYTICS = False
-
-import sys
-from pathlib import Path
 
 # Add directories to sys.path to support adk web / agents-cli execution
 _CURRENT_DIR = Path(__file__).resolve().parent
@@ -42,37 +45,31 @@ for _p in [str(_CURRENT_DIR), str(_SRC_DIR), str(_CURRENT_DIR.parent)]:
 
 # --- Local Imports ---
 try:
-    from .logging_utils import setup_logging, log_agent_event
+    from .logging_utils import log_agent_event, setup_logging
     from .tools import (
-        build_event_logs_query,
-        get_entity_behavioral_profile,
-        get_visual_analysis_for_user,
-        get_gcs_uri_for_user,
-        generate_signed_url,
-        dispatch_to_soc_ticketing_system,
-        log_false_positive,
         create_rich_ticket_id,
+        dispatch_to_soc_ticketing_system,
         escalate_to_human,
-        bigquery_toolset
+        generate_signed_url,
+        get_entity_behavioral_profile,
+        get_gcs_uri_for_user,
+        get_visual_analysis_for_user,
+        log_false_positive,
     )
 except ImportError:
-    from logging_utils import setup_logging, log_agent_event
+    from logging_utils import log_agent_event, setup_logging
     from tools import (
-        build_event_logs_query,
-        get_entity_behavioral_profile,
-        get_visual_analysis_for_user,
-        get_gcs_uri_for_user,
-        generate_signed_url,
-        dispatch_to_soc_ticketing_system,
-        log_false_positive,
         create_rich_ticket_id,
+        dispatch_to_soc_ticketing_system,
         escalate_to_human,
-        bigquery_toolset
+        generate_signed_url,
+        get_entity_behavioral_profile,
+        get_gcs_uri_for_user,
+        get_visual_analysis_for_user,
+        log_false_positive,
     )
 
 # --- Configuration ---
-from dotenv import load_dotenv
-
 load_dotenv()
 
 PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo")
@@ -108,7 +105,7 @@ class ParallelOrchestratorAgent(ParallelAgent):
 
 
 # --- Callbacks ---
-def forbidden_dml_check(tool: BaseTool, args: Dict[str, Any], tool_context: ToolContext) -> Optional[Dict]:
+def forbidden_dml_check(tool: BaseTool, args: dict[str, Any], tool_context: ToolContext) -> dict | None:
     """Inspects SQL queries prior to execution to prevent destructive DML operations."""
     safe_args_str = json.dumps(args, default=str)
     log_agent_event(f"Tool '{tool.name}' called with arguments: {safe_args_str[:120]}...")
@@ -123,7 +120,7 @@ def forbidden_dml_check(tool: BaseTool, args: Dict[str, Any], tool_context: Tool
     return None
 
 
-def security_gate_callback(tool: BaseTool, args: Dict[str, Any], tool_context: ToolContext) -> Optional[Dict]:
+def security_gate_callback(tool: BaseTool, args: dict[str, Any], tool_context: ToolContext) -> dict | None:
     """
     Deterministic security gate callback on soc_ticketing_agent.
     Enforces that the LLM cannot execute log_false_positive if:
@@ -258,9 +255,9 @@ def default_deny_soc_callback(callback_context: CallbackContext):
     if not ticket_resolved:
         log_agent_event("DEFAULT-DENY ENFORCEMENT: Model finished without invoking a resolution tool. Executing deterministic human escalation.")
         try:
-            from .tools import get_soc_service, SocTicket
+            from .tools import SocTicket, get_soc_service
         except (ImportError, ValueError):
-            from tools import get_soc_service, SocTicket
+            from tools import SocTicket, get_soc_service
 
         soc_service = get_soc_service()
         user_id = state.get("user_id") or "unresolved_user"
@@ -321,7 +318,7 @@ bq_investigation_agent = Agent(
     model=MODEL_NAME,
     name="bq_investigation_agent",
     description="Agent that analyzes BigQuery behavioral telemetry by querying historical access and network events.",
-    instruction=f"""
+    instruction="""
     You are a Level 1 Security Operations Center (SOC) BigQuery data investigator.
     Your task is to analyze behavioral anomalies and metrics for the entity involved in the alert.
 
@@ -346,7 +343,7 @@ visual_analysis_agent = Agent(
     model=MODEL_NAME,
     name="visual_analysis_agent",
     description="Agent that analyzes user desktop screenshots using multi-modal AI to uncover forensic visual evidence.",
-    instruction=f"""
+    instruction="""
     You are a digital forensics and visual evidence investigator.
     Your task is to locate and visually inspect the desktop screenshot evidence associated with the user in the security alert.
 
@@ -383,7 +380,7 @@ soc_ticketing_agent = Agent(
     description="Agent that consolidates findings, decides on best action to take, and passes tickets to the SOC ticketing system.",
     instruction="""
     You are the Senior Incident Commander and SOC Decision Agent.
-    
+
     **INPUTS:**
     - External Intelligence: {google_search_results:}
     - BigQuery Behavioral Analysis: {bigquery_investigation_results:}

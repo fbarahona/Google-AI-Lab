@@ -14,25 +14,24 @@ Preferred Production Alternative:
   python -m adk_agent.threat_detector --lookback 15 --min-score 100
 """
 
-import os
-import sys
-import time
-import json
-import uuid
-import asyncio
-import logging
 import argparse
-from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
+import asyncio
+import json
+import logging
+import os
+import time
+import uuid
+from datetime import UTC, datetime
+from typing import Any
 
+from google.adk.plugins.base_plugin import BasePlugin
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
 from google.cloud import bigquery
 from google.genai import types
-from google.adk.sessions import InMemorySessionService
-from google.adk.runners import Runner
-from google.adk.plugins.base_plugin import BasePlugin
 
-from .agent import root_agent, bq_analytics_plugin
-from .logging_utils import setup_logging, log_agent_event
+from .agent import bq_analytics_plugin, root_agent
+from .logging_utils import setup_logging
 
 logger = logging.getLogger("BigQueryThreatScanner")
 
@@ -48,7 +47,7 @@ class BigQueryThreatScanner:
         self.bq_client = bigquery.Client(project=project_id)
         self.session_service = InMemorySessionService()
 
-    def find_new_threat_events(self, lookback_minutes: int = 15, min_score: int = 100) -> List[Dict[str, Any]]:
+    def find_new_threat_events(self, lookback_minutes: int = 15, min_score: int = 100) -> list[dict[str, Any]]:
         """
         Queries BigQuery to detect correlated security threat events that
         have not yet been assessed in adk_threat_assessment.
@@ -96,7 +95,7 @@ class BigQueryThreatScanner:
             results = [dict(row.items()) for row in query_job.result()]
             # Format datetime fields
             for r in results:
-                if "window_end" in r and r["window_end"]:
+                if r.get("window_end"):
                     r["window_end"] = r["window_end"].isoformat()
             logger.info("Found %d unassessed threat events in BigQuery.", len(results))
             return results
@@ -104,7 +103,7 @@ class BigQueryThreatScanner:
             logger.warning("BigQuery threat scan query failed: %s", e)
             return []
 
-    def mark_threat_pending(self, threat_payload: Dict[str, Any]):
+    def mark_threat_pending(self, threat_payload: dict[str, Any]):
         """
         Inserts a temporary PENDING row into adk_threat_assessment prior to running
         the investigation. Ensures subsequent or overlapping scan passes immediately
@@ -115,7 +114,7 @@ class BigQueryThreatScanner:
         try:
             assessment_table_id = f"{self.project_id}.{self.dataset_id}.adk_threat_assessment"
             pending_row = {
-                "transaction_window_end": threat_payload.get("window_end") or datetime.now(timezone.utc).isoformat(),
+                "transaction_window_end": threat_payload.get("window_end") or datetime.now(UTC).isoformat(),
                 "user_id": threat_payload.get("user_id"),
                 "device_id": threat_payload.get("device_id") or "unknown_device",
                 "source_ip": threat_payload.get("source_ip") or "unknown_ip",
@@ -131,7 +130,7 @@ class BigQueryThreatScanner:
         except Exception as e:
             logger.warning("Could not pre-insert PENDING assessment row in BigQuery: %s", e)
 
-    async def investigate_threat(self, threat_payload: Dict[str, Any]) -> str:
+    async def investigate_threat(self, threat_payload: dict[str, Any]) -> str:
         """
         Invokes the ADK Agent Orchestrator to investigate the threat and pass
         the ticket to the SOC ticketing system.
@@ -144,7 +143,7 @@ class BigQueryThreatScanner:
         payload_json = json.dumps(threat_payload, default=str)
         logger.info("Dispatching threat to ADK Multi-Agent Orchestrator (Session: %s)...", session_id)
 
-        session = await self.session_service.create_session(
+        _ = await self.session_service.create_session(
             app_name=app_name,
             user_id=user_id,
             session_id=session_id,
@@ -164,7 +163,7 @@ class BigQueryThreatScanner:
             }
         )
 
-        plugins: List[BasePlugin] = [bq_analytics_plugin] if bq_analytics_plugin else []
+        plugins: list[BasePlugin] = [bq_analytics_plugin] if bq_analytics_plugin else []
         runner = Runner(
             agent=root_agent,
             app_name=app_name,

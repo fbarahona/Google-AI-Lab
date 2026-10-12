@@ -19,13 +19,11 @@ Usage:
   python -m src.demo.local_runner --threat false_positive
 """
 
-import os
-import sys
-import json
-import time
 import argparse
-from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, List
+import os
+import time
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from src.demo.data_generator.log_generator import SyntheticLogEngine
 from src.demo.data_generator.sinks import LocalSink
@@ -38,11 +36,11 @@ ESCALATIONS_DIR = os.path.join(LOCAL_DATA_DIR, "escalations")
 SCREENSHOTS_DIR = "src/demo/user_screenshots"
 
 
-def step_1_generate_logs(threat_type: str = "malicious", target_user: str = "u.lewis") -> Dict[str, Any]:
+def step_1_generate_logs(threat_type: str = "malicious", target_user: str = "u.lewis") -> dict[str, Any]:
     """Generates local synthetic access and network logs with injected threat."""
-    print(f"\n=======================================================")
-    print(f"[STEP 1] Generating Synthetic Logs & Injecting Threat")
-    print(f"=======================================================")
+    print("\n=======================================================")
+    print("[STEP 1] Generating Synthetic Logs & Injecting Threat")
+    print("=======================================================")
     os.makedirs(LOGS_DIR, exist_ok=True)
     os.makedirs(ESCALATIONS_DIR, exist_ok=True)
 
@@ -67,15 +65,15 @@ def step_1_generate_logs(threat_type: str = "malicious", target_user: str = "u.l
     }
 
 
-def step_2_correlate_events(scenario_data: Dict[str, Any]) -> Dict[str, Any]:
+def step_2_correlate_events(scenario_data: dict[str, Any]) -> dict[str, Any]:
     """
     Simulates BigQuery Continuous Query locally:
     Joins access events and network events on assigned internal IP,
     scores anomalies, and computes tumbling window threat scores.
     """
-    print(f"\n=======================================================")
-    print(f"[STEP 2] Simulating BigQuery Continuous Query Stream Processing")
-    print(f"=======================================================")
+    print("\n=======================================================")
+    print("[STEP 2] Simulating BigQuery Continuous Query Stream Processing")
+    print("=======================================================")
 
     threat_type = scenario_data["threat_type"]
     user_id = scenario_data["user_id"]
@@ -84,7 +82,7 @@ def step_2_correlate_events(scenario_data: Dict[str, Any]) -> Dict[str, Any]:
 
     # Extract successful login internal IP
     login_ev = next((ev for ev in access_events if ev.get("event_type") == "login_success"), None)
-    assigned_ip = login_ev.get("assigned_internal_ip") if login_ev else "10.50.1.20"
+    _assigned_ip = login_ev.get("assigned_internal_ip") if login_ev else "10.50.1.20"
     source_ip = login_ev.get("source_ip") if login_ev else "175.45.177.32"
     device_id = login_ev.get("device_id") if login_ev else "ws-hr-05"
 
@@ -142,7 +140,7 @@ def step_2_correlate_events(scenario_data: Dict[str, Any]) -> Dict[str, Any]:
     else:
         total_score = max(total_score, 1850)
 
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     window_end_str = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
     window_start_str = (now_utc - timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
     alert_id = f"{user_id}|{window_end_str}"
@@ -163,15 +161,15 @@ def step_2_correlate_events(scenario_data: Dict[str, Any]) -> Dict[str, Any]:
         "detected_at": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
     }
 
-    print(f"  -> Correlation Window Completed.")
+    print("  -> Correlation Window Completed.")
     print(f"  -> Alert Contract ID: {alert_id}")
     print(f"  -> Correlated User: {user_id} | Device: {device_id} | Public IP: {source_ip}")
     print(f"  -> Aggregated Anomaly Score: {total_score} (Threshold: >= 100)")
-    print(f"  -> Alert contract payload emitted to ADK Multi-Agent Orchestrator!")
+    print("  -> Alert contract payload emitted to ADK Multi-Agent Orchestrator!")
     return alert_payload
 
 
-def step_3_run_agent_investigation(alert: Dict[str, Any], threat_type: str) -> Dict[str, Any]:
+def step_3_run_agent_investigation(alert: dict[str, Any], threat_type: str) -> dict[str, Any]:
     """
     Executes the 4-agent investigation team using local evidence-driven reasoning:
     - google_search_agent: OSINT IP reputation (strictly querying external IP)
@@ -179,9 +177,9 @@ def step_3_run_agent_investigation(alert: Dict[str, Any], threat_type: str) -> D
     - visual_analysis_agent: Forensic desktop screenshot inspection & prompt injection detection
     - soc_ticketing_agent: Incident synthesis, prompt injection security gate, and triage adjudication
     """
-    print(f"\n=======================================================")
-    print(f"[STEP 3] ADK Multi-Agent Investigation Team Activated")
-    print(f"=======================================================")
+    print("\n=======================================================")
+    print("[STEP 3] ADK Multi-Agent Investigation Team Activated")
+    print("=======================================================")
 
     user_id = alert["user_id"]
     source_ip = alert["source_ip"]
@@ -189,7 +187,7 @@ def step_3_run_agent_investigation(alert: Dict[str, Any], threat_type: str) -> D
     score = alert["total_2_min_threat_score"]
 
     # 1. google_search_agent (OSINT & IP Reputation)
-    print(f"  [1] google_search_agent (OSINT & IP Reputation):")
+    print("  [1] google_search_agent (OSINT & IP Reputation):")
     if "175.45." in source_ip:
         osint_intel = (
             f"Public IP {source_ip} traces to Ryugyong-dong, Pyongyang, North Korea (AS131279 Star JV). "
@@ -208,7 +206,7 @@ def step_3_run_agent_investigation(alert: Dict[str, Any], threat_type: str) -> D
     print(f"      Result: {osint_intel}")
 
     # 2. bq_investigation_agent (24-Hour Forensic Log Query via Parameterized Profile Tool)
-    print(f"  [2] bq_investigation_agent (24-Hour Behavioral Telemetry):")
+    print("  [2] bq_investigation_agent (24-Hour Behavioral Telemetry):")
     os.environ["LOCAL_MODE"] = "true"
     from adk_agent.tools import get_entity_behavioral_profile, read_png_text_chunks
     profile = get_entity_behavioral_profile("user", user_id)
@@ -232,7 +230,7 @@ def step_3_run_agent_investigation(alert: Dict[str, Any], threat_type: str) -> D
     print(f"      Result: {bq_summary}")
 
     # 3. visual_analysis_agent (Multimodal Screenshot Vision Forensics & Injection Defense)
-    print(f"  [3] visual_analysis_agent (Screenshot Forensics & Prompt Injection Guard):")
+    print("  [3] visual_analysis_agent (Screenshot Forensics & Prompt Injection Guard):")
     screenshot_file = os.path.join(SCREENSHOTS_DIR, f"{user_id}.png")
     prompt_injection_detected = False
     has_screenshot = os.path.exists(screenshot_file)
@@ -269,11 +267,12 @@ def step_3_run_agent_investigation(alert: Dict[str, Any], threat_type: str) -> D
     print(f"      Result: {vision_analysis}")
 
     # 4. soc_ticketing_agent (Consolidation & Triage Verdict with Security Gating)
-    print(f"  [4] soc_ticketing_agent (Consolidation & Decision Gating):")
+    print("  [4] soc_ticketing_agent (Consolidation & Decision Gating):")
     ticket_id = f"SOC-TICKET-{user_id}-{int(time.time())}"
 
     # Demonstrate deterministic Security Gate verification using real ADK State
     from google.adk.sessions.state import State
+
     from adk_agent.agent import security_gate_callback
 
     class _LocalTool:
@@ -353,21 +352,21 @@ def step_3_run_agent_investigation(alert: Dict[str, Any], threat_type: str) -> D
 
 def step_4_dispatch_ticket_locally(ticket: SocTicket):
     """Writes ticket to local queue for Streamlit triage."""
-    print(f"\n=======================================================")
-    print(f"[STEP 4] Dispatching Ticket to Local SOC Ticketing Queue")
-    print(f"=======================================================")
+    print("\n=======================================================")
+    print("[STEP 4] Dispatching Ticket to Local SOC Ticketing Queue")
+    print("=======================================================")
     service = SocTicketingService(project_id="local-demo")
     msg = service.create_and_dispatch_ticket(ticket)
     ticket_file = os.path.join(ESCALATIONS_DIR, f"human_escalation_information_{ticket.ticket_id}.json")
 
     print(f"  -> {msg}")
     print(f"  -> File Queue: {ticket_file}")
-    print(f"\n-------------------------------------------------------")
-    print(f"🎉 LOCAL DEMO EXECUTION COMPLETE!")
-    print(f"-------------------------------------------------------")
-    print(f"To open the interactive SOC Analyst Console, run:")
-    print(f"  LOCAL_MODE=true streamlit run src/demo/soc_ticketing/streamlit_soc_console.py")
-    print(f"-------------------------------------------------------\n")
+    print("\n-------------------------------------------------------")
+    print("🎉 LOCAL DEMO EXECUTION COMPLETE!")
+    print("-------------------------------------------------------")
+    print("To open the interactive SOC Analyst Console, run:")
+    print("  LOCAL_MODE=true streamlit run src/demo/soc_ticketing/streamlit_soc_console.py")
+    print("-------------------------------------------------------\n")
 
 
 def main():

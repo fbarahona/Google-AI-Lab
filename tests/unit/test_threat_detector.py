@@ -4,6 +4,7 @@ Verifies module import, detection cycle execution with mocked clients, and query
 """
 
 from unittest.mock import MagicMock, patch
+
 import pytest
 
 from adk_agent.threat_detector import ThreatDetector
@@ -22,7 +23,7 @@ def mock_clients():
 
 def test_threat_detector_import_and_init(mock_clients):
     """Verify ThreatDetector imports cleanly and initializes clients."""
-    mock_bq, mock_pub = mock_clients
+    _mock_bq, _mock_pub = mock_clients
     detector = ThreatDetector(project_id="test-proj", dataset_id="Test_Dataset", topic_id="test_alerts")
     assert detector.project_id == "test-proj"
     assert detector.dataset_id == "Test_Dataset"
@@ -31,7 +32,7 @@ def test_threat_detector_import_and_init(mock_clients):
 
 def test_threat_detector_run_cycle_empty(mock_clients):
     """Verify run_detection_cycle runs without error when no alerts are detected."""
-    mock_bq, mock_pub = mock_clients
+    mock_bq, _mock_pub = mock_clients
     # Mock query results (empty list)
     mock_query_job = MagicMock()
     mock_query_job.result.return_value = []

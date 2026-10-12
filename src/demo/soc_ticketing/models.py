@@ -1,20 +1,21 @@
 """
 Data models for the SOC Ticketing System.
 """
-from datetime import datetime, timezone
-from typing import Optional, List, Literal
+from datetime import UTC, datetime
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
 class SocTicket(BaseModel):
     """Schema for incident tickets passed to the SOC Ticketing System."""
     ticket_id: str = Field(..., description="Unique SOC incident ticket ID.")
-    alert_id: Optional[str] = Field(None, description="Reference to the detection alert_id (user_id|window_end).")
+    alert_id: str | None = Field(None, description="Reference to the detection alert_id (user_id|window_end).")
     created_at: str = Field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        default_factory=lambda: datetime.now(UTC).isoformat(),
         description="Ticket creation timestamp (ISO 8601 UTC)."
     )
-    transaction_window_end: Optional[str] = Field(
+    transaction_window_end: str | None = Field(
         None,
         description="Aggregation window end timestamp from continuous query alert."
     )
@@ -46,18 +47,18 @@ class SocTicket(BaseModel):
         "Within SLA",
         description="Service Level Agreement deadline status."
     )
-    geo_country: Optional[str] = Field(None, description="Country of origin detected via OSINT/GeoIP.")
-    geo_lat: Optional[float] = Field(None, description="Latitude for threat mapping.")
-    geo_lon: Optional[float] = Field(None, description="Longitude for threat mapping.")
+    geo_country: str | None = Field(None, description="Country of origin detected via OSINT/GeoIP.")
+    geo_lat: float | None = Field(None, description="Latitude for threat mapping.")
+    geo_lon: float | None = Field(None, description="Longitude for threat mapping.")
     agent_decision: str = Field(..., description="Autonomous assessment by ADK agents.")
     agent_reason: str = Field(..., description="Detailed rationale provided by ADK.")
-    mitre_tactics: List[str] = Field(default_factory=list, description="Associated MITRE ATT&CK tactics.")
-    indicators_of_compromise: List[str] = Field(default_factory=list, description="Extracted IoCs (IPs, hashes, domains).")
-    screenshot_url: Optional[str] = Field(None, description="Signed URL to multimodal desktop evidence.")
+    mitre_tactics: list[str] = Field(default_factory=list, description="Associated MITRE ATT&CK tactics.")
+    indicators_of_compromise: list[str] = Field(default_factory=list, description="Extracted IoCs (IPs, hashes, domains).")
+    screenshot_url: str | None = Field(None, description="Signed URL to multimodal desktop evidence.")
     structured_report: str = Field(..., description="Full forensic markdown report from ADK.")
-    human_decision: Optional[str] = Field(None, description="Adjudication verdict by human SOC analyst.")
-    human_comment: Optional[str] = Field(None, description="Analyst review notes.")
-    adjudicated_at: Optional[str] = Field(None, description="Timestamp of human resolution.")
+    human_decision: str | None = Field(None, description="Adjudication verdict by human SOC analyst.")
+    human_comment: str | None = Field(None, description="Analyst review notes.")
+    adjudicated_at: str | None = Field(None, description="Timestamp of human resolution.")
 
 
 class DetectionAlert(BaseModel):
@@ -78,6 +79,6 @@ class DetectionAlert(BaseModel):
     malicious_command_count: int = Field(0, description="Count of suspicious/malicious commands executed.")
     malicious_dns_count: int = Field(0, description="Count of anomalous or high-risk DNS queries.")
     detected_at: str = Field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        default_factory=lambda: datetime.now(UTC).isoformat(),
         description="Detection timestamp (ISO 8601)."
     )

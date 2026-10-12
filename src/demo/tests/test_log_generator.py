@@ -1,13 +1,8 @@
 """
 Unit tests for Synthetic Log Generator and Threat Injection.
 """
-import pytest
-from src.demo.data_generator.models import UserAccessEvent, NetworkEvent
 from src.demo.data_generator.log_generator import SyntheticLogEngine
-from src.demo.data_generator.threat_scenarios import (
-    generate_malicious_threat_scenario,
-    generate_false_positive_threat_scenario
-)
+from src.demo.data_generator.models import NetworkEvent, UserAccessEvent
 from src.demo.data_generator.sinks import LocalSink
 
 

@@ -5,10 +5,10 @@ Loads NDJSON log objects stored in Cloud Storage buckets directly into
 BigQuery tables (user_access_events and network_events) using BigQuery Load Jobs.
 """
 
-import os
-import logging
 import argparse
-from typing import Optional
+import logging
+import os
+
 from google.cloud import bigquery
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s]: %(message)s")
@@ -16,7 +16,7 @@ logger = logging.getLogger("GcsToBigQueryLoader")
 
 
 class GcsToBigQueryLoader:
-    def __init__(self, project_id: Optional[str] = None, dataset_id: str = "Cymbal_Cyber"):
+    def __init__(self, project_id: str | None = None, dataset_id: str = "Cymbal_Cyber"):
         self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo")
         self.dataset_id = dataset_id
         self.client = bigquery.Client(project=project_id)

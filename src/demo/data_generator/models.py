@@ -1,15 +1,16 @@
 """
 Data models and schemas for synthetic cybersecurity event logs.
 """
-from datetime import datetime, timezone
-from typing import Optional, Literal
+from datetime import UTC, datetime
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
 class UserAccessEvent(BaseModel):
     """Schema matching BigQuery Cymbal_Cyber.user_access_events table."""
     event_timestamp: str = Field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        default_factory=lambda: datetime.now(UTC).isoformat(),
         description="ISO 8601 UTC timestamp of the access event."
     )
     event_type: Literal["login_success", "login_failure", "logout", "session_refresh"] = Field(
@@ -18,7 +19,7 @@ class UserAccessEvent(BaseModel):
     )
     user_id: str = Field(..., description="Unique enterprise user identifier.")
     source_ip: str = Field(..., description="External or public client IP address.")
-    assigned_internal_ip: Optional[str] = Field(
+    assigned_internal_ip: str | None = Field(
         None,
         description="Internal IP leased during active VPN/corporate session."
     )
@@ -34,7 +35,7 @@ class UserAccessEvent(BaseModel):
 class NetworkEvent(BaseModel):
     """Schema matching BigQuery Cymbal_Cyber.network_events table."""
     event_timestamp: str = Field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        default_factory=lambda: datetime.now(UTC).isoformat(),
         description="ISO 8601 UTC timestamp of the network activity."
     )
     event_type: Literal[
@@ -50,11 +51,11 @@ class NetworkEvent(BaseModel):
     destination_port: int = Field(..., ge=1, le=65535, description="Target port number.")
     protocol: Literal["TCP", "UDP", "ICMP"] = Field("TCP", description="Network protocol.")
     bytes_transferred: int = Field(..., ge=0, description="Payload byte count.")
-    source_process_name: Optional[str] = Field(None, description="Binary or process originating the network socket.")
-    network_domain: Optional[str] = Field(None, description="DNS queried domain or HTTP Host header.")
-    file_name: Optional[str] = Field(None, description="Transferred file name if applicable.")
-    file_type: Optional[str] = Field(None, description="Transferred file extension.")
-    command_line: Optional[str] = Field(None, description="CLI command or script executed.")
-    permission_level_requested: Optional[str] = Field(None, description="Privilege requested, e.g. root/admin.")
-    file_hash_sha256: Optional[str] = Field(None, description="Cryptographic SHA256 file hash.")
+    source_process_name: str | None = Field(None, description="Binary or process originating the network socket.")
+    network_domain: str | None = Field(None, description="DNS queried domain or HTTP Host header.")
+    file_name: str | None = Field(None, description="Transferred file name if applicable.")
+    file_type: str | None = Field(None, description="Transferred file extension.")
+    command_line: str | None = Field(None, description="CLI command or script executed.")
+    permission_level_requested: str | None = Field(None, description="Privilege requested, e.g. root/admin.")
+    file_hash_sha256: str | None = Field(None, description="Cryptographic SHA256 file hash.")
 

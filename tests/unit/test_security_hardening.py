@@ -5,18 +5,15 @@ Unit tests for security hardening & execution guardrails:
 3. Webhook inbound OIDC JWT validation and local mode bypass
 """
 
-import os
 import pytest
 from starlette.testclient import TestClient
 
-from adk_agent.tools import (
-    validate_safe_sql_query,
-    build_event_logs_query,
-    DEFAULT_MAX_BYTES_BILLED,
-    DESTRUCTIVE_SQL_TOKENS
-)
 from adk_agent.fast_api_app import app
-
+from adk_agent.tools import (
+    DEFAULT_MAX_BYTES_BILLED,
+    build_event_logs_query,
+    validate_safe_sql_query,
+)
 
 # ==============================================================================
 # 1. SQL DESTRUCTIVE TOKEN GUARDRAIL TESTS

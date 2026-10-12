@@ -1,14 +1,13 @@
 # @title Cymbal Cyber - Single Malicious Event Injector
 
-import time
 import datetime
-import random
-import json
-import logging
-import ipaddress
 import hashlib
-from google.cloud import bigquery
+import logging
+import random
+import time
+
 import google.auth
+from google.cloud import bigquery
 
 # --- Core Configuration ---
 try:
@@ -128,13 +127,13 @@ def inject_attack_scenario():
         client = bigquery.Client(project=PROJECT_ID, credentials=credentials)
         client.get_table(ACCESS_TABLE_ID)
         client.get_table(NETWORK_TABLE_ID)
-        logging.info(f"Successfully connected to BigQuery.")
+        logging.info("Successfully connected to BigQuery.")
     except Exception as e:
         logging.error(f"Failed to initialize BigQuery client or find tables: {e}", exc_info=True)
         logging.error("Please ensure table IDs are correct and you have 'BigQuery Data Editor' permissions.")
         return
 
-    logging.info(f"--- 🚨 Starting Malicious Event Injector 🚨 ---")
+    logging.info("--- 🚨 Starting Malicious Event Injector 🚨 ---")
     logging.info(f"Injecting {TOTAL_MALICIOUS_PAIRS} correlated attack pairs for users: {COMPROMISED_USERS}")
     logging.info(f"Action mix: {MALICIOUS_ACTION_WEIGHTS}")
     logging.info(f"Injecting {TOTAL_BRUTE_FORCE_ATTEMPTS} brute force login failures targeting: {BRUTE_FORCE_TARGET_USERS}")
@@ -144,7 +143,7 @@ def inject_attack_scenario():
     network_events_batch = []
 
     # --- 1. Generate Correlated Pairs (Successful Breach) ---
-    for i in range(TOTAL_MALICIOUS_PAIRS):
+    for _ in range(TOTAL_MALICIOUS_PAIRS):
         compromised_user = random.choice(COMPROMISED_USERS)
         attacker_public_ip = random.choice(MALICIOUS_PUBLIC_IPS)
 
@@ -155,7 +154,7 @@ def inject_attack_scenario():
         else:
             assigned_internal_ip = MALICIOUS_INTERNAL_IP_POOL.pop()
 
-        login_time = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=random.randint(1,5))
+        login_time = datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=random.randint(1,5))
         action_time = login_time + datetime.timedelta(seconds=random.randint(5, 60))
 
         # --- Event 1: The Malicious Login Success ---
@@ -176,10 +175,10 @@ def inject_attack_scenario():
 
     # --- 2. Generate Uncorrelated Brute Force Failures ---
     logging.info(f"Generating {TOTAL_BRUTE_FORCE_ATTEMPTS} brute force events...")
-    for i in range(TOTAL_BRUTE_FORCE_ATTEMPTS):
+    for _ in range(TOTAL_BRUTE_FORCE_ATTEMPTS):
         attacker_public_ip = random.choice(MALICIOUS_PUBLIC_IPS)
         target_user = random.choice(BRUTE_FORCE_TARGET_USERS)
-        event_time = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=random.randint(1,300))
+        event_time = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=random.randint(1,300))
 
         # --- Event 3: The Malicious Login Failure ---
         failure_event = create_base_access_event(
@@ -213,7 +212,7 @@ def inject_attack_scenario():
 
     total_inserted = len(access_events_batch) + len(network_events_batch) - len(all_errors)
     logging.info("--------------------")
-    logging.info(f"✅ Attack scenario injection complete.")
+    logging.info("✅ Attack scenario injection complete.")
     logging.info(f"Successfully injected {total_inserted} malicious events in {elapsed_time:.2f} seconds.")
     logging.info(f"Total events in 'user_access_events': {len(access_events_batch)} ({TOTAL_MALICIOUS_PAIRS} success, {TOTAL_BRUTE_FORCE_ATTEMPTS} failure)")
     logging.info(f"Total events in 'network_events': {len(network_events_batch)}")

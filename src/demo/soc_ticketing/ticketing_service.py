@@ -8,13 +8,13 @@ Manages the end-to-end incident ticketing lifecycle:
 4. Provides aggregated metrics for dashboard visualization.
 """
 
-import os
 import glob
 import json
-import time
 import logging
-from datetime import datetime, timezone, timedelta
-from typing import Optional, Dict, Any, List, Tuple
+import os
+import time
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 try:
     from .models import SocTicket
@@ -30,10 +30,10 @@ LOCAL_HISTORY_DIR = os.path.join(LOCAL_QUEUE_DIR, "history")
 class SocTicketingService:
     def __init__(
         self,
-        project_id: Optional[str] = None,
+        project_id: str | None = None,
         dataset_id: str = "Cymbal_Cyber",
-        escalation_bucket: Optional[str] = None,
-        webhook_url: Optional[str] = None
+        escalation_bucket: str | None = None,
+        webhook_url: str | None = None
     ):
         self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo")
         self.dataset_id = dataset_id
@@ -130,7 +130,7 @@ class SocTicketingService:
             try:
                 assessment_table_id = f"{self.project_id}.{self.dataset_id}.adk_threat_assessment"
                 assessment_row = {
-                    "transaction_window_end": ticket.transaction_window_end or datetime.now(timezone.utc).isoformat(),
+                    "transaction_window_end": ticket.transaction_window_end or datetime.now(UTC).isoformat(),
                     "user_id": ticket.user_id,
                     "device_id": ticket.device_id,
                     "source_ip": ticket.source_ip,
@@ -148,9 +148,9 @@ class SocTicketingService:
 
         return f"Successfully dispatched ticket {ticket.ticket_id} to SOC ticketing system with severity {ticket.severity}."
 
-    def fetch_new_tickets(self) -> List[Dict[str, Any]]:
+    def fetch_new_tickets(self) -> list[dict[str, Any]]:
         """Retrieves all active, pending incident tickets awaiting analyst review."""
-        tickets: List[Dict[str, Any]] = []
+        tickets: list[dict[str, Any]] = []
 
         if self.is_cloud_enabled():
             try:
@@ -169,7 +169,7 @@ class SocTicketingService:
         # Fallback to local queue
         for path in glob.glob(os.path.join(self.queue_dir, "human_escalation_information_*.json")):
             try:
-                with open(path, "r", encoding="utf-8") as f:
+                with open(path, encoding="utf-8") as f:
                     tickets.append(json.load(f))
             except Exception:
                 pass
@@ -191,7 +191,7 @@ class SocTicketingService:
         - Removes from active escalation queue
         """
         logger.info("Recording analyst verdict for ticket %s: %s", ticket_id, human_decision)
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now_iso = datetime.now(UTC).isoformat()
 
         # Find existing ticket
         ticket_data = None
@@ -199,7 +199,7 @@ class SocTicketingService:
 
         if os.path.exists(active_local_path):
             try:
-                with open(active_local_path, "r", encoding="utf-8") as f:
+                with open(active_local_path, encoding="utf-8") as f:
                     ticket_data = json.load(f)
             except Exception:
                 pass
@@ -299,12 +299,12 @@ class SocTicketingService:
 
         return True
 
-    def fetch_historic_tickets(self) -> List[Dict[str, Any]]:
+    def fetch_historic_tickets(self) -> list[dict[str, Any]]:
         """
         Retrieves all archived and historical tickets (both Approved Genuine Threats and False Positives).
         Seeds a rich historical baseline if history is empty.
         """
-        historic: List[Dict[str, Any]] = []
+        historic: list[dict[str, Any]] = []
 
         # 1. Cloud BigQuery query if available
         if self.bq_client is not None:
@@ -323,7 +323,7 @@ class SocTicketingService:
         # 2. Local History Files
         for path in glob.glob(os.path.join(self.history_dir, "resolved_*.json")):
             try:
-                with open(path, "r", encoding="utf-8") as f:
+                with open(path, encoding="utf-8") as f:
                     historic.append(json.load(f))
             except Exception:
                 pass
@@ -345,9 +345,9 @@ class SocTicketingService:
         historic.sort(key=lambda x: x.get("adjudicated_at") or x.get("created_at") or "", reverse=True)
         return historic
 
-    def _generate_seed_history(self) -> List[Dict[str, Any]]:
+    def _generate_seed_history(self) -> list[dict[str, Any]]:
         """Generates realistic baseline historic tickets for the dashboard."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         return [
             {
                 "ticket_id": "SOC-TICKET-g.harris-1791600100",
