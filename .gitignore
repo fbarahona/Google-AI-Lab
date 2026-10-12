@@ -219,3 +219,4 @@ credentials*.json
 # Runtime demo output logs
 output_logs/
 local_demo_data/logs/
+pytest.ini
