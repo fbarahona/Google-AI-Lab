@@ -128,8 +128,7 @@ resource "google_pubsub_subscription" "raw_access_to_bq" {
     google_bigquery_table.user_access_events,
     google_bigquery_table_iam_member.pubsub_sa_access_events_editor,
     google_pubsub_topic.raw_events_dlq,
-    google_pubsub_topic_iam_member.pubsub_agent_raw_dlq_publisher,
-    google_pubsub_subscription_iam_member.pubsub_sa_raw_access_subscriber
+    google_pubsub_topic_iam_member.pubsub_agent_raw_dlq_publisher
   ]
 }
 
@@ -159,8 +158,7 @@ resource "google_pubsub_subscription" "raw_network_to_bq" {
     google_bigquery_table.network_events,
     google_bigquery_table_iam_member.pubsub_sa_network_events_editor,
     google_pubsub_topic.raw_events_dlq,
-    google_pubsub_topic_iam_member.pubsub_agent_raw_dlq_publisher,
-    google_pubsub_subscription_iam_member.pubsub_sa_raw_network_subscriber
+    google_pubsub_topic_iam_member.pubsub_agent_raw_dlq_publisher
   ]
 }
 
