@@ -27,16 +27,16 @@ The project features an end-to-end near real-time cybersecurity threat detection
 ├── adk_agent/                      # Canonical ADK Multi-Agent package
 │   ├── agent.py                    # Multi-agent orchestrator & 4 sub-agents
 │   ├── tools.py                    # Tools (BigQuery, OSINT, Vision OCR, SOC ticketing)
-│   ├── threat_scanner.py           # BigQuery active anomaly scanning daemon
+│   ├── threat_detector.py          # Scheduled micro-batch detector Cloud Run Job
 │   ├── logging_utils.py            # Structured logging utilities
-│   ├── fast_api_app.py             # FastAPI backend server
+│   ├── fast_api_app.py             # FastAPI backend server (webhook + A2A)
 │   └── app_utils/                  # A2A and service helpers
 ├── src/
 │   └── demo/                       # Cybersecurity AI & Cloud Architecture demo
 │       ├── data_generator/         # Synthetic log generator & threat scenarios
 │       ├── data_pipeline/          # BigQuery Continuous Queries & Dataflow pipelines
 │       ├── soc_ticketing/          # SOC ticketing service & Streamlit analyst console
-│       ├── terraform/              # GCP Terraform IaC modules
+│       ├── terraform/              # GCP Terraform IaC modules (zero-cost default)
 │       ├── tests/                  # Demo unit tests (agent structure, tools, logs, SOC)
 │       ├── user_screenshots/       # Forensic desktop screenshots for vision agent
 │       ├── local_runner.py         # Zero-cloud end-to-end demo runner
@@ -117,13 +117,10 @@ LOCAL_MODE=true streamlit run src/demo/soc_ticketing/streamlit_soc_console.py
 ```
 Open `http://localhost:8501` to view incident queues, inspect desktop screenshot evidence, review ADK investigative reports, and adjudicate tickets.
 
-### 5. BigQuery Threat Scanner Service
+### 5. Scheduled Micro-Batch Threat Detector Job
 ```bash
-# Run single scan:
-python -m adk_agent.threat_scanner --once
-
-# Run continuous background daemon:
-python -m adk_agent.threat_scanner --daemon --interval 30
+# Run single detection cycle:
+python -m adk_agent.threat_detector --lookback 15 --min-score 100
 ```
 
 ---

@@ -19,8 +19,9 @@ resource "google_bigquery_table" "user_access_events" {
   deletion_protection = false
 
   time_partitioning {
-    type  = "DAY"
-    field = "event_timestamp"
+    type                     = "DAY"
+    field                    = "event_timestamp"
+    require_partition_filter = true
   }
 
   clustering = ["user_id", "assigned_internal_ip", "event_type"]
@@ -47,8 +48,9 @@ resource "google_bigquery_table" "network_events" {
   deletion_protection = false
 
   time_partitioning {
-    type  = "DAY"
-    field = "event_timestamp"
+    type                     = "DAY"
+    field                    = "event_timestamp"
+    require_partition_filter = true
   }
 
   clustering = ["source_ip", "user_id", "event_type"]
@@ -287,5 +289,61 @@ resource "google_bigquery_table" "user_screenshots_view" {
   }
 
   depends_on = [google_bigquery_dataset.cyber_dataset, google_storage_bucket.screenshots]
+}
+
+# 8. Detection Alerts Table (Partitioned by window_end, clustered by user_id)
+resource "google_bigquery_table" "alerts" {
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.cyber_dataset.dataset_id
+  table_id            = "alerts"
+  description         = "De-duplicated alert events detected by scheduled micro-batch detector, Dataflow, or CQ."
+  deletion_protection = false
+
+  time_partitioning {
+    type                     = "DAY"
+    field                    = "window_end"
+    require_partition_filter = false
+  }
+
+  clustering = ["user_id", "status", "engine"]
+
+  schema = jsonencode([
+    { name = "alert_id", type = "STRING", mode = "REQUIRED", description = "Primary key: user_id|window_end" },
+    { name = "engine", type = "STRING", mode = "REQUIRED", description = "Detection engine: scheduled, dataflow, cq" },
+    { name = "user_id", type = "STRING", mode = "REQUIRED", description = "Target user identifier" },
+    { name = "device_id", type = "STRING", mode = "REQUIRED", description = "Target device identifier" },
+    { name = "source_ip", type = "STRING", mode = "REQUIRED", description = "Client public or internal IP" },
+    { name = "window_start", type = "TIMESTAMP", mode = "REQUIRED", description = "Closed 2-minute aggregation window start" },
+    { name = "window_end", type = "TIMESTAMP", mode = "REQUIRED", description = "Closed 2-minute aggregation window end" },
+    { name = "total_2_min_threat_score", type = "INT64", mode = "REQUIRED", description = "Aggregated anomaly score" },
+    { name = "high_privilege_request_count", type = "INT64", mode = "NULLABLE", description = "Count of high privilege requests" },
+    { name = "malicious_command_count", type = "INT64", mode = "NULLABLE", description = "Count of suspicious commands" },
+    { name = "malicious_dns_count", type = "INT64", mode = "NULLABLE", description = "Count of suspicious DNS queries" },
+    { name = "status", type = "STRING", mode = "REQUIRED", description = "NEW | INVESTIGATING | DONE | DEAD_LETTERED" },
+    { name = "detected_at", type = "TIMESTAMP", mode = "REQUIRED", description = "Timestamp when alert was evaluated" },
+    { name = "updated_at", type = "TIMESTAMP", mode = "REQUIRED", description = "Timestamp of last status transition" },
+    { name = "payload", type = "JSON", mode = "REQUIRED", description = "Complete contract JSON payload" }
+  ])
+}
+
+# 9. Alerts Dead Letter Table (Captures alerts that failed 5 delivery attempts)
+resource "google_bigquery_table" "alerts_dead_letter" {
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.cyber_dataset.dataset_id
+  table_id            = "alerts_dead_letter"
+  description         = "Records all alert payloads delivered to cymbal_cyber_alerts_dlq after delivery failure."
+  deletion_protection = false
+
+  time_partitioning {
+    type  = "DAY"
+    field = "dead_lettered_at"
+  }
+
+  schema = jsonencode([
+    { name = "alert_id", type = "STRING", mode = "NULLABLE", description = "Extracted alert_id attribute" },
+    { name = "payload", type = "STRING", mode = "REQUIRED", description = "Raw message body string" },
+    { name = "attributes", type = "STRING", mode = "NULLABLE", description = "JSON string of message attributes" },
+    { name = "dead_lettered_at", type = "TIMESTAMP", mode = "REQUIRED", description = "Timestamp appended to DLQ table" }
+  ])
 }
 

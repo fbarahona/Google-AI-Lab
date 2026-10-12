@@ -37,6 +37,11 @@ resource "google_pubsub_subscription" "adk_agent_trigger" {
     }
   }
 
+  dead_letter_policy {
+    dead_letter_topic     = google_pubsub_topic.alerts_dlq_topic.id
+    max_delivery_attempts = 5
+  }
+
   retry_policy {
     minimum_backoff = "10s"
     maximum_backoff = "600s"
@@ -44,11 +49,45 @@ resource "google_pubsub_subscription" "adk_agent_trigger" {
 
   depends_on = [
     google_service_account.invoker_sa,
-    google_cloud_run_v2_service.adk_agent_service
+    google_cloud_run_v2_service.adk_agent_service,
+    google_pubsub_topic.alerts_dlq_topic
   ]
 }
 
-# 3. Pub/Sub Topic for Raw Synthetic Logs (Data Ingestion Pipeline)
+# 3. Dead-Letter Topic for Failed Alert Investigations
+resource "google_pubsub_topic" "alerts_dlq_topic" {
+  project = var.project_id
+  name    = "cymbal_cyber_alerts_dlq"
+
+  labels = {
+    environment = "demo"
+    component   = "threat-alerts-dlq"
+  }
+
+  depends_on = [google_project_service.required]
+}
+
+# 4. BigQuery Subscription on DLQ Topic (Appends to alerts_dead_letter table)
+resource "google_pubsub_subscription" "alerts_dlq_to_bq" {
+  project                    = var.project_id
+  name                       = "alerts_dlq_to_bq_sub"
+  topic                      = google_pubsub_topic.alerts_dlq_topic.name
+  ack_deadline_seconds       = 60
+  message_retention_duration = "604800s" # 7 days
+
+  bigquery_config {
+    table            = "${var.project_id}:${google_bigquery_dataset.cyber_dataset.dataset_id}.${google_bigquery_table.alerts_dead_letter.table_id}"
+    use_topic_schema = false
+    write_metadata   = true
+  }
+
+  depends_on = [
+    google_bigquery_table.alerts_dead_letter,
+    google_project_iam_member.pubsub_sa_bigquery_editor
+  ]
+}
+
+# 5. Pub/Sub Topic for Raw Synthetic Logs (Data Ingestion Pipeline)
 resource "google_pubsub_topic" "raw_logs_topic" {
   project = var.project_id
   name    = "cymbal_cyber_raw_logs"
@@ -61,17 +100,45 @@ resource "google_pubsub_topic" "raw_logs_topic" {
   depends_on = [google_project_service.required]
 }
 
-# 4. Pub/Sub Pull Subscription for Dataflow Ingestion Pipeline
-resource "google_pubsub_subscription" "raw_logs_to_bq_sub" {
+# 6. Direct BigQuery Subscription: user_access_events (Filtered by event_family = 'access')
+resource "google_pubsub_subscription" "raw_access_to_bq" {
   project                    = var.project_id
-  name                       = "raw_logs_to_bq_sub"
+  name                       = "raw_access_events_to_bq_sub"
   topic                      = google_pubsub_topic.raw_logs_topic.name
-  ack_deadline_seconds       = 300
+  filter                     = "attributes.event_family = \"access\""
+  ack_deadline_seconds       = 60
   message_retention_duration = "86400s" # 24 hours
 
-  retry_policy {
-    minimum_backoff = "10s"
-    maximum_backoff = "300s"
+  bigquery_config {
+    table            = "${var.project_id}:${google_bigquery_dataset.cyber_dataset.dataset_id}.${google_bigquery_table.user_access_events.table_id}"
+    use_table_schema = true
+    write_metadata   = false
   }
+
+  depends_on = [
+    google_bigquery_table.user_access_events,
+    google_project_iam_member.pubsub_sa_bigquery_editor
+  ]
+}
+
+# 7. Direct BigQuery Subscription: network_events (Filtered by event_family = 'network')
+resource "google_pubsub_subscription" "raw_network_to_bq" {
+  project                    = var.project_id
+  name                       = "raw_network_events_to_bq_sub"
+  topic                      = google_pubsub_topic.raw_logs_topic.name
+  filter                     = "attributes.event_family = \"network\""
+  ack_deadline_seconds       = 60
+  message_retention_duration = "86400s" # 24 hours
+
+  bigquery_config {
+    table            = "${var.project_id}:${google_bigquery_dataset.cyber_dataset.dataset_id}.${google_bigquery_table.network_events.table_id}"
+    use_table_schema = true
+    write_metadata   = false
+  }
+
+  depends_on = [
+    google_bigquery_table.network_events,
+    google_project_iam_member.pubsub_sa_bigquery_editor
+  ]
 }
 

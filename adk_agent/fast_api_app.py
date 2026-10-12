@@ -149,32 +149,62 @@ def _cleanup_expired_messages():
             store.pop(k, None)
 
 
-def is_alert_durably_assessed(user_id: str, window_end: Optional[str]) -> bool:
-    """Checks BigQuery adk_threat_assessment to determine if this alert was already evaluated."""
-    if os.getenv("LOCAL_MODE", "false").lower() == "true":
-        return False
-    if not user_id or not window_end:
-        return False
+def get_alert_status_info(alert_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Checks BigQuery `alerts` table for the alert_id status.
+    Returns dict with status, updated_at timestamp, or None if not found.
+    """
+    if os.getenv("LOCAL_MODE", "false").lower() == "true" or not alert_id:
+        return None
     try:
         from google.cloud import bigquery
         from adk_agent.tools import get_bq_client, PROJECT_ID, DATASET_ID
         bq = get_bq_client()
         query = f"""
-            SELECT 1 FROM `{PROJECT_ID}.{DATASET_ID}.adk_threat_assessment`
-            WHERE user_id = @user_id
-              AND transaction_window_end = TIMESTAMP(@window_end)
+            SELECT status, updated_at
+            FROM `{PROJECT_ID}.{DATASET_ID}.alerts`
+            WHERE alert_id = @alert_id
             LIMIT 1
         """
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
-                bigquery.ScalarQueryParameter("user_id", "STRING", user_id),
-                bigquery.ScalarQueryParameter("window_end", "STRING", window_end),
+                bigquery.ScalarQueryParameter("alert_id", "STRING", alert_id),
             ]
         )
-        results = list(bq.query(query, job_config=job_config).result())
-        return len(results) > 0
-    except Exception:
-        return False
+        rows = list(bq.query(query, job_config=job_config).result())
+        if rows:
+            return {"status": rows[0]["status"], "updated_at": rows[0]["updated_at"]}
+        return None
+    except Exception as e:
+        logger.warning("Could not query alerts.status for alert_id %s: %s", alert_id, e)
+        return None
+
+
+def update_alert_status(alert_id: str, new_status: str):
+    """
+    Updates alerts.status to INVESTIGATING or DONE with timestamp audit.
+    """
+    if os.getenv("LOCAL_MODE", "false").lower() == "true" or not alert_id:
+        return
+    try:
+        from google.cloud import bigquery
+        from adk_agent.tools import get_bq_client, PROJECT_ID, DATASET_ID
+        bq = get_bq_client()
+        query = f"""
+            UPDATE `{PROJECT_ID}.{DATASET_ID}.alerts`
+            SET status = @new_status, updated_at = CURRENT_TIMESTAMP()
+            WHERE alert_id = @alert_id
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("new_status", "STRING", new_status),
+                bigquery.ScalarQueryParameter("alert_id", "STRING", alert_id),
+            ]
+        )
+        bq.query(query, job_config=job_config).result()
+        logger.info("Updated alert_id '%s' status to '%s' in BigQuery.", alert_id, new_status)
+    except Exception as e:
+        logger.warning("Could not update alerts.status for alert_id %s: %s", alert_id, e)
 
 
 async def _run_agent_investigation(
@@ -288,172 +318,132 @@ async def handle_pubsub_trigger(
             },
         )
 
-    # 2. Extract deduplication identifier (messageId, header, or user:window_end)
-    message_id = None
+    # 2. Extract alert_id contract attribute or construct from payload
+    alert_id = None
     if isinstance(raw_body, dict):
         msg_obj = raw_body.get("message")
         if isinstance(msg_obj, dict):
-            message_id = msg_obj.get("messageId") or msg_obj.get("message_id")
-    if not message_id:
-        message_id = request.headers.get("ce-id") or request.headers.get("x-goog-pubsub-message-id")
-    if not message_id:
+            attrs = msg_obj.get("attributes") or {}
+            alert_id = attrs.get("alert_id")
+    if not alert_id:
+        alert_id = alert_data.get("alert_id")
+    if not alert_id:
         window_end = alert_data.get("window_end") or alert_data.get("transaction_window_end") or ""
-        if window_end:
-            message_id = f"{user_id}:{window_end}"
+        if window_end and user_id:
+            alert_id = f"{user_id}|{window_end}"
 
-    # 3. Deduplication Check: Check completed first, then in-progress, then durable BigQuery store
+    message_id = alert_id or request.headers.get("ce-id") or request.headers.get("x-goog-pubsub-message-id") or f"{user_id}-{int(time.time())}"
+
+    # 3. Fast-path in-memory and durable BigQuery alerts.status checks
     _cleanup_expired_messages()
-    if message_id:
-        if message_id in _COMPLETED_MESSAGES:
-            logger.info("Duplicate Pub/Sub message already completed (%s); returning 200 DUPLICATE_ACK.", message_id)
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "DUPLICATE_ACK",
-                    "message": "Alert previously completed.",
-                    "message_id": message_id,
-                },
-            )
 
-        window_end = alert_data.get("window_end") or alert_data.get("transaction_window_end")
-        if is_alert_durably_assessed(user_id, window_end):
-            logger.info("Alert previously recorded in BigQuery adk_threat_assessment (%s, %s); acknowledging with 200.", user_id, window_end)
-            _COMPLETED_MESSAGES[message_id] = time.time()
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "DUPLICATE_ACK",
-                    "message": "Alert previously assessed in BigQuery.",
-                    "message_id": message_id,
-                },
-            )
+    if message_id in _COMPLETED_MESSAGES:
+        logger.info("Duplicate Pub/Sub message already completed in-memory (%s); returning 200 DUPLICATE_ACK.", message_id)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "DUPLICATE_ACK",
+                "message": "Alert previously completed.",
+                "alert_id": alert_id,
+            },
+        )
 
-        if message_id in _IN_PROGRESS_MESSAGES:
-            logger.warning("Pub/Sub message currently in-progress (%s); returning 409 to trigger Pub/Sub retry.", message_id)
-            return JSONResponse(
-                status_code=409,
-                content={
-                    "status": "IN_PROGRESS",
-                    "message": "Investigation currently in progress; please retry.",
-                    "message_id": message_id,
-                },
-            )
+    # Durable BigQuery alerts table status check
+    if alert_id:
+        status_info = get_alert_status_info(alert_id)
+        if status_info:
+            current_status = status_info.get("status")
+            updated_at = status_info.get("updated_at")
 
-        # Mark as currently executing
-        _IN_PROGRESS_MESSAGES[message_id] = time.time()
+            # If already DONE: skip and ACK immediately
+            if current_status == "DONE":
+                logger.info("Alert '%s' is marked DONE in BigQuery alerts table; returning 200 DUPLICATE_ACK.", alert_id)
+                _COMPLETED_MESSAGES[message_id] = time.time()
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": "DUPLICATE_ACK",
+                        "message": "Alert already investigated and completed.",
+                        "alert_id": alert_id,
+                    },
+                )
+
+            # If currently INVESTIGATING: check if fresh or timed out (>10 min)
+            if current_status == "INVESTIGATING":
+                is_stale = False
+                if updated_at:
+                    try:
+                        if isinstance(updated_at, datetime):
+                            elapsed = (datetime.now(timezone.utc) - updated_at).total_seconds()
+                        else:
+                            elapsed = 0
+                        if elapsed > 600:
+                            is_stale = True
+                    except Exception:
+                        pass
+
+                if not is_stale:
+                    logger.warning("Alert '%s' currently INVESTIGATING in BigQuery (< 10 min ago); returning 409 to trigger Pub/Sub retry.", alert_id)
+                    return JSONResponse(
+                        status_code=409,
+                        content={
+                            "status": "IN_PROGRESS",
+                            "message": "Investigation currently in progress; please retry.",
+                            "alert_id": alert_id,
+                        },
+                    )
+                else:
+                    logger.warning("Alert '%s' was INVESTIGATING but timed out (> 10 min); re-attempting.", alert_id)
+
+    if message_id in _IN_PROGRESS_MESSAGES:
+        logger.warning("Pub/Sub message currently in-progress in-memory (%s); returning 409.", message_id)
+        return JSONResponse(
+            status_code=409,
+            content={
+                "status": "IN_PROGRESS",
+                "message": "Investigation currently in progress; please retry.",
+                "message_id": message_id,
+            },
+        )
+
+    # Transition status to INVESTIGATING
+    _IN_PROGRESS_MESSAGES[message_id] = time.time()
+    if alert_id:
+        update_alert_status(alert_id, "INVESTIGATING")
 
     # 4. Synchronous Execution by Default (with guaranteed state cleanup in finally)
     try:
-        if sync:
-            output = await _run_agent_investigation(
-                runner=runner,
-                app_name=app_name,
-                user_id=user_id,
-                session_id=session_id,
-                prompt_text=prompt_text,
-            )
-            # Record completed ID ONLY on success!
-            if message_id:
-                _COMPLETED_MESSAGES[message_id] = time.time()
+        output = await _run_agent_investigation(
+            runner=runner,
+            app_name=app_name,
+            user_id=user_id,
+            session_id=session_id,
+            prompt_text=prompt_text,
+        )
 
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "COMPLETED",
-                    "session_id": session_id,
-                    "output": output,
-                },
-            )
-        else:
-            # Optional background path
-            background_tasks.add_task(
-                _run_agent_investigation,
-                runner=runner,
-                app_name=app_name,
-                user_id=user_id,
-                session_id=session_id,
-                prompt_text=prompt_text,
-            )
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "ACK",
-                    "message": "Continuous query alert received and investigation started in background.",
-                    "session_id": session_id,
-                    "user_id": user_id,
-                },
-            )
+        # Mark as DONE on successful investigation
+        if alert_id:
+            update_alert_status(alert_id, "DONE")
+        _COMPLETED_MESSAGES[message_id] = time.time()
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "COMPLETED",
+                "session_id": session_id,
+                "alert_id": alert_id,
+                "output": output,
+            },
+        )
     except Exception as exc:
         logger.error("Pub/Sub agent investigation failed for session %s: %s", session_id, exc)
-        # On failure: do NOT add to _COMPLETED_MESSAGES so retries can run!
+        # On failure: do NOT mark DONE so retries or DLQ can take over
         raise HTTPException(
             status_code=500,
             detail=f"Agent investigation failed: {exc}",
         )
     finally:
-        # Always remove from in-progress store
-        if message_id:
-            _IN_PROGRESS_MESSAGES.pop(message_id, None)
-
-
-_SCAN_LOCK = asyncio.Lock()
-
-
-@app.post("/apps/adk_agent/trigger/scan")
-@app.post("/trigger/scan")
-async def handle_scheduled_scan(
-    caller_claims: Dict[str, Any] = Depends(verify_incoming_oidc_token),
-):
-    """
-    Cloud Scheduler trigger endpoint. Runs periodic threat scanning (every 2 minutes)
-    to query BigQuery for newly emerging unassessed threats and dispatch investigations.
-    Uses an in-memory lock to skip overlapping passes if an earlier scan is still in-flight.
-    """
-    if _SCAN_LOCK.locked():
-        logger.warning("Overlapping Cloud Scheduler scan requested while previous pass active; skipping.")
-        return JSONResponse(
-            status_code=200,
-            content={
-                "status": "SKIPPED_OVERLAPPING_PASS",
-                "message": "Previous threat scan pass is still executing; skipping overlapping run.",
-            },
-        )
-
-    async with _SCAN_LOCK:
-        logger.info("Executing Cloud Scheduler threat scan pass...")
-        try:
-            from adk_agent.threat_scanner import BigQueryThreatScanner
-            from adk_agent.tools import PROJECT_ID, DATASET_ID
-            scanner = BigQueryThreatScanner(project_id=PROJECT_ID, dataset_id=DATASET_ID)
-            threats = scanner.find_new_threat_events()
-            results = []
-            for threat in threats:
-                logger.info(
-                    "Discovered unassessed threat for user: %s (score: %s)",
-                    threat.get("user_id"),
-                    threat.get("total_2_min_threat_score"),
-                )
-                res = await scanner.investigate_threat(threat)
-                results.append({
-                    "user_id": threat.get("user_id"),
-                    "threat_score": threat.get("total_2_min_threat_score"),
-                    "response": res,
-                })
-
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "SCAN_COMPLETE",
-                    "threats_discovered": len(threats),
-                    "investigations": results,
-                },
-            )
-        except Exception as exc:
-            logger.error("Scheduled threat scan pass failed: %s", exc)
-            return JSONResponse(
-                status_code=500,
-                content={"status": "ERROR", "detail": str(exc)},
-            )
+        _IN_PROGRESS_MESSAGES.pop(message_id, None)
 
 
 # Main execution

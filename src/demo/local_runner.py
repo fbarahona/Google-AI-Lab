@@ -24,7 +24,7 @@ import sys
 import json
 import time
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List
 
 from src.demo.data_generator.log_generator import SyntheticLogEngine
@@ -142,22 +142,32 @@ def step_2_correlate_events(scenario_data: Dict[str, Any]) -> Dict[str, Any]:
     else:
         total_score = max(total_score, 1850)
 
+    now_utc = datetime.now(timezone.utc)
+    window_end_str = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    window_start_str = (now_utc - timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    alert_id = f"{user_id}|{window_end_str}"
+
     alert_payload = {
-        "window_end": datetime.now(timezone.utc).isoformat(),
+        "alert_id": alert_id,
+        "schema_version": 1,
+        "engine": "scheduled",
         "user_id": user_id,
         "device_id": device_id,
         "source_ip": source_ip,
-        "assigned_internal_ip": assigned_ip,
+        "window_start": window_start_str,
+        "window_end": window_end_str,
         "total_2_min_threat_score": total_score,
+        "high_privilege_request_count": 3 if threat_type != "false_positive" else 1,
         "malicious_command_count": malicious_cmd_count,
         "malicious_dns_count": malicious_dns_count,
-        "risky_file_transfer_count": risky_file_count
+        "detected_at": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
     }
 
     print(f"  -> Correlation Window Completed.")
+    print(f"  -> Alert Contract ID: {alert_id}")
     print(f"  -> Correlated User: {user_id} | Device: {device_id} | Public IP: {source_ip}")
     print(f"  -> Aggregated Anomaly Score: {total_score} (Threshold: >= 100)")
-    print(f"  -> Alert payload emitted to ADK Multi-Agent Orchestrator!")
+    print(f"  -> Alert contract payload emitted to ADK Multi-Agent Orchestrator!")
     return alert_payload
 
 
@@ -320,6 +330,7 @@ def step_3_run_agent_investigation(alert: Dict[str, Any], threat_type: str) -> D
 
     ticket = SocTicket(
         ticket_id=ticket_id,
+        alert_id=alert.get("alert_id"),
         user_id=user_id,
         device_id=device_id,
         source_ip=source_ip,

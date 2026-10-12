@@ -66,22 +66,23 @@ AS (
       user_id
   )
 
-/* Publish correlated alerts with score >= 100 to Pub/Sub */
+/* Publish correlated alerts with score >= 100 to Pub/Sub matching the unified Alert Contract */
 SELECT
   TO_JSON_STRING(
     STRUCT(
-      window_end,
+      CONCAT(user_id, '|', FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', window_end)) AS alert_id,
+      1 AS schema_version,
+      'cq' AS engine,
       user_id,
       device_id,
       source_ip,
+      FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', window_start) AS window_start,
+      FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', window_end) AS window_end,
       total_2_min_threat_score,
-      max_event_score,
-      avg_event_score,
       high_privilege_request_count,
-      suspicious_user_agent_count,
-      risky_file_transfer_count,
       malicious_command_count,
-      malicious_dns_count
+      malicious_dns_count,
+      FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', CURRENT_TIMESTAMP()) AS detected_at
     )
   ) AS data
 FROM

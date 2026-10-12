@@ -114,12 +114,23 @@ class PubSubSink(BaseSink):
     ) -> int:
         total = 0
         for ev in access_events:
-            message_data = json.dumps({"table": "user_access_events", "data": ev}).encode("utf-8")
-            self.publisher.publish(self.topic_path, message_data, table="user_access_events")
+            # For BigQuery subscription with use_table_schema=true, publish the event JSON directly
+            message_data = json.dumps(ev).encode("utf-8")
+            self.publisher.publish(
+                self.topic_path,
+                message_data,
+                event_family="access",
+                table="user_access_events"
+            )
             total += 1
         for ev in network_events:
-            message_data = json.dumps({"table": "network_events", "data": ev}).encode("utf-8")
-            self.publisher.publish(self.topic_path, message_data, table="network_events")
+            message_data = json.dumps(ev).encode("utf-8")
+            self.publisher.publish(
+                self.topic_path,
+                message_data,
+                event_family="network",
+                table="network_events"
+            )
             total += 1
         return total
 

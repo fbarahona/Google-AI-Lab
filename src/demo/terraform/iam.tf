@@ -103,6 +103,15 @@ resource "google_bigquery_table_iam_member" "agent_adk_threat_assessment_editor"
   member     = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
+# Table-level least-privilege dataEditor scoped strictly to alerts (status updates)
+resource "google_bigquery_table_iam_member" "agent_alerts_editor" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
+  table_id   = google_bigquery_table.alerts.table_id
+  role       = "roles/bigquery.dataEditor"
+  member     = "serviceAccount:${google_service_account.agent_sa.email}"
+}
+
 # Resource-level GCS bucket bindings:
 # 1) Screenshots bucket: READ-ONLY (objectViewer)
 resource "google_storage_bucket_iam_member" "agent_screenshots_reader" {
@@ -138,9 +147,10 @@ resource "google_service_account" "invoker_sa" {
 }
 
 
-# 4. Dataflow Pipeline Workload Service Account
+# 4. Dataflow Pipeline Workload Service Account (Optional on-demand)
 # Role: Executes Dataflow streaming ingestion from Pub/Sub raw logs to BigQuery.
 resource "google_service_account" "dataflow_sa" {
+  count        = var.enable_dataflow_streaming ? 1 : 0
   project      = var.project_id
   account_id   = var.dataflow_service_account_id
   display_name = "Cymbal Cyber Dataflow Pipeline SA"
@@ -159,50 +169,136 @@ locals {
 }
 
 resource "google_project_iam_member" "dataflow_project_bindings" {
-  for_each = local.dataflow_project_roles
+  for_each = var.enable_dataflow_streaming ? local.dataflow_project_roles : toset([])
 
   project = var.project_id
   role    = each.value
-  member  = "serviceAccount:${google_service_account.dataflow_sa.email}"
-}
-
-# Subscriber role on raw logs subscription
-resource "google_pubsub_subscription_iam_member" "dataflow_raw_sub_subscriber" {
-  project      = var.project_id
-  subscription = google_pubsub_subscription.raw_logs_to_bq_sub.name
-  role         = "roles/pubsub.subscriber"
-  member       = "serviceAccount:${google_service_account.dataflow_sa.email}"
+  member  = "serviceAccount:${google_service_account.dataflow_sa[0].email}"
 }
 
 # BigQuery dataset READER access (metadata and schema resolution)
 resource "google_bigquery_dataset_access" "dataflow_dataset_reader" {
+  count         = var.enable_dataflow_streaming ? 1 : 0
   project       = var.project_id
   dataset_id    = google_bigquery_dataset.cyber_dataset.dataset_id
   role          = "READER"
-  user_by_email = google_service_account.dataflow_sa.email
+  user_by_email = google_service_account.dataflow_sa[0].email
 }
 
 # Table-level least-privilege dataEditor scoped strictly to user_access_events
 resource "google_bigquery_table_iam_member" "dataflow_user_access_editor" {
+  count      = var.enable_dataflow_streaming ? 1 : 0
   project    = var.project_id
   dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
   table_id   = google_bigquery_table.user_access_events.table_id
   role       = "roles/bigquery.dataEditor"
-  member     = "serviceAccount:${google_service_account.dataflow_sa.email}"
+  member     = "serviceAccount:${google_service_account.dataflow_sa[0].email}"
 }
 
 # Table-level least-privilege dataEditor scoped strictly to network_events
 resource "google_bigquery_table_iam_member" "dataflow_network_events_editor" {
+  count      = var.enable_dataflow_streaming ? 1 : 0
   project    = var.project_id
   dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
   table_id   = google_bigquery_table.network_events.table_id
   role       = "roles/bigquery.dataEditor"
-  member     = "serviceAccount:${google_service_account.dataflow_sa.email}"
+  member     = "serviceAccount:${google_service_account.dataflow_sa[0].email}"
 }
 
 # Staging bucket objectAdmin access for Dataflow pipeline binaries and temporary files
 resource "google_storage_bucket_iam_member" "dataflow_staging_admin" {
+  count  = var.enable_dataflow_streaming ? 1 : 0
   bucket = google_storage_bucket.adk_staging.name
   role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.dataflow_sa.email}"
+  member = "serviceAccount:${google_service_account.dataflow_sa[0].email}"
 }
+
+# 4. Pub/Sub Google-Managed Service Agent IAM
+# Required for Pub/Sub BigQuery subscriptions and DLQ dead-letter publisher
+data "google_project" "project" {
+  project_id = var.project_id
+}
+
+resource "google_project_service_identity" "pubsub_sa" {
+  provider = google-beta
+  project  = var.project_id
+  service  = "pubsub.googleapis.com"
+}
+
+# Pub/Sub SA needs publisher on the DLQ topic
+resource "google_pubsub_topic_iam_member" "pubsub_sa_dlq_publisher" {
+  project = var.project_id
+  topic   = google_pubsub_topic.alerts_dlq_topic.name
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
+# Pub/Sub SA needs subscriber on the alerts push subscription
+resource "google_pubsub_subscription_iam_member" "pubsub_sa_alerts_subscriber" {
+  project      = var.project_id
+  subscription = google_pubsub_subscription.adk_agent_trigger.name
+  role         = "roles/pubsub.subscriber"
+  member       = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
+# Pub/Sub SA needs dataEditor on the event and dead-letter tables
+resource "google_project_iam_member" "pubsub_sa_bigquery_editor" {
+  project = var.project_id
+  role    = "roles/bigquery.dataEditor"
+  member  = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
+# 5. Dedicated Threat Detector Workload Service Account (Cloud Run Job)
+resource "google_service_account" "detector_sa" {
+  project      = var.project_id
+  account_id   = "threat-detector-job-sa"
+  display_name = "Cymbal Cyber Scheduled Threat Detector Job SA"
+  description  = "Executes scheduled micro-batch queries and publishes detected alerts to cymbal_cyber_alerts."
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_project_iam_member" "detector_job_user" {
+  project = var.project_id
+  role    = "roles/bigquery.jobUser"
+  member  = "serviceAccount:${google_service_account.detector_sa.email}"
+}
+
+resource "google_bigquery_dataset_access" "detector_dataset_reader" {
+  project       = var.project_id
+  dataset_id    = google_bigquery_dataset.cyber_dataset.dataset_id
+  role          = "READER"
+  user_by_email = google_service_account.detector_sa.email
+}
+
+resource "google_bigquery_table_iam_member" "detector_alerts_editor" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
+  table_id   = google_bigquery_table.alerts.table_id
+  role       = "roles/bigquery.dataEditor"
+  member     = "serviceAccount:${google_service_account.detector_sa.email}"
+}
+
+resource "google_bigquery_table_iam_member" "detector_dlq_editor" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
+  table_id   = google_bigquery_table.alerts_dead_letter.table_id
+  role       = "roles/bigquery.dataEditor"
+  member     = "serviceAccount:${google_service_account.detector_sa.email}"
+}
+
+resource "google_bigquery_table_iam_member" "detector_soc_tickets_editor" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
+  table_id   = google_bigquery_table.soc_tickets.table_id
+  role       = "roles/bigquery.dataEditor"
+  member     = "serviceAccount:${google_service_account.detector_sa.email}"
+}
+
+resource "google_pubsub_topic_iam_member" "detector_alerts_publisher" {
+  project = var.project_id
+  topic   = google_pubsub_topic.alerts_topic.name
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:${google_service_account.detector_sa.email}"
+}
+

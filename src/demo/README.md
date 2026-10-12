@@ -4,9 +4,11 @@ This demonstration showcases an enterprise-grade cybersecurity threat detection,
 
 It seamlessly bridges **Cloud Architecture**, **Stream Data Engineering**, **Agentic Multi-Agent AI**, and **SOC Operations**:
 - **Synthetic Log Generator:** Modular Python tool generating access and network logs with ad-hoc threat injection (both APT attacks and administrative false positives).
-- **Data Ingestion Pipelines:** Multiple ingestion pathways to BigQuery via Cloud Storage batch loads, Pub/Sub to Dataflow streaming, or direct BigQuery streaming.
-- **BigQuery Continuous Queries:** Stateful stream processing performing temporal windowed joins between login events and network activity.
-- **BigQuery Threat Scanner:** Active background daemon monitoring BigQuery for newly emerging threat events.
+- **Zero-Cost Direct Ingestion:** Pub/Sub to BigQuery subscriptions using direct table schemas (`use_table_schema=true`) filtered by `attributes.event_family` (`access` and `network`), replacing expensive always-on Dataflow VMs.
+- **Budget-Optimized Detection Engine:** A scheduled micro-batch Cloud Run Job (`threat-detector`) running every 2 minutes via Cloud Scheduler, evaluating 2-minute tumbling windows closed >60s ago and idempotently executing `MERGE` on `alert_id`. Cuts always-on cost from ~$4,300/month to near zero.
+- **Optional Continuous Query & Dataflow Engines:** Continuous queries (with BigQuery reservations) and Dataflow streaming pipelines remain available as optional, on-demand toggles for high-throughput live demos.
+- **Unified Alert Contract:** All detection engines publish identical contract messages (`alert_id`, `engine`, `schema_version`, window timestamps, indicator counts) to topic `cymbal_cyber_alerts`.
+- **Dead-Letter Auto-Escalation:** Alerts failing 5 webhook delivery attempts are routed to `cymbal_cyber_alerts_dlq`, logged to BigQuery `alerts_dead_letter`, and auto-escalated to SOC tickets.
 - **Google ADK Multi-Agent Team:** Autonomous orchestrator coordinating 4 specialized agents:
   1. `google_search_agent`: OSINT threat intel on external public IPs via Google Search.
   2. `bq_investigation_agent`: 24-hour behavioral profile queries in BigQuery using parameterized SQL.
@@ -26,38 +28,58 @@ It seamlessly bridges **Cloud Architecture**, **Stream Data Engineering**, **Age
                                   ┌───────────────────────────┐
                                   │ Synthetic Log Generator   │
                                   │ CLI & Threat Injection    │
+                                  │ event_family: access|net  │
                                   └─────────────┬─────────────┘
                                                 │
-                 ┌──────────────────────────────┼──────────────────────────────┐
-                 ▼                              ▼                              ▼
-    ┌─────────────────────────┐   ┌─────────────────────────┐   ┌─────────────────────────┐
-    │  Google Cloud Storage   │   │     Cloud Pub/Sub       │   │  Direct BQ Streaming    │
-    │  gs://cymbal-cyber-     │   │  cymbal_cyber_raw_logs  │   │     Storage Write API   │
-    │  raw-logs_<PROJECT_ID>  │   └─────────────┬───────────┘   └─────────────┬───────────┘
-    └────────────┬────────────┘                 │                             │
-                 │ (GCS Loader)                 │ (Dataflow Streaming)        │
-                 └──────────────────────┐       ▼                             │
-                                        ▼─────────────────────────────────────┘
-                                   BigQuery Tables (Cymbal_Cyber)
-                                   ├── user_access_events
-                                   ├── network_events
-                                   ├── adk_threat_assessment
-                                   └── soc_tickets
-                                                │
-                         ┌──────────────────────┴──────────────────────┐
-                         ▼                                             ▼
-            BigQuery Continuous Query                      BigQuery Threat Scanner
-            (Exports alerts >= 100 to Pub/Sub)             (Active daemon reading BQ)
-                         │                                             │
-                         └──────────────────────┬──────────────────────┘
                                                 ▼
-                               ┌─────────────────────────────────┐
-                               │   ADK Multi-Agent Orchestrator  │
-                               │           (adk_agent/)          │
-                               └────────────────┬────────────────┘
-                                                │
-         ┌──────────────────────────────┬───────┴──────────────────────┬──────────────────────────────┐
-         ▼                              ▼                              ▼                              ▼
+                                   ┌─────────────────────────┐
+                                   │  Pub/Sub Raw Logs Topic │
+                                   │  cymbal_cyber_raw_logs  │
+                                   └───────┬─────────┬───────┘
+                                           │         │
+                 event_family="access"     │         │ event_family="network"
+                 BigQuery Subscription     │         │ BigQuery Subscription
+                                           ▼         ▼
+                                    BigQuery Tables (Cymbal_Cyber)
+                                    ├── user_access_events (DAY partition)
+                                    ├── network_events     (DAY partition)
+                                    ├── alerts             (DAY partition, clustered)
+                                    ├── alerts_dead_letter (DLQ audit store)
+                                    ├── adk_threat_assessment
+                                    └── soc_tickets
+                                                 │
+                                                 │ Cloud Scheduler (every 2m)
+                                                 ▼
+                                    ┌─────────────────────────────┐
+                                    │ Cloud Run Job: threat-detector
+                                    │ (TIMESTAMP_BUCKET 2m + MERGE)
+                                    └────────────┬────────────────┘
+                                                 │ (Alert Contract JSON)
+                                                 ▼
+                                    ┌─────────────────────────────┐
+                                    │ Topic: cymbal_cyber_alerts  │
+                                    └──────┬───────────────┬──────┘
+                                           │               │ Failed 5 times
+                          Push Subscription│               ▼
+                                           │  ┌─────────────────────────────┐
+                                           │  │ Topic: cymbal_cyber_alerts_dlq
+                                           │  │ Subscription -> DLQ Table   │
+                                           │  └────────────┬────────────────┘
+                                           │               ▼
+                                           │  ┌─────────────────────────────┐
+                                           │  │ Detector Next Run: Marks    │
+                                           │  │ DEAD_LETTERED & Auto-Escalate
+                                           │  └─────────────────────────────┘
+                                           ▼
+                                ┌─────────────────────────────────┐
+                                │   ADK Multi-Agent Orchestrator  │
+                                │   (Cloud Run Webhook: Fast API) │
+                                │   - Checks alerts.status (!=DONE)
+                                │   - Sets INVESTIGATING -> DONE   │
+                                └────────────────┬────────────────┘
+                                                 │
+         ┌──────────────────────────────┬────────┴──────────────────────┬──────────────────────────────┐
+         ▼                              ▼                               ▼                              ▼
 ┌──────────────────┐           ┌──────────────────┐           ┌──────────────────┐           ┌──────────────────┐
 │google_search_    │           │bq_investigation_ │           │visual_analysis_  │           │soc_ticketing_    │
 │agent             │           │agent             │           │agent             │           │agent             │
