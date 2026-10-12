@@ -131,10 +131,93 @@ DEFAULT_MAX_BYTES_BILLED = int(os.getenv("BQ_MAX_BYTES_BILLED", "1073741824"))  
 DESTRUCTIVE_SQL_TOKENS = {"DROP", "ALTER", "DELETE", "UPDATE", "INSERT", "TRUNCATE", "GRANT", "REVOKE", "MERGE"}
 
 
-def validate_safe_sql_query(sql: str) -> None:
+def validate_dataset_sandboxing(
+    sql: str,
+    allowed_dataset: str,
+    allow_metadata: bool = False
+) -> None:
+    """
+    Validates that a SQL query strictly references the designated allowed dataset
+    and does not access unauthorized tenant or project datasets.
+
+    Raises:
+        ValueError: If unauthorized cross-dataset references are detected.
+    """
+    if not sql or not allowed_dataset:
+        return
+
+    clean_sql = re.sub(r"--.*$", "", sql, flags=re.MULTILINE)
+    clean_sql = re.sub(r"/\*.*?\*/", "", clean_sql, flags=re.DOTALL)
+
+    # Extract CTE names from WITH clauses so local aliases are not mistaken for external tables
+    cte_names = set(re.findall(r"(?:WITH|,)\s*([a-zA-Z0-9_]+)\s+AS\s*\(", clean_sql, re.IGNORECASE))
+
+    # Match tables in FROM, JOIN, or TABLE clauses
+    table_candidates = re.findall(
+        r"\b(?:FROM|JOIN)\s+(?:TABLE\s+)?([`'\"a-zA-Z0-9_\-\.]+)",
+        clean_sql,
+        re.IGNORECASE
+    )
+
+    # Match backticked table/function qualifiers `dataset.table` or `project.dataset.table`
+    backticked_candidates = re.findall(r"`([a-zA-Z0-9_\-\.]+)`", clean_sql)
+
+    all_candidates = set(table_candidates) | set(backticked_candidates)
+
+    for item in all_candidates:
+        ident = item.strip("`'\" \t\n")
+        if not ident or ident.startswith("(") or ident.upper() == "UNNEST" or ident in cte_names:
+            continue
+        if "." in ident:
+            parts = ident.split(".")
+            if len(parts) >= 2:
+                dataset_name = parts[-2]
+                if allow_metadata and "information_schema" in dataset_name.lower():
+                    continue
+                if dataset_name.lower() != allowed_dataset.lower():
+                    raise ValueError(
+                        f"Cross-dataset reference forbidden: query references dataset '{dataset_name}', "
+                        f"but only '{allowed_dataset}' is permitted."
+                    )
+
+
+def inject_dataset_into_query(query: str, dataset_id: str = DATASET_ID) -> str:
+    """
+    Dynamically injects the designated dataset name into bare table references
+    in a SQL query, ensuring un-prefixed table references are explicitly sandboxed.
+    """
+    if not query:
+        return query
+
+    known_tables = {
+        "user_access_events",
+        "network_events",
+        "soc_tickets",
+        "adk_threat_assessment",
+        "alerts",
+        "alerts_dead_letter",
+        "user_screenshots_view",
+    }
+
+    modified_query = query
+    for tbl in known_tables:
+        pattern = rf"\b(FROM|JOIN)\s+[`]?{tbl}[`]?(?=[\s;,)]|$)"
+        replacement = rf"\1 `{dataset_id}.{tbl}`"
+        modified_query = re.sub(pattern, replacement, modified_query, flags=re.IGNORECASE)
+
+    return modified_query
+
+
+def validate_safe_sql_query(
+    sql: str,
+    allow_metadata: bool = False,
+    allowed_dataset: str | None = None
+) -> None:
     """
     Defense-in-depth pre-execution guardrail validating that SQL queries intended
-    for read-only forensic analysis do not contain destructive DML/DDL operations.
+    for read-only forensic analysis do not contain destructive DML/DDL operations,
+    do not access unauthorized system metadata (INFORMATION_SCHEMA), and only reference
+    authorized datasets in the GCP project.
 
     While standard tool methods use parameterized query templates, this validator
     serves as a secondary defense boundary against future dynamic SQL queries or
@@ -142,10 +225,19 @@ def validate_safe_sql_query(sql: str) -> None:
     """
     if not sql:
         return
+
+    # Block unauthorized access to BigQuery INFORMATION_SCHEMA metadata views
+    if "information_schema" in sql.lower() and not allow_metadata:
+        raise ValueError("Access to INFORMATION_SCHEMA is restricted.")
+
     upper_sql = sql.upper()
     for token in DESTRUCTIVE_SQL_TOKENS:
         if re.search(rf"\b{token}\b", upper_sql):
             raise ValueError(f"Security Policy Violation: Destructive SQL operation '{token}' is strictly forbidden.")
+
+    # Sandbox dataset references if an allowed dataset is enforced
+    if allowed_dataset:
+        validate_dataset_sandboxing(sql, allowed_dataset, allow_metadata=allow_metadata)
 
 ENTITY_SAFE_PATTERN = re.compile(r"^[a-zA-Z0-9\._\-:@]+$")
 SQL_INJECTION_DANGEROUS_PATTERNS = [
@@ -239,6 +331,19 @@ def build_event_logs_query(
             f"Invalid window '{window_to_investigate}'. Must be one of {sorted(ALLOWED_INTERVAL_WINDOWS)}."
         )
 
+    # Derive partition interval in days to satisfy require_partition_filter = true on partitioned tables
+    window_partition_days_map = {
+        "1 HOUR": 1,
+        "2 HOUR": 1,
+        "6 HOUR": 1,
+        "12 HOUR": 1,
+        "24 HOUR": 1,
+        "48 HOUR": 2,
+        "7 DAY": 7,
+        "30 DAY": 30,
+    }
+    partition_days = window_partition_days_map.get(clean_window, 1)
+
     logger.info("Building %s parameterized SQL threat profile for %s: %s", clean_window, clean_type, clean_id)
 
     if clean_type in {"device", "device_id"}:
@@ -256,7 +361,8 @@ def build_event_logs_query(
     FlaggedSessions AS (
         SELECT DISTINCT assigned_internal_ip
         FROM `{DATASET_ID}.user_access_events`
-        WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {clean_window})
+        WHERE DATE(event_timestamp) >= DATE_SUB(CURRENT_DATE(), INTERVAL {partition_days} DAY)
+          AND event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {clean_window})
           AND event_type = 'login_success'
           AND {access_filter}
     ),
@@ -268,7 +374,8 @@ def build_event_logs_query(
           COUNTIF(REGEXP_CONTAINS(user_agent, r'^(python-requests|curl|Go-http-client)')) AS suspicious_user_agent_logins_24h,
           COUNT(DISTINCT user_agent) AS distinct_user_agents_used_24h
         FROM `{DATASET_ID}.user_access_events`
-        WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {clean_window})
+        WHERE DATE(event_timestamp) >= DATE_SUB(CURRENT_DATE(), INTERVAL {partition_days} DAY)
+          AND event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {clean_window})
           AND {access_filter}
     ),
     NetworkMetrics AS (
@@ -281,7 +388,8 @@ def build_event_logs_query(
           COUNT(DISTINCT destination_ip) AS distinct_destination_ips_24h,
           COUNT(DISTINCT file_hash_sha256) AS distinct_files_transferred_24h
         FROM `{DATASET_ID}.network_events`
-        WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {clean_window})
+        WHERE DATE(event_timestamp) >= DATE_SUB(CURRENT_DATE(), INTERVAL {partition_days} DAY)
+          AND event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {clean_window})
           AND {network_filter}
     )
     SELECT *
@@ -289,7 +397,7 @@ def build_event_logs_query(
     CROSS JOIN NetworkMetrics;
     """
 
-    validate_safe_sql_query(query_sql)
+    validate_safe_sql_query(query_sql, allowed_dataset=DATASET_ID)
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
@@ -515,6 +623,57 @@ def get_entity_behavioral_profile(
     return res
 
 
+def execute_sql(
+    query: str,
+    tool_context: ToolContext | None = None,
+    allow_metadata: bool = False,
+    allowed_dataset: str | None = None
+) -> str:
+    """
+    Executes a read-only SQL query against the BigQuery security dataset.
+    Sandboxes dataset references, blocks unauthorized access to INFORMATION_SCHEMA,
+    and enforces maximum_bytes_billed scan ceilings.
+
+    Args:
+        query: BigQuery SQL query to execute.
+        tool_context: ADK ToolContext for tracking execution state.
+        allow_metadata: Set to True only when specifically authorized for schema introspection.
+        allowed_dataset: Specific dataset to restrict queries to (defaults to security dataset).
+
+    Returns:
+        JSON string of query results.
+    """
+    if not query or not isinstance(query, str):
+        raise ValueError("query must be a non-empty string.")
+
+    target_dataset = allowed_dataset or DATASET_ID
+    # Validate destructive tokens, INFORMATION_SCHEMA, and cross-dataset references
+    validate_safe_sql_query(query, allow_metadata=allow_metadata, allowed_dataset=target_dataset)
+
+    # Inject dataset dynamically for bare table references
+    interpolated_query = inject_dataset_into_query(query, dataset_id=target_dataset)
+
+    is_local_mode = os.getenv("LOCAL_MODE", "false").lower() == "true"
+    if is_local_mode:
+        logger.info("Local mode execute_sql executing query: %s", interpolated_query[:100])
+        return json.dumps([{"status": "LOCAL_SIMULATION_SUCCESS", "query": interpolated_query[:100]}])
+
+    try:
+        bq = get_bq_client()
+        job_config = bigquery.QueryJobConfig(
+            maximum_bytes_billed=DEFAULT_MAX_BYTES_BILLED,
+            default_dataset=f"{PROJECT_ID}.{target_dataset}"
+        )
+        query_job = bq.query(interpolated_query, job_config=job_config)
+        rows = [dict(row.items()) for row in query_job.result()]
+        return json.dumps(rows, default=str)
+    except Exception as e:
+        logger.error("execute_sql query execution failed: %s", e)
+        if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
+            tool_context.state["evidence_unavailable"] = True
+        raise
+
+
 def get_visual_analysis_for_user(gcs_uri: str, tool_context: ToolContext | None = None) -> str:
     """
     Performs multimodal inspection of a desktop screenshot using Gemini.
@@ -593,7 +752,7 @@ def get_gcs_uri_for_user(user: str) -> str:
         WHERE user_id = @user_id
         LIMIT 1;
     """
-    validate_safe_sql_query(sql)
+    validate_safe_sql_query(sql, allowed_dataset=DATASET_ID)
     try:
         from google.cloud import bigquery
         job_config = bigquery.QueryJobConfig(

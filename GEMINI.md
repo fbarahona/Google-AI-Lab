@@ -11,7 +11,7 @@ The project features an end-to-end near real-time cybersecurity threat detection
   2. `bq_investigation_agent`: 24-hour behavioral profile queries in BigQuery.
   3. `visual_analysis_agent`: Gemini multimodal vision OCR on user desktop screenshots.
   4. `soc_ticketing_agent`: Incident synthesis and dispatch to SOC ticketing.
-- **Threat Scanner (`adk_agent/threat_scanner.py`):** Background daemon scanning BigQuery for newly emerging threat events and triggering agent investigations.
+- **Threat Detector (`adk_agent/threat_detector.py`):** Scheduled micro-batch Cloud Run Job scanning BigQuery for newly emerging threat events and triggering agent investigations.
 - **Synthetic Log Generator (`src/demo/data_generator/`):** Generates access and network logs with ad-hoc threat injection.
 - **Data Engineering Pipelines (`src/demo/data_pipeline/`):** Ingestion pipelines, GCS loader, and BigQuery Continuous Queries.
 - **SOC Ticketing System & Console (`src/demo/soc_ticketing/`):** Persistent incident queue and interactive Streamlit console for analyst triage.

@@ -112,6 +112,9 @@ def test_threat_detector_publishes_new_alert(mock_clients):
     merge_call_args = mock_bq.query.call_args_list[0]
     merge_sql = merge_call_args[0][0]
     assert "INTERVAL 60 SECOND" in merge_sql
+    assert "ActiveNetworkEvents" in merge_sql
+    assert "ActiveSessions" in merge_sql
+    assert merge_sql.count("DATE(event_timestamp) >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)") >= 2
 
 
 def test_threat_detector_logs_unmatched_dead_letters(mock_clients):
@@ -136,6 +139,12 @@ def test_threat_detector_logs_unmatched_dead_letters(mock_clients):
     with patch("adk_agent.threat_detector.logger.warning") as mock_warn:
         detector.run_detection_cycle(lookback_minutes=15, min_score=100)
         assert any("unmatched orphaned message" in str(call) for call in mock_warn.call_args_list)
+
+    # Verify unmatched query includes 1-day partition and time filter
+    unmatched_call_args = mock_bq.query.call_args_list[3]
+    unmatched_sql = unmatched_call_args[0][0]
+    assert "INTERVAL 1 DAY" in unmatched_sql
+    assert "dlq.publish_time" in unmatched_sql
 
 
 def test_threat_detector_boundary_mock_alignment():

@@ -50,6 +50,7 @@ try:
         create_rich_ticket_id,
         dispatch_to_soc_ticketing_system,
         escalate_to_human,
+        execute_sql,
         generate_signed_url,
         get_entity_behavioral_profile,
         get_gcs_uri_for_user,
@@ -62,6 +63,7 @@ except ImportError:
         create_rich_ticket_id,
         dispatch_to_soc_ticketing_system,
         escalate_to_human,
+        execute_sql,
         generate_signed_url,
         get_entity_behavioral_profile,
         get_gcs_uri_for_user,
@@ -106,17 +108,21 @@ class ParallelOrchestratorAgent(ParallelAgent):
 
 # --- Callbacks ---
 def forbidden_dml_check(tool: BaseTool, args: dict[str, Any], tool_context: ToolContext) -> dict | None:
-    """Inspects SQL queries prior to execution to prevent destructive DML operations."""
+    """Inspects SQL queries prior to execution to prevent destructive DML operations, INFORMATION_SCHEMA access, and cross-dataset references."""
     safe_args_str = json.dumps(args, default=str)
     log_agent_event(f"Tool '{tool.name}' called with arguments: {safe_args_str[:120]}...")
 
     if tool.name == "execute_sql":
         sql_query = args.get("query", "")
         if sql_query:
-            forbidden_dml = ["UPDATE", "DELETE", "MERGE", "TRUNCATE", "DROP", "ALTER", "INSERT", "CREATE", "GRANT", "REVOKE"]
-            normalized_query = sql_query.upper().strip()
-            if any(re.search(rf"\b{kw}\b", normalized_query) for kw in forbidden_dml):
-                return {"result": "Tool execution was blocked: Destructive DML operations are not permitted."}
+            try:
+                from .tools import validate_safe_sql_query
+            except ImportError:
+                from tools import validate_safe_sql_query
+            try:
+                validate_safe_sql_query(sql_query, allow_metadata=False, allowed_dataset=DATASET_ID)
+            except ValueError as e:
+                return {"result": f"Tool execution was blocked: {e}"}
     return None
 
 
@@ -330,7 +336,8 @@ bq_investigation_agent = Agent(
     3. Summarize your findings into clear behavioral risk indicators and conclude whether telemetry confirms an anomaly or indicates benign activity.
     """,
     output_key="bigquery_investigation_results",
-    tools=[get_entity_behavioral_profile],
+    tools=[get_entity_behavioral_profile, execute_sql],
+    before_tool_callback=forbidden_dml_check,
     before_agent_callback=before_sub_agent_starts,
     after_agent_callback=log_agent_completion
 )

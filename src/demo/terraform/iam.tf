@@ -271,15 +271,6 @@ resource "google_bigquery_table_iam_member" "pubsub_sa_dlq_editor" {
   depends_on = [google_project_service_identity.pubsub_sa]
 }
 
-# Pub/Sub SA needs metadataViewer on the dataset to inspect table schemas when use_table_schema = true
-resource "google_bigquery_dataset_iam_member" "pubsub_sa_dataset_metadata" {
-  project    = var.project_id
-  dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
-  role       = "roles/bigquery.metadataViewer"
-  member     = "serviceAccount:${google_project_service_identity.pubsub_sa.email}"
-  depends_on = [google_project_service_identity.pubsub_sa]
-}
-
 # 5. Dedicated Threat Detector Workload Service Account (Cloud Run Job)
 resource "google_service_account" "detector_sa" {
   project      = var.project_id

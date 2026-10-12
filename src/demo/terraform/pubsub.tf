@@ -77,15 +77,15 @@ resource "google_pubsub_subscription" "alerts_dlq_to_bq" {
   message_retention_duration = "604800s" # 7 days
 
   bigquery_config {
-    table            = "${var.project_id}:${google_bigquery_dataset.cyber_dataset.dataset_id}.${google_bigquery_table.alerts_dead_letter.table_id}"
-    use_topic_schema = false
-    write_metadata   = true
+    table               = "${var.project_id}:${google_bigquery_dataset.cyber_dataset.dataset_id}.${google_bigquery_table.alerts_dead_letter.table_id}"
+    use_topic_schema    = false
+    write_metadata      = true
+    drop_unknown_fields = true
   }
 
   depends_on = [
     google_bigquery_table.alerts_dead_letter,
-    google_bigquery_table_iam_member.pubsub_sa_dlq_editor,
-    google_bigquery_dataset_iam_member.pubsub_sa_dataset_metadata
+    google_bigquery_table_iam_member.pubsub_sa_dlq_editor
   ]
 }
 
@@ -121,8 +121,7 @@ resource "google_pubsub_subscription" "raw_access_to_bq" {
 
   depends_on = [
     google_bigquery_table.user_access_events,
-    google_bigquery_table_iam_member.pubsub_sa_access_events_editor,
-    google_bigquery_dataset_iam_member.pubsub_sa_dataset_metadata
+    google_bigquery_table_iam_member.pubsub_sa_access_events_editor
   ]
 }
 
@@ -145,8 +144,7 @@ resource "google_pubsub_subscription" "raw_network_to_bq" {
 
   depends_on = [
     google_bigquery_table.network_events,
-    google_bigquery_table_iam_member.pubsub_sa_network_events_editor,
-    google_bigquery_dataset_iam_member.pubsub_sa_dataset_metadata
+    google_bigquery_table_iam_member.pubsub_sa_network_events_editor
   ]
 }
 

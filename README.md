@@ -1,6 +1,6 @@
 # Real-Time Cyber Security AI & Google ADK Multi-Agent Sandbox
 
-An enterprise-grade platform demonstrating real-time cybersecurity threat detection, autonomous multi-agent AI forensic investigation, and human-in-the-loop Security Operations Center (SOC) triage built on **Google Cloud Platform (project `<project_name>`)**, **Google Agent Development Kit (ADK)**, and **Google Agents CLI (`agents-cli`)**.
+A reference demo with production-style patterns demonstrating real-time cybersecurity threat detection, autonomous multi-agent AI forensic investigation, and human-in-the-loop Security Operations Center (SOC) triage built on **Google Cloud Platform (project `<project_name>`)**, **Google Agent Development Kit (ADK)**, and **Google Agents CLI (`agents-cli`)**.
 
 ---
 
@@ -101,7 +101,7 @@ This project deploys the ADK Multi-Agent Team to **Google Cloud Run** rather tha
    - **`visual_analysis_agent`**: Multimodal Gemini vision analysis and OCR inspecting user desktop forensic screenshots.
    - **`soc_ticketing_agent`**: Consolidates forensic findings into a structured Security Incident Report and dispatches formal incident tickets.
 2. **Scheduled Threat Detector (`adk_agent/threat_detector.py`) [Default]**:
-   - Production micro-batch detector running as a Cloud Run Job. Aggregates 2-minute tumbling windows in BigQuery via idempotent MERGE, publishes unified alert contract JSON to Pub/Sub, and auto-escalates dead-lettered alerts with $0 slot reservation cost. (Legacy scanner retained at `adk_agent/threat_scanner.py`).
+   - Scheduled micro-batch detector running as a Cloud Run Job. Aggregates 2-minute tumbling windows in BigQuery via idempotent MERGE, publishes unified alert contract JSON to Pub/Sub, and auto-escalates dead-lettered alerts with $0 slot reservation cost.
 3. **Synthetic Log Generator (`src/demo/data_generator/`)**:
    - High-fidelity synthetic event generator simulating access and network logs with ad-hoc threat injection (both APT attacks and benign administrative false positives).
 4. **Data Engineering Pipelines (`src/demo/data_pipeline/`)**:
@@ -177,16 +177,7 @@ Run the interactive web playground to chat with and debug the ADK agents:
 LOCAL_MODE=true agents-cli playground
 ```
 
-### 4. Run the Scheduled Threat Detector (or Legacy Scanner)
-```bash
-# Run a single micro-batch detection cycle (Cloud Run Job):
-python -m adk_agent.threat_detector --lookback 15 --min-score 100
-
-# Legacy standalone scanner:
-python -m adk_agent.threat_scanner --once
-```
-
-### 5. Run Automated Tests
+### 4. Run Automated Tests
 ```bash
 # Run all unit and demo test suites
 uv run pytest src/demo/tests/ tests/unit/
@@ -253,6 +244,13 @@ gcloud run jobs update threat-detector \
   --project="${GOOGLE_CLOUD_PROJECT}" \
   --region="${GOOGLE_CLOUD_LOCATION}" \
   --image="${IMAGE_TAG}"
+
+# 4. (Optional) Manually execute a detection pass (Cloud-Only, requires GCP credentials)
+gcloud run jobs execute threat-detector \
+  --project="${GOOGLE_CLOUD_PROJECT}" \
+  --region="${GOOGLE_CLOUD_LOCATION}"
+# Or test locally against live cloud BigQuery/PubSub:
+# python -m adk_agent.threat_detector --lookback 15 --min-score 100
 ```
 
 ---

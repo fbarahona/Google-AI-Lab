@@ -53,7 +53,33 @@ class BigQueryThreatScanner:
         have not yet been assessed in adk_threat_assessment.
         """
         query = f"""
-        WITH CorrelatedEvents AS (
+        WITH ActiveSessions AS (
+          SELECT
+            user_id,
+            device_id,
+            source_ip,
+            user_agent,
+            assigned_internal_ip,
+            event_timestamp
+          FROM `{self.project_id}.{self.dataset_id}.user_access_events`
+          WHERE DATE(event_timestamp) >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
+            AND event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {lookback_minutes} MINUTE)
+            AND event_type = 'login_success'
+        ),
+        ActiveNetworkEvents AS (
+          SELECT
+            source_ip,
+            event_timestamp,
+            event_type,
+            permission_level_requested,
+            file_type,
+            command_line,
+            network_domain
+          FROM `{self.project_id}.{self.dataset_id}.network_events`
+          WHERE DATE(event_timestamp) >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
+            AND event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {lookback_minutes} MINUTE)
+        ),
+        CorrelatedEvents AS (
           SELECT
             access.user_id,
             access.device_id,
@@ -72,12 +98,9 @@ class BigQueryThreatScanner:
             COUNTIF(network.permission_level_requested IN ('root', 'admin')) AS high_privilege_request_count,
             COUNTIF(`{self.project_id}.{self.dataset_id}.is_malicious_command`(network.command_line)) AS malicious_command_count,
             COUNTIF(`{self.project_id}.{self.dataset_id}.is_malicious_domain`(network.network_domain)) AS malicious_dns_count
-          FROM `{self.project_id}.{self.dataset_id}.user_access_events` AS access
-          INNER JOIN `{self.project_id}.{self.dataset_id}.network_events` AS network
+          FROM ActiveSessions AS access
+          INNER JOIN ActiveNetworkEvents AS network
             ON access.assigned_internal_ip = network.source_ip
-          WHERE access.event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {lookback_minutes} MINUTE)
-            AND network.event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {lookback_minutes} MINUTE)
-            AND access.event_type = 'login_success'
           GROUP BY access.user_id, access.device_id, access.source_ip
           HAVING total_2_min_threat_score >= {min_score}
         )

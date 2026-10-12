@@ -1,10 +1,10 @@
 # Real-Time Cybersecurity AI: Cloud Architecture, Data Engineering, ADK & SOC
 
-This demonstration showcases an enterprise-grade cybersecurity threat detection, autonomous multi-agent AI forensic investigation, and human-in-the-loop Security Operations Center (SOC) response platform built on Google Cloud Platform (configured for project `<PROJECT_ID>`).
+This demonstration showcases a reference demo with production-style patterns for real-time cybersecurity threat detection, autonomous multi-agent AI forensic investigation, and human-in-the-loop Security Operations Center (SOC) response built on Google Cloud Platform (configured for project `<PROJECT_ID>`).
 
 It seamlessly bridges **Cloud Architecture**, **Stream Data Engineering**, **Agentic Multi-Agent AI**, and **SOC Operations**:
 - **Synthetic Log Generator:** Modular Python tool generating access and network logs with ad-hoc threat injection (both APT attacks and administrative false positives).
-- **Zero-Cost Direct Ingestion:** Pub/Sub to BigQuery subscriptions using direct table schemas (`use_table_schema=true`) filtered by `attributes.event_family` (`access` and `network`), replacing expensive always-on Dataflow VMs.
+- **Zero-Cost Direct Ingestion:** Pub/Sub to BigQuery subscriptions using direct table schemas (`use_table_schema=true`, `drop_unknown_fields=true`) filtered by `attributes.event_family` (`access` and `network`), replacing expensive always-on Dataflow VMs.
 - **Budget-Optimized Detection Engine:** A scheduled micro-batch Cloud Run Job (`threat-detector`) running every 2 minutes via Cloud Scheduler, evaluating 2-minute tumbling windows closed >60s ago and idempotently executing `MERGE` on `alert_id`. Cuts always-on cost from ~$4,300/month to near zero.
 - **Optional Continuous Query & Dataflow Engines:** Continuous queries (with BigQuery reservations) and Dataflow streaming pipelines remain available as optional, on-demand toggles for high-throughput live demos.
 - **Unified Alert Contract:** All detection engines publish identical contract messages (`alert_id`, `engine`, `schema_version`, window timestamps, indicator counts) to topic `cymbal_cyber_alerts`.
@@ -156,7 +156,7 @@ python -m src.demo.data_generator.log_generator --mode threat --threat-type fals
 ---
 
 ### 2. Data Pipelines to BigQuery (`src/demo/data_pipeline/`)
-- **Pub/Sub to BigQuery Direct Subscriptions [Default]:** Direct table ingestion configured in Terraform (`raw_access_to_bq` & `raw_network_to_bq`) using table schemas (`use_table_schema = true`) and filtered by `attributes.event_family` (`access` and `network`). Provides serverless, zero-compute-cost streaming ingestion directly into `user_access_events` and `network_events`.
+- **Pub/Sub to BigQuery Direct Subscriptions [Default]:** Direct table ingestion configured in Terraform (`raw_access_to_bq` & `raw_network_to_bq`) using table schemas (`use_table_schema = true`, `drop_unknown_fields = true`) and filtered by `attributes.event_family` (`access` and `network`). Provides serverless, zero-compute-cost streaming ingestion directly into `user_access_events` and `network_events`.
 - **Scheduled Threat Detector (Cloud Run Job) [Default]:** [`adk_agent/threat_detector.py`](/workspaces/Google/adk_agent/threat_detector.py)
   Scheduled micro-batch detector triggered every 2 minutes by Cloud Scheduler. Evaluates 2-minute tumbling windows closed >60s ago via idempotent BigQuery `MERGE`, publishing alert contract JSON to Pub/Sub with $0 continuous slot reservation cost.
 - **Pub/Sub to BigQuery Dataflow Streaming Pipeline [Optional / Benchmark Only]:** [`data_pipeline/pubsub_to_bigquery_dataflow.py`](data_pipeline/pubsub_to_bigquery_dataflow.py)
@@ -239,25 +239,13 @@ graph TD
 
 ---
 
-### 4. BigQuery Threat Scanner Service (`adk_agent/threat_scanner.py`)
-Monitors BigQuery for correlated anomalies and triggers the multi-agent investigation:
-```bash
-# Single scan:
-python -m adk_agent.threat_scanner --once
-
-# Continuous daemon:
-python -m adk_agent.threat_scanner --daemon --interval 30
-```
-
----
-
-### 5. SOC Ticketing System & Console (`src/demo/soc_ticketing/`)
+### 4. SOC Ticketing System & Console (`src/demo/soc_ticketing/`)
 - **Service Backend:** [`soc_ticketing/ticketing_service.py`](soc_ticketing/ticketing_service.py) handles ticket creation, BigQuery storage (`soc_tickets`, `adk_threat_assessment`), GCS queue management, and outbound webhooks.
 - **Streamlit Analyst Console:** [`soc_ticketing/streamlit_soc_console.py`](soc_ticketing/streamlit_soc_console.py) provides a web UI for human analysts to review and adjudicate tickets.
 
 ---
 
-### 6. Cloud Deployment with Terraform (`src/demo/terraform/`)
+### 5. Cloud Deployment with Terraform (`src/demo/terraform/`)
 Full Google Cloud infrastructure provisioning under project `<PROJECT_ID>`:
 
 ```bash
@@ -273,7 +261,7 @@ terraform apply -var="project_id=<PROJECT_ID>" -auto-approve
   1. `detector_sa` (`threat-detector-job-sa`) **[Default]**: Scheduled Threat Detector Cloud Run Job identity. BigQuery jobUser, dataset READER, table dataEditor on `alerts`, `alerts_dead_letter`, and `soc_tickets`, Pub/Sub alerts topic publisher.
   2. `agent_sa` (`cymbal-adk-agent-sa`) **[Default]**: Multi-Agent runtime identity. Dataset READER, table dataEditor on `soc_tickets`, `adk_threat_assessment`, and `alerts` (status updates), GCS screenshots viewer, GCS escalations user, self-token-creation for V4 signed URLs.
   3. `invoker_sa` (`pubsub-invoker-sa`) **[Default]**: Cloud Run invoker role for authenticated Pub/Sub push notifications.
-  4. `pubsub_sa` (`service-<PROJECT_NUMBER>@gcp-sa-pubsub.iam.gserviceaccount.com`) **[Default]**: Google-managed Pub/Sub service agent. Table dataEditor on `user_access_events`, `network_events`, and `alerts_dead_letter`, dataset `metadataViewer` (for `use_table_schema`), DLQ topic publisher, and push subscription subscriber.
+  4. `pubsub_sa` (`service-<PROJECT_NUMBER>@gcp-sa-pubsub.iam.gserviceaccount.com`) **[Default]**: Google-managed Pub/Sub service agent. Table dataEditor on `user_access_events`, `network_events`, and `alerts_dead_letter`, DLQ topic publisher, and push subscription subscriber.
   5. `continuous_query_sa` (`bq-continuous-query-sa`) **[Optional / Benchmark Only]**: Headless identity running BigQuery Continuous Queries. Dataset READER, Pub/Sub alerts topic publisher.
   6. `dataflow_sa` (`cymbal-dataflow-pipeline-sa`) **[Optional / Benchmark Only]**: Dataflow worker, dataset WRITER, raw logs subscriber, staging admin (only provisioned when `enable_dataflow_streaming = true`).
 - **Compute:** Cloud Run deployment (`cymbal-cyber-adk-agent`) hosting the multi-agent FastAPI app with 600s execution timeout, and Cloud Run Job (`threat-detector`) executing scheduled micro-batch detections.
@@ -285,7 +273,7 @@ terraform apply -var="project_id=<PROJECT_ID>" -auto-approve
 
 ---
 
-### 7. FinOps: Cost Control & Teardown
+### 6. FinOps: Cost Control & Teardown
 
 **⚠️ Running Costs Warning & Gating:**
 While the local Python runner is free, deploying the live infrastructure via Terraform defaults to a **zero-continuous-cost serverless baseline**:
@@ -312,7 +300,7 @@ terraform destroy -var="project_id=<PROJECT_ID>"
 
 ---
 
-### 8. Unit Tests & Verification
+### 7. Unit Tests & Verification
 Run the automated test suite with `uv`:
 ```bash
 uv run pytest src/demo/tests/ tests/unit/

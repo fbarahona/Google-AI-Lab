@@ -88,6 +88,20 @@ class ThreatDetector:
             )
             WHERE rn = 1
           ),
+          ActiveNetworkEvents AS (
+            SELECT
+              source_ip,
+              event_timestamp,
+              event_type,
+              permission_level_requested,
+              file_type,
+              command_line,
+              network_domain
+            FROM `{self.project_id}.{self.dataset_id}.network_events`
+            WHERE DATE(event_timestamp) >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
+              AND event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {lookback_minutes} MINUTE)
+              AND event_timestamp < TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 60 SECOND)
+          ),
           BucketedEvents AS (
             SELECT
               access.user_id,
@@ -109,11 +123,8 @@ class ThreatDetector:
               COUNTIF(`{self.project_id}.{self.dataset_id}.is_malicious_command`(network.command_line)) AS malicious_command_count,
               COUNTIF(`{self.project_id}.{self.dataset_id}.is_malicious_domain`(network.network_domain)) AS malicious_dns_count
             FROM ActiveSessions AS access
-            INNER JOIN `{self.project_id}.{self.dataset_id}.network_events` AS network
+            INNER JOIN ActiveNetworkEvents AS network
               ON access.assigned_internal_ip = network.source_ip
-            WHERE DATE(network.event_timestamp) >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
-              AND network.event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {lookback_minutes} MINUTE)
-              AND network.event_timestamp < TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 60 SECOND)
             GROUP BY access.user_id, access.device_id, access.source_ip, window_start, window_end
             -- Only evaluate windows that closed more than 60s ago (late-data allowance)
             HAVING window_end <= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 60 SECOND)
@@ -393,13 +404,17 @@ class ThreatDetector:
         Queries and logs the count of orphaned dead-letter records that do not match
         any alert in the `alerts` table (e.g., malformed payloads or invalid contracts
         rejected with HTTP 400 that exhausted Pub/Sub retries).
+        Restricts scan to the last 24 hours to prevent indefinite warning loops on older failures
+        and enable BigQuery DAY partition pruning on publish_time.
         """
         unmatched_query = f"""
         SELECT COUNT(1) AS unmatched_count
         FROM `{self.project_id}.{self.dataset_id}.alerts_dead_letter` dlq
         LEFT JOIN `{self.project_id}.{self.dataset_id}.alerts` a
           ON JSON_VALUE(dlq.attributes, '$.alert_id') = a.alert_id
-        WHERE a.alert_id IS NULL;
+        WHERE a.alert_id IS NULL
+          AND DATE(dlq.publish_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
+          AND dlq.publish_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 DAY);
         """
         job_config = bigquery.QueryJobConfig(maximum_bytes_billed=self.max_bytes_billed)
         try:
@@ -408,7 +423,7 @@ class ThreatDetector:
             unmatched_count = rows[0]["unmatched_count"] if rows else 0
             if unmatched_count > 0:
                 logger.warning(
-                    "Detected %d unmatched orphaned message(s) in %s.alerts_dead_letter with no matching alert in alerts table.",
+                    "Detected %d unmatched orphaned message(s) in %s.alerts_dead_letter (last 24h) with no matching alert in alerts table.",
                     unmatched_count, self.dataset_id,
                 )
             return int(unmatched_count)
