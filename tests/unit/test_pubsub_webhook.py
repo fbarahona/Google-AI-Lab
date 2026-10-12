@@ -212,3 +212,51 @@ def test_legacy_scan_endpoint_retired():
     client = TestClient(app)
     response = client.post("/apps/adk_agent/trigger/scan")
     assert response.status_code in [404, 405]
+
+
+def test_dedup_cache_bounded_capacity(monkeypatch):
+    """Verify that in-memory deduplication cache enforces MAX_DEDUP_CACHE_SIZE and evicts oldest entries."""
+    from adk_agent.fast_api_app import (
+        _COMPLETED_MESSAGES,
+        _record_completed_message,
+        MAX_DEDUP_CACHE_SIZE,
+    )
+
+    _COMPLETED_MESSAGES.clear()
+
+    # Fill cache up to capacity + 5
+    for i in range(MAX_DEDUP_CACHE_SIZE + 5):
+        _record_completed_message(f"msg-evict-test-{i}")
+
+    # Must not exceed MAX_DEDUP_CACHE_SIZE
+    assert len(_COMPLETED_MESSAGES) == MAX_DEDUP_CACHE_SIZE
+
+    # Oldest 5 entries (0 to 4) should have been evicted
+    for i in range(5):
+        assert f"msg-evict-test-{i}" not in _COMPLETED_MESSAGES
+
+    # Most recent entries should be present
+    assert f"msg-evict-test-{MAX_DEDUP_CACHE_SIZE + 4}" in _COMPLETED_MESSAGES
+
+    _COMPLETED_MESSAGES.clear()
+
+
+def test_pubsub_push_rejects_non_json_binary_base64_payload():
+    """Verify that when data in the Pub/Sub envelope is valid base64 but contains non-JSON binary bytes,
+    the webhook rejects the message with 400 Bad Request rather than an unhandled 500 Internal Server Error."""
+    client = TestClient(app)
+    # Valid base64 encoding of non-JSON arbitrary binary bytes
+    binary_bytes = b"\x00\x01\x02\xff\xfe\x00\xaa\xbb\xcccorrupt-payload"
+    malformed_b64 = base64.b64encode(binary_bytes).decode("utf-8")
+    payload = {
+        "message": {
+            "data": malformed_b64,
+            "messageId": "msg-malformed-binary-123",
+        }
+    }
+
+    response = client.post("/apps/adk_agent/trigger/pubsub", json=payload)
+    assert response.status_code == 400
+    assert "Bad Request" in response.json().get("detail", "")
+
+

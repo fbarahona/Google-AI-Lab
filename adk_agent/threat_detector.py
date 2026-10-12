@@ -11,14 +11,15 @@ Runs every 2 minutes (via Cloud Scheduler -> Cloud Run Job):
    marks them `DEAD_LETTERED` in `alerts` and auto-escalates them to SOC ticketing.
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import json
 import logging
 import argparse
 from datetime import datetime, timezone
-from typing import List, Dict, Any
-
+from typing import List, Dict, Any, Optional
 from google.cloud import bigquery
 from google.cloud import pubsub_v1
 
@@ -114,6 +115,7 @@ class ThreatDetector:
               ON access.assigned_internal_ip = network.source_ip
             WHERE DATE(network.event_timestamp) >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
               AND network.event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {lookback_minutes} MINUTE)
+              AND network.event_timestamp < TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 60 SECOND)
             GROUP BY access.user_id, access.device_id, access.source_ip, window_start, window_end
             -- Only evaluate windows that closed more than 60s ago (late-data allowance)
             HAVING window_end <= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 60 SECOND)

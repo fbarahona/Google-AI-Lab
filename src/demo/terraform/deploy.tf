@@ -19,6 +19,23 @@ resource "google_artifact_registry_repository" "agent_repo" {
   depends_on = [google_project_service.required]
 }
 
+# Grant Cloud Build service accounts writer permissions on the repository
+resource "google_artifact_registry_repository_iam_member" "cloudbuild_sa_writer" {
+  project    = var.project_id
+  location   = var.region
+  repository = google_artifact_registry_repository.agent_repo.name
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${data.google_project.project.number}@cloudbuild.gserviceaccount.com"
+}
+
+resource "google_artifact_registry_repository_iam_member" "compute_sa_writer" {
+  project    = var.project_id
+  location   = var.region
+  repository = google_artifact_registry_repository.agent_repo.name
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
+}
+
 # 1. Cloud Run Deployment for ADK Multi-Agent Team
 # We deploy the ADK Agent to Cloud Run to natively support Pub/Sub OIDC push tokens
 # without requiring an intermediary token-exchange relay service.

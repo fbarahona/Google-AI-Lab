@@ -28,6 +28,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Run Ruff Linter
+        run: uv run --extra lint ruff check .
+
       - name: Run Pytest
         env:
           LOCAL_MODE: "true"

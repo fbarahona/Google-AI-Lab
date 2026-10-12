@@ -20,7 +20,7 @@ fi
 # Validation guard: Verify active billing is enabled for the target GCP project
 if command -v gcloud >/dev/null 2>&1; then
   echo "Validating billing status for project: ${PROJECT_ID}..."
-  gcloud beta billing projects describe "${PROJECT_ID}" --format="value(billingEnabled)" 2>/dev/null | grep -q "true" || {
+  gcloud billing projects describe "${PROJECT_ID}" --format="value(billingEnabled)" 2>/dev/null | grep -q "true" || {
     echo "Error: Billing is not enabled for project ${PROJECT_ID}"
     exit 1
   }

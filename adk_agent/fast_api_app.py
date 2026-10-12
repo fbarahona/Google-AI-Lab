@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import time
+from collections import OrderedDict
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -104,20 +105,21 @@ def extract_pubsub_payload(raw_body: Any) -> Dict[str, Any]:
     - Standard wrapped Pub/Sub envelope: {"message": {"data": "<base64>", "attributes": ...}}
     - Raw/unwrapped JSON payloads (Pub/Sub no_wrapper configuration)
     - Raw strings and byte payloads
+    Raises ValueError if payload contains invalid or non-JSON binary data.
     """
     if isinstance(raw_body, bytes):
         try:
             raw_body = json.loads(raw_body.decode("utf-8"))
-        except Exception:
-            raw_body = {"raw_text": raw_body.decode("utf-8", errors="replace")}
+        except Exception as exc:
+            raise ValueError(f"Malformed request body: payload is not valid JSON ({exc})")
     elif isinstance(raw_body, str):
         try:
             raw_body = json.loads(raw_body)
-        except Exception:
-            raw_body = {"raw_text": raw_body}
+        except Exception as exc:
+            raise ValueError(f"Malformed request body: payload is not valid JSON ({exc})")
 
     if not isinstance(raw_body, dict):
-        return {"raw_payload": raw_body}
+        raise ValueError("Malformed request body: root must be a JSON object")
 
     # Wrapped Pub/Sub push message
     if "message" in raw_body and isinstance(raw_body["message"], dict):
@@ -126,36 +128,56 @@ def extract_pubsub_payload(raw_body: Any) -> Dict[str, Any]:
         payload = {}
         if data:
             try:
-                decoded = base64.b64decode(data).decode("utf-8")
-                payload = json.loads(decoded)
-            except Exception:
-                try:
-                    payload = json.loads(data)
-                except Exception:
-                    payload = {"raw_message_data": data}
-        if isinstance(payload, dict):
-            attrs = msg.get("attributes")
-            if isinstance(attrs, dict):
-                for k, v in attrs.items():
-                    if k not in payload:
-                        payload[k] = v
+                decoded_bytes = base64.b64decode(data)
+                decoded_text = decoded_bytes.decode("utf-8")
+                payload = json.loads(decoded_text)
+            except Exception as exc:
+                raise ValueError(f"Malformed Pub/Sub message data: payload is not valid JSON ({exc})")
+        if not isinstance(payload, dict):
+            raise ValueError("Malformed Pub/Sub message data: inner JSON must be an object")
+        attrs = msg.get("attributes")
+        if isinstance(attrs, dict):
+            for k, v in attrs.items():
+                if k not in payload:
+                    payload[k] = v
         return payload
 
     return raw_body
 
 
-_IN_PROGRESS_MESSAGES: Dict[str, float] = {}
-_COMPLETED_MESSAGES: Dict[str, float] = {}
+MAX_DEDUP_CACHE_SIZE = int(os.getenv("MAX_DEDUP_CACHE_SIZE", "1000"))
+_IN_PROGRESS_MESSAGES: OrderedDict[str, float] = OrderedDict()
+_COMPLETED_MESSAGES: OrderedDict[str, float] = OrderedDict()
 _DEDUP_TTL_SECONDS = 900.0  # 15 minutes deduplication window
 
 
 def _cleanup_expired_messages():
-    """Removes expired entries from memory dedup tables."""
+    """Removes expired entries from memory dedup tables and enforces maximum capacity."""
     now = time.time()
     for store in (_IN_PROGRESS_MESSAGES, _COMPLETED_MESSAGES):
         expired = [k for k, ts in store.items() if now - ts > _DEDUP_TTL_SECONDS]
         for k in expired:
             store.pop(k, None)
+        while len(store) > MAX_DEDUP_CACHE_SIZE:
+            store.popitem(last=False)
+
+
+def _record_completed_message(message_id: str):
+    """Records completed message, evicting expired entries and enforcing capacity ceiling."""
+    _cleanup_expired_messages()
+    _COMPLETED_MESSAGES[message_id] = time.time()
+    _COMPLETED_MESSAGES.move_to_end(message_id)
+    while len(_COMPLETED_MESSAGES) > MAX_DEDUP_CACHE_SIZE:
+        _COMPLETED_MESSAGES.popitem(last=False)
+
+
+def _record_in_progress_message(message_id: str):
+    """Records in-progress message, evicting expired entries and enforcing capacity ceiling."""
+    _cleanup_expired_messages()
+    _IN_PROGRESS_MESSAGES[message_id] = time.time()
+    _IN_PROGRESS_MESSAGES.move_to_end(message_id)
+    while len(_IN_PROGRESS_MESSAGES) > MAX_DEDUP_CACHE_SIZE:
+        _IN_PROGRESS_MESSAGES.popitem(last=False)
 
 
 def get_alert_status_info(alert_id: str) -> Optional[Dict[str, Any]]:
@@ -432,7 +454,14 @@ async def handle_pubsub_trigger(
         body_bytes = await request.body()
         raw_body = body_bytes
 
-    alert_data = extract_pubsub_payload(raw_body)
+    try:
+        alert_data = extract_pubsub_payload(raw_body)
+    except ValueError as err:
+        logger.warning("Rejected malformed Pub/Sub payload: %s", err)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Bad Request: Malformed Pub/Sub payload ({err})",
+        )
     user_id = alert_data.get("user_id") or "pubsub-automator"
     session_id = f"pubsub-{user_id}-{int(time.time())}"
     prompt_text = f"Investigate incoming continuous security alert: {json.dumps(alert_data)}"
@@ -492,7 +521,7 @@ async def handle_pubsub_trigger(
             # If already DONE: skip and ACK immediately
             if current_status == "DONE":
                 logger.info("Alert '%s' is marked DONE in BigQuery alerts table; returning 200 DUPLICATE_ACK.", alert_id)
-                _COMPLETED_MESSAGES[message_id] = time.time()
+                _record_completed_message(message_id)
                 return JSONResponse(
                     status_code=200,
                     content={
@@ -541,7 +570,7 @@ async def handle_pubsub_trigger(
         )
 
     # Transition status to INVESTIGATING
-    _IN_PROGRESS_MESSAGES[message_id] = time.time()
+    _record_in_progress_message(message_id)
     if alert_id:
         await asyncio.to_thread(update_alert_status, alert_id, "INVESTIGATING", alert_data)
 
@@ -558,7 +587,7 @@ async def handle_pubsub_trigger(
         # Mark as DONE on successful investigation
         if alert_id:
             await asyncio.to_thread(update_alert_status, alert_id, "DONE", alert_data)
-        _COMPLETED_MESSAGES[message_id] = time.time()
+        _record_completed_message(message_id)
 
         return JSONResponse(
             status_code=200,

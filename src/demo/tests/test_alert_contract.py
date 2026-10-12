@@ -7,11 +7,14 @@ Unit tests for the Budget Detection Architecture:
 - DLQ auto-escalation handling
 """
 
+import base64
 import json
 import pytest
 from datetime import datetime, timezone
+from starlette.testclient import TestClient
+
 from src.demo.soc_ticketing.models import DetectionAlert, SocTicket
-from adk_agent.fast_api_app import extract_pubsub_payload
+from adk_agent.fast_api_app import app, extract_pubsub_payload
 
 
 def test_detection_alert_contract_schema():
@@ -89,4 +92,39 @@ def test_alert_id_idempotency_derivation():
     id_1 = f"{user}|{window_end}"
     id_2 = f"{user}|{window_end}"
     assert id_1 == id_2
+
+
+def test_extract_pubsub_payload_rejects_non_json_binary_base64():
+    """Verifies that extract_pubsub_payload raises ValueError when data is valid base64 but contains non-JSON binary bytes."""
+    corrupt_binary = b"\x00\x01\x02\xff\xfe\x00\xaa\xbb\xcccorrupt-bytes"
+    b64_data = base64.b64encode(corrupt_binary).decode("utf-8")
+    raw_push = {
+        "message": {
+            "data": b64_data,
+            "messageId": "msg-corrupt-123"
+        }
+    }
+    with pytest.raises(ValueError, match="payload is not valid JSON"):
+        extract_pubsub_payload(raw_push)
+
+
+def test_webhook_rejects_non_json_binary_base64_payload(monkeypatch):
+    """Verifies that fast_api_app rejects valid base64 non-JSON binary payloads with 400 Bad Request,
+    rather than an unhandled 500 Internal Server Error."""
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    monkeypatch.setenv("DISABLE_AUTH", "true")
+
+    client = TestClient(app)
+    corrupt_binary = b"\x00\x01\x02\xff\xfe\x00\xaa\xbb\xcccorrupt-bytes"
+    b64_data = base64.b64encode(corrupt_binary).decode("utf-8")
+    payload = {
+        "message": {
+            "data": b64_data,
+            "messageId": "msg-corrupt-binary-456"
+        }
+    }
+    response = client.post("/apps/adk_agent/trigger/pubsub", json=payload)
+    assert response.status_code == 400
+    assert "Bad Request" in response.json().get("detail", "")
+
 

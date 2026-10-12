@@ -50,7 +50,8 @@ resource "google_pubsub_subscription" "adk_agent_trigger" {
   depends_on = [
     google_service_account.invoker_sa,
     google_cloud_run_v2_service.adk_agent_service,
-    google_pubsub_topic.alerts_dlq_topic
+    google_pubsub_topic.alerts_dlq_topic,
+    google_pubsub_topic_iam_member.pubsub_sa_dlq_publisher
   ]
 }
 
