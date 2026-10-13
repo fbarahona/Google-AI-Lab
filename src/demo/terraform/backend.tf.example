@@ -1,0 +1,20 @@
+# ==============================================================================
+# ENTERPRISE REMOTE STATE BACKEND (Google Cloud Storage)
+# ==============================================================================
+# To prevent split-brain state desynchronization across developer devcontainers,
+# Cloud Shell, and CI/CD runners, copy this file to backend.tf and replace
+# <PROJECT_ID> with your target Google Cloud project ID.
+#
+# Prerequisite: Create the state bucket with object versioning enabled (run once):
+#   gcloud storage buckets create gs://<PROJECT_ID>-tfstate --project=<PROJECT_ID> --location=us-east1
+#   gcloud storage buckets update gs://<PROJECT_ID>-tfstate --versioning
+#
+# Then initialize Terraform to migrate local state to Cloud Storage:
+#   terraform init -migrate-state
+
+terraform {
+  backend "gcs" {
+    bucket = "<PROJECT_ID>-tfstate"
+    prefix = "cymbal-cyber/state"
+  }
+}
