@@ -138,7 +138,10 @@ echo "================================================================="
 echo "2. Building and pushing container image: ${IMAGE_TAG}"
 echo "Project: ${PROJECT_ID} | Region: ${REGION}"
 echo "================================================================="
-if command -v docker >/dev/null 2>&1; then
+if [[ "${FORCE_BUILD:-false}" != "true" ]] && command -v gcloud >/dev/null 2>&1 && gcloud artifacts docker images describe "${IMAGE_TAG}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+  echo "Container image already exists in Artifact Registry: ${IMAGE_TAG}"
+  echo "Proceeding with rollout of existing image (set FORCE_BUILD=true to rebuild)..."
+elif command -v docker >/dev/null 2>&1; then
   echo "Building and pushing container image with Docker: ${IMAGE_TAG}..."
   docker build -t "${IMAGE_TAG}" -f "${REPO_ROOT}/Dockerfile" "${REPO_ROOT}"
   docker push "${IMAGE_TAG}"
