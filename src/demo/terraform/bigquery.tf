@@ -138,14 +138,14 @@ resource "google_bigquery_routine" "calculate_threat_score" {
     (
       CASE
         WHEN event_type = 'policy_violation' THEN 50
-        WHEN event_type = 'dns_query' AND `${var.dataset_id}.is_malicious_domain`(network_domain) THEN 60
+        WHEN event_type = 'dns_query' AND `${var.project_id}.${google_bigquery_dataset.cyber_dataset.dataset_id}.is_malicious_domain`(network_domain) THEN 60
         ELSE 0
       END
       + CASE WHEN permission_level IN ('root', 'admin') THEN 35 ELSE 0 END
       + CASE WHEN REGEXP_CONTAINS(user_agent, r'^(python-requests|curl|Go-http-client)') THEN 20 ELSE 0 END
       + CASE WHEN event_type = 'file_transfer' AND file_type IN ('exe', 'dll', 'ps1', 'bat', 'vbs') THEN 40 ELSE 0 END
       + CASE
-          WHEN `${var.dataset_id}.is_malicious_command`(command_line) THEN 100
+          WHEN `${var.project_id}.${google_bigquery_dataset.cyber_dataset.dataset_id}.is_malicious_command`(command_line) THEN 100
           WHEN REGEXP_CONTAINS(command_line, r'^(ipconfig|ping|ls -la|df -h|hostname)') THEN 0
           WHEN command_line IS NOT NULL THEN 10
           ELSE 0

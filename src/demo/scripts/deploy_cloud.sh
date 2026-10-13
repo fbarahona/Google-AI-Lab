@@ -161,6 +161,72 @@ if command -v terraform >/dev/null 2>&1 && [ -d "${TERRAFORM_DIR}" ]; then
   echo "================================================================="
   echo "3. Applying complete Terraform configuration: ${TERRAFORM_DIR}"
   echo "================================================================="
+
+  # Pre-import existing GCP resources into Terraform state if created out-of-band to prevent 409 conflicts
+  TF_STATE_LIST="$(terraform -chdir="${TERRAFORM_DIR}" state list 2>/dev/null || true)"
+
+  # Service Accounts
+  for SA_NAME in bq-continuous-query-sa cymbal-adk-agent-sa pubsub-invoker-sa threat-detector-job-sa; do
+    case "${SA_NAME}" in
+      bq-continuous-query-sa) TF_RES="google_service_account.continuous_query_sa" ;;
+      cymbal-adk-agent-sa)    TF_RES="google_service_account.agent_sa" ;;
+      pubsub-invoker-sa)      TF_RES="google_service_account.invoker_sa" ;;
+      threat-detector-job-sa) TF_RES="google_service_account.detector_sa" ;;
+    esac
+    if ! echo "${TF_STATE_LIST}" | grep -q "^${TF_RES}$"; then
+      if gcloud iam service-accounts describe "${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+        echo "Importing existing Service Account ${SA_NAME} into Terraform state..."
+        terraform -chdir="${TERRAFORM_DIR}" import \
+          -var="project_id=${PROJECT_ID}" \
+          -var="region=${REGION}" \
+          "${TF_RES}" "projects/${PROJECT_ID}/serviceAccounts/${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" 2>/dev/null || true
+      fi
+    fi
+  done
+
+  # BigQuery Connection
+  if ! echo "${TF_STATE_LIST}" | grep -q "^google_bigquery_connection.vertex_ai_connection$"; then
+    if curl -s -H "Authorization: Bearer $(gcloud auth print-access-token 2>/dev/null || true)" \
+      "https://bigqueryconnection.googleapis.com/v1/projects/${PROJECT_ID}/locations/US/connections/continuous-query-vertex-ai-connection" 2>/dev/null | grep -q '"name":'; then
+      echo "Importing existing BigQuery Connection into Terraform state..."
+      terraform -chdir="${TERRAFORM_DIR}" import \
+        -var="project_id=${PROJECT_ID}" \
+        -var="region=${REGION}" \
+        google_bigquery_connection.vertex_ai_connection "projects/${PROJECT_ID}/locations/US/connections/continuous-query-vertex-ai-connection" 2>/dev/null || true
+    fi
+  fi
+
+  # Storage Buckets
+  for BUCKET_NAME in "cymbal_cyber_adk_staging_bucket_${PROJECT_ID}" "cymbal-cyber-adk-escalations-bucket_${PROJECT_ID}" "cymbal-cyber-screenshots_${PROJECT_ID}" "cymbal-cyber-raw-logs_${PROJECT_ID}"; do
+    case "${BUCKET_NAME}" in
+      "cymbal_cyber_adk_staging_bucket_"*)      TF_RES="google_storage_bucket.adk_staging" ;;
+      "cymbal-cyber-adk-escalations-bucket_"*)  TF_RES="google_storage_bucket.escalations" ;;
+      "cymbal-cyber-screenshots_"*)             TF_RES="google_storage_bucket.screenshots" ;;
+      "cymbal-cyber-raw-logs_"*)                TF_RES="google_storage_bucket.raw_logs" ;;
+    esac
+    if ! echo "${TF_STATE_LIST}" | grep -q "^${TF_RES}$"; then
+      if gcloud storage buckets describe "gs://${BUCKET_NAME}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+        echo "Importing existing bucket ${BUCKET_NAME} into Terraform state..."
+        terraform -chdir="${TERRAFORM_DIR}" import \
+          -var="project_id=${PROJECT_ID}" \
+          -var="region=${REGION}" \
+          "${TF_RES}" "${BUCKET_NAME}" 2>/dev/null || true
+      fi
+    fi
+  done
+
+  # Cloud Run Service
+  if ! echo "${TF_STATE_LIST}" | grep -q "^google_cloud_run_v2_service.adk_agent_service$"; then
+    if gcloud run services describe cymbal-cyber-adk-agent --project="${PROJECT_ID}" --region="${REGION}" >/dev/null 2>&1; then
+      echo "Importing existing Cloud Run service cymbal-cyber-adk-agent into Terraform state..."
+      terraform -chdir="${TERRAFORM_DIR}" import \
+        -var="project_id=${PROJECT_ID}" \
+        -var="region=${REGION}" \
+        -var="agent_image=${IMAGE_TAG}" \
+        google_cloud_run_v2_service.adk_agent_service "projects/${PROJECT_ID}/locations/${REGION}/services/cymbal-cyber-adk-agent" 2>/dev/null || true
+    fi
+  fi
+
   terraform -chdir="${TERRAFORM_DIR}" apply -auto-approve \
     -var="project_id=${PROJECT_ID}" \
     -var="region=${REGION}" \

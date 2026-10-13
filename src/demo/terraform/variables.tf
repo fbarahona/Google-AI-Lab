@@ -15,6 +15,12 @@ variable "bigquery_location" {
   default     = "US"
 }
 
+variable "storage_location" {
+  description = "Location for Cloud Storage buckets aligned with BigQuery multi-region (US) or custom region."
+  type        = string
+  default     = "US"
+}
+
 variable "dataset_id" {
   description = "Name of the BigQuery cybersecurity dataset."
   type        = string
