@@ -29,7 +29,11 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
-REGION="${GOOGLE_CLOUD_LOCATION:-us-east1}"
+CANDIDATE_REGION="${GOOGLE_CLOUD_REGION:-${CLOUDSDK_COMPUTE_REGION:-${GOOGLE_CLOUD_LOCATION:-}}}"
+if [ -z "${CANDIDATE_REGION}" ] || [ "${CANDIDATE_REGION}" == "global" ]; then
+  CANDIDATE_REGION="us-east1"
+fi
+REGION="${CANDIDATE_REGION}"
 REGION="$(echo -n "${REGION}" | tr -d '[:space:]' | tr -d '"' | tr -d "'" | tr '[:upper:]' '[:lower:]')"
 DATASET_ID="${BIGQUERY_DATASET:-Cymbal_Cyber}"
 BUCKET_NAME="cymbal_cyber_adk_staging_bucket_${PROJECT_ID}"

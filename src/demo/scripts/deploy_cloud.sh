@@ -8,12 +8,30 @@
 # ==============================================================================
 set -euo pipefail
 
-PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-${1:-}}"
-REGION="${GOOGLE_CLOUD_LOCATION:-${2:-us-east1}}"
+PROJECT_ID="${1:-${GOOGLE_CLOUD_PROJECT:-}}"
+
+# Resolve compute infrastructure region (Artifact Registry, Cloud Run, Cloud Scheduler, Dataflow).
+# Note: GOOGLE_CLOUD_LOCATION is often set to 'global' for Vertex AI models, which is NOT
+# a valid regional location for Cloud Run or Artifact Registry. We prioritize:
+# 1. Positional argument $2
+# 2. GOOGLE_CLOUD_REGION
+# 3. CLOUDSDK_COMPUTE_REGION
+# 4. GOOGLE_CLOUD_LOCATION (if not 'global')
+# 5. Default: us-east1
+CANDIDATE_REGION="${2:-${GOOGLE_CLOUD_REGION:-${CLOUDSDK_COMPUTE_REGION:-}}}"
+if [ -z "${CANDIDATE_REGION}" ] && [ -n "${GOOGLE_CLOUD_LOCATION:-}" ] && [ "${GOOGLE_CLOUD_LOCATION}" != "global" ]; then
+  CANDIDATE_REGION="${GOOGLE_CLOUD_LOCATION}"
+fi
+REGION="${CANDIDATE_REGION:-us-east1}"
 
 # Strip accidental whitespace, quotes, and force lowercase for Docker/Artifact Registry compliance
 export PROJECT_ID="$(echo -n "${PROJECT_ID}" | tr -d '[:space:]' | tr -d '"' | tr -d "'" | tr '[:upper:]' '[:lower:]')"
 export REGION="$(echo -n "${REGION}" | tr -d '[:space:]' | tr -d '"' | tr -d "'" | tr '[:upper:]' '[:lower:]')"
+
+if [ "${REGION}" == "global" ]; then
+  echo "Warning: 'global' is a model endpoint location, not a valid regional compute location for Artifact Registry/Cloud Run. Defaulting region to 'us-east1'."
+  export REGION="us-east1"
+fi
 
 if [ -z "${PROJECT_ID}" ]; then
   echo "Error: GOOGLE_CLOUD_PROJECT environment variable or argument is required."
@@ -97,9 +115,23 @@ if command -v terraform >/dev/null 2>&1 && [ -d "${TERRAFORM_DIR}" ]; then
     terraform -chdir="${TERRAFORM_DIR}" init
   fi
 
-  # Import pre-existing GCP repository into state if manually created out-of-band to prevent 409
+  # Ensure the Artifact Registry repository physically exists in GCP first.
+  # This prevents 403 Forbidden errors when Terraform attempts to refresh/read IAM policies on a nonexistent repo.
+  if command -v gcloud >/dev/null 2>&1; then
+    if ! gcloud artifacts repositories describe "${ARTIFACT_REPO}" --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+      echo "Creating Artifact Registry repository '${ARTIFACT_REPO}' in ${REGION}..."
+      gcloud artifacts repositories create "${ARTIFACT_REPO}" \
+        --repository-format=docker \
+        --location="${REGION}" \
+        --project="${PROJECT_ID}" \
+        --description="Docker repository for Cymbal Cyber agent and detection container images" \
+        --quiet || true
+    fi
+  fi
+
+  # Import pre-existing GCP repository into state if not yet tracked
   if command -v gcloud >/dev/null 2>&1 && gcloud artifacts repositories describe "${ARTIFACT_REPO}" --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
-    if ! terraform -chdir="${TERRAFORM_DIR}" state list 2>/dev/null | grep -q "google_artifact_registry_repository.agent_repo"; then
+    if ! terraform -chdir="${TERRAFORM_DIR}" state list 2>/dev/null | grep -q "^google_artifact_registry_repository.agent_repo$"; then
       echo "Importing existing Artifact Registry repository into Terraform state..."
       terraform -chdir="${TERRAFORM_DIR}" import \
         -var="project_id=${PROJECT_ID}" \
@@ -109,19 +141,26 @@ if command -v terraform >/dev/null 2>&1 && [ -d "${TERRAFORM_DIR}" ]; then
     fi
   fi
 
-  TARGET_OPTS=(
-    -target=google_artifact_registry_repository.agent_repo
+  # 1a. Ensure repository resource is provisioned and reconciled in Terraform first
+  terraform -chdir="${TERRAFORM_DIR}" apply -auto-approve \
+    -target=google_artifact_registry_repository.agent_repo \
+    -var="project_id=${PROJECT_ID}" \
+    -var="region=${REGION}" \
+    "${DEPLOYER_VAR[@]}"
+
+  # 1b. Provision repository build & push IAM permissions (now guaranteed to succeed because repo exists)
+  TARGET_IAM_OPTS=(
     -target=google_artifact_registry_repository_iam_member.compute_sa_writer
     -target=google_project_iam_member.compute_sa_storage_viewer
     -target=google_project_iam_member.compute_sa_log_writer
     -target=google_artifact_registry_repository_iam_member.cloudbuild_sa_writer
   )
   if [[ -n "${DEPLOYER_MEMBER}" ]]; then
-    TARGET_OPTS+=(-target=google_artifact_registry_repository_iam_member.deployer_writer)
+    TARGET_IAM_OPTS+=(-target=google_artifact_registry_repository_iam_member.deployer_writer)
   fi
 
   terraform -chdir="${TERRAFORM_DIR}" apply -auto-approve \
-    "${TARGET_OPTS[@]}" \
+    "${TARGET_IAM_OPTS[@]}" \
     -var="project_id=${PROJECT_ID}" \
     -var="region=${REGION}" \
     "${DEPLOYER_VAR[@]}"
