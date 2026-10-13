@@ -70,11 +70,6 @@ Environment variables are loaded automatically at startup via `python-dotenv`:
 - **Default Model:** `gemini-3.8-flash` is the standard active model across all agents and tools.
 - **Model Override:** Change `GEMINI_MODEL` in `.env` to switch models without modifying agent source code.
 
-### 3. Corporate CA Certificate Handling (Kyndryl Network)
-- SSL inspection uses `/usr/local/share/ca-certificates/Kyndryl-SSL-Inspection.crt`.
-- `UV_SYSTEM_CERTS=true` is enabled in the devcontainer.
-- Always include `--system-certs` when invoking standalone `uvx` commands (e.g. `uvx --system-certs google-agents-cli setup`).
-
 ---
 
 ## Development & Testing Commands
