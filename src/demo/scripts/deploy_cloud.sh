@@ -47,13 +47,14 @@ fi
 # Validation guard: Verify active billing is enabled for the target GCP project
 if command -v gcloud >/dev/null 2>&1; then
   echo "Validating billing status for project: ${PROJECT_ID}..."
-  gcloud billing projects describe "${PROJECT_ID}" --format="value(billingEnabled)" 2>/dev/null | grep -qi "true" || {
+  gcloud billing projects describe "${PROJECT_ID}" --format="value(billingEnabled)" --quiet 2>/dev/null | grep -qi "true" || {
     echo "Error: Billing is not enabled for project ${PROJECT_ID}"
     exit 1
   }
 
   echo "Enabling essential Google Cloud APIs..."
   gcloud services enable \
+    cloudbilling.googleapis.com \
     run.googleapis.com \
     pubsub.googleapis.com \
     bigquery.googleapis.com \
