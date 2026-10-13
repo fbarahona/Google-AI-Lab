@@ -77,7 +77,13 @@ _bq_client = None
 def get_bq_client():
     global _bq_client
     if _bq_client is None:
-        _bq_client = bigquery.Client(project=PROJECT_ID)
+        creds = None
+        try:
+            from src.demo.soc_ticketing.ticketing_service import get_gcp_credentials
+            creds = get_gcp_credentials()
+        except Exception:
+            pass
+        _bq_client = bigquery.Client(project=PROJECT_ID, credentials=creds) if creds else bigquery.Client(project=PROJECT_ID)
     return _bq_client
 
 

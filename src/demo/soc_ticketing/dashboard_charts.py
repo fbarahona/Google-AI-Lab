@@ -1,8 +1,10 @@
 """
 Interactive Altair and Pydeck Charts for SOC Monitoring Dashboard.
 Matches the enterprise SOC As-A-Service dashboard layout.
+Fully dynamic: accepts real aggregated telemetry from BigQuery with clean empty-state fallbacks.
 """
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import altair as alt
@@ -11,27 +13,29 @@ import pydeck as pdk
 
 
 def create_donut_chart(
-    data: list[dict[str, Any]],
+    data: list[dict[str, Any]] | None,
     category_col: str,
     value_col: str,
     color_map: dict[str, str],
     center_label: str = "Alerts",
-    center_total: int = 12
+    center_total: int = 0
 ) -> alt.LayerChart:
     """
     Renders an enterprise ring/donut chart with centered total count text.
+    Handles empty dataset with a muted placeholder ring.
     """
-    df = pd.DataFrame(data)
-    if df.empty:
+    df = pd.DataFrame(data) if data else pd.DataFrame()
+    if df.empty or center_total == 0:
         df = pd.DataFrame({category_col: ["None"], value_col: [1]})
-        color_map = {"None": "#475569"}
+        display_color_map = {"None": "#334155"}
+    else:
+        display_color_map = color_map
 
-    # Base arc
     arc = alt.Chart(df).mark_arc(innerRadius=52, outerRadius=76, stroke="#0f172a", strokeWidth=2).encode(
         theta=alt.Theta(f"{value_col}:Q", stack=True),
         color=alt.Color(
             f"{category_col}:N",
-            scale=alt.Scale(domain=list(color_map.keys()), range=list(color_map.values())),
+            scale=alt.Scale(domain=list(display_color_map.keys()), range=list(display_color_map.values())),
             legend=alt.Legend(
                 orient="bottom",
                 title=None,
@@ -44,7 +48,6 @@ def create_donut_chart(
         tooltip=[alt.Tooltip(f"{category_col}:N", title="Category"), alt.Tooltip(f"{value_col}:Q", title="Count")]
     )
 
-    # Centered metric number
     center_num_df = pd.DataFrame([{"text": str(center_total)}])
     center_num = alt.Chart(center_num_df).mark_text(
         fontSize=24,
@@ -53,7 +56,6 @@ def create_donut_chart(
         dy=-6
     ).encode(text="text:N")
 
-    # Centered metric subtitle
     center_lbl_df = pd.DataFrame([{"text": center_label}])
     center_lbl = alt.Chart(center_lbl_df).mark_text(
         fontSize=11,
@@ -71,15 +73,15 @@ def create_donut_chart(
     return chart
 
 
-def create_category_bar_chart(category_data: list[dict[str, Any]]) -> alt.Chart:
+def create_category_bar_chart(category_data: list[dict[str, Any]] | None = None) -> alt.Chart:
     """
     Horizontal bar chart displaying Open Alerts by Category.
     """
-    df = pd.DataFrame(category_data)
+    df = pd.DataFrame(category_data) if category_data else pd.DataFrame()
     if df.empty:
         df = pd.DataFrame({
-            "category": ["Risky Domain/URL", "Malware", "Data Leak", "Botnet", "PUP", "Recon"],
-            "count": [3, 2, 1, 1, 1, 1]
+            "category": ["No Data"],
+            "count": [0]
         })
 
     palette = {
@@ -89,7 +91,14 @@ def create_category_bar_chart(category_data: list[dict[str, Any]]) -> alt.Chart:
         "Botnet": "#ffb74d",
         "PUP": "#81c784",
         "Recon": "#29b6f6",
-        "Policy Violation": "#ab47bc"
+        "Initial Access": "#ff5252",
+        "Execution": "#ff7043",
+        "Command and Control": "#ff9800",
+        "Privilege Escalation": "#ab47bc",
+        "Discovery": "#26a69a",
+        "Collection": "#42a5f5",
+        "Policy Violation": "#ab47bc",
+        "No Data": "#475569"
     }
 
     bars = alt.Chart(df).mark_bar(
@@ -137,20 +146,16 @@ def create_category_bar_chart(category_data: list[dict[str, Any]]) -> alt.Chart:
     )
 
 
-def create_log_rate_chart() -> alt.Chart:
+def create_log_rate_chart(rate_data: list[dict[str, Any]] | None = None) -> alt.Chart:
     """
     Area chart for Average Log Rate (per second).
     """
-    data = [
-        {"date": "10/10", "rate": 1.2},
-        {"date": "10/14", "rate": 1.9},
-        {"date": "10/22", "rate": 3.6},
-        {"date": "10/26", "rate": 2.4},
-        {"date": "10/29", "rate": 1.5},
-        {"date": "10/30", "rate": 3.1},
-        {"date": "10/31", "rate": 2.2}
-    ]
-    df = pd.DataFrame(data)
+    if not rate_data:
+        rate_data = [
+            {"date": (datetime.now(UTC) - timedelta(days=i)).strftime("%m/%d"), "rate": 0.0}
+            for i in reversed(range(7))
+        ]
+    df = pd.DataFrame(rate_data)
 
     chart = alt.Chart(df).mark_area(
         line={"color": "#00e5ff", "width": 2},
@@ -167,44 +172,34 @@ def create_log_rate_chart() -> alt.Chart:
         y=alt.Y("rate:Q", axis=alt.Axis(
             title=None,
             format="~s",
-            labelExpr="datum.value + 'M'",
             labelColor="#94a3b8",
             grid=True,
             gridColor="#1e293b"
         )),
-        tooltip=[alt.Tooltip("date:N", title="Date"), alt.Tooltip("rate:Q", title="Rate (M/s)")]
+        tooltip=[alt.Tooltip("date:N", title="Date"), alt.Tooltip("rate:Q", title="Rate (events/s)")]
     ).properties(height=180).configure_view(strokeWidth=0)
 
     return chart
 
 
-def create_log_breakdown_chart() -> alt.Chart:
+def create_log_breakdown_chart(breakdown_data: list[dict[str, Any]] | None = None) -> alt.Chart:
     """
     Stacked bar chart for Log Collection Breakdown.
     """
-    rows = []
-    dates = ["10/10", "10/22", "10/29", "10/30", "10/31"]
-    types = ["Access Events", "Network Traffic", "DNS Queries", "VPN Sessions", "Firewall Rules"]
-    volumes = [
-        [3.0, 5.0, 2.0, 1.5, 1.8],
-        [4.5, 7.2, 3.5, 2.0, 2.5],
-        [4.0, 6.8, 3.2, 2.2, 2.1],
-        [2.0, 3.5, 1.8, 1.0, 1.2],
-        [2.2, 4.0, 2.0, 1.1, 1.3]
-    ]
-
-    for d_idx, d in enumerate(dates):
-        for t_idx, t in enumerate(types):
-            rows.append({"date": d, "type": t, "volume": volumes[d_idx][t_idx]})
-
-    df = pd.DataFrame(rows)
-    palette = ["#ffb300", "#00b0ff", "#00e676", "#ab47bc", "#26a69a"]
+    if not breakdown_data:
+        breakdown_data = [
+            {"date": (datetime.now(UTC) - timedelta(days=i)).strftime("%m/%d"), "type": "No Data", "volume": 0}
+            for i in reversed(range(5))
+        ]
+    df = pd.DataFrame(breakdown_data)
+    types = list(df["type"].unique())
+    palette_options = ["#ffb300", "#00b0ff", "#00e676", "#ab47bc", "#26a69a", "#64748b"]
+    palette = palette_options[:len(types)]
 
     chart = alt.Chart(df).mark_bar(width=28).encode(
         x=alt.X("date:N", axis=alt.Axis(title=None, labelColor="#94a3b8")),
         y=alt.Y("volume:Q", axis=alt.Axis(
             title=None,
-            labelExpr="datum.value + 'M'",
             labelColor="#94a3b8",
             grid=True,
             gridColor="#1e293b"
@@ -214,29 +209,22 @@ def create_log_breakdown_chart() -> alt.Chart:
             scale=alt.Scale(domain=types, range=palette),
             legend=alt.Legend(orient="top", title=None, labelColor="#cbd5e1", labelFontSize=10, columns=3)
         ),
-        tooltip=["date:N", "type:N", alt.Tooltip("volume:Q", title="Volume (M)")]
+        tooltip=["date:N", "type:N", alt.Tooltip("volume:Q", title="Volume")]
     ).properties(height=180).configure_view(strokeWidth=0)
 
     return chart
 
 
-def create_threat_trend_chart() -> alt.Chart:
+def create_threat_trend_chart(trend_data: list[dict[str, Any]] | None = None) -> alt.Chart:
     """
     Multi-line chart for Threat Detection Trend over time.
     """
-    rows = []
-    dates = ["10/10", "10/22", "10/29", "10/30", "10/31"]
-    series = {
-        "Security Events": [58, 42, 18, 16, 38],
-        "Triaged Alerts": [18, 14, 8, 6, 12],
-        "Escalated Alerts": [12, 10, 4, 3, 9]
-    }
-
-    for metric, vals in series.items():
-        for d, v in zip(dates, vals, strict=False):
-            rows.append({"date": d, "metric": metric, "count": v})
-
-    df = pd.DataFrame(rows)
+    if not trend_data:
+        trend_data = [
+            {"date": (datetime.now(UTC) - timedelta(days=i)).strftime("%m/%d"), "metric": "Security Events", "count": 0}
+            for i in reversed(range(5))
+        ]
+    df = pd.DataFrame(trend_data)
     palette = {
         "Security Events": "#ffca28",
         "Triaged Alerts": "#ff9800",
@@ -262,16 +250,9 @@ def create_threat_map_deck(threat_points: list[dict[str, Any]] | None = None) ->
     Interactive Global Threat Map matching the Fortinet world map style.
     """
     if not threat_points:
-        threat_points = [
-            {"name": "Lazarus Group (Pyongyang)", "lat": 39.0392, "lon": 125.7625, "threat": "Critical C2 Beaconing", "score": 2400, "color": [244, 67, 54, 220]},
-            {"name": "Moscow Malicious Host", "lat": 55.7558, "lon": 37.6173, "threat": "Payload Downloader", "score": 1950, "color": [244, 67, 54, 220]},
-            {"name": "Tor Exit Node (Berlin)", "lat": 52.5200, "lon": 13.4050, "threat": "Port Scan / Botnet", "score": 1400, "color": [255, 152, 0, 200]},
-            {"name": "Corporate HQ (New York)", "lat": 40.7128, "lon": -74.0060, "threat": "Data Exfil Probe", "score": 280, "color": [255, 193, 7, 200]},
-            {"name": "Branch Office (San Francisco)", "lat": 37.7749, "lon": -122.4194, "threat": "Policy Anomaly", "score": 120, "color": [0, 230, 118, 180]},
-            {"name": "Vancouver Endpoint", "lat": 49.2827, "lon": -123.1207, "threat": "VPN Spray", "score": 500, "color": [255, 152, 0, 200]}
-        ]
-
-    df = pd.DataFrame(threat_points)
+        df = pd.DataFrame(columns=["name", "lat", "lon", "threat", "score", "color"])
+    else:
+        df = pd.DataFrame(threat_points)
 
     view_state = pdk.ViewState(
         latitude=35.0,
@@ -282,24 +263,26 @@ def create_threat_map_deck(threat_points: list[dict[str, Any]] | None = None) ->
         pitch=0
     )
 
-    scatter = pdk.Layer(
-        "ScatterplotLayer",
-        data=df,
-        get_position=["lon", "lat"],
-        get_color="color",
-        get_radius=550000,
-        radius_min_pixels=6,
-        radius_max_pixels=25,
-        pickable=True,
-        auto_highlight=True
-    )
+    layers = []
+    if not df.empty and "lat" in df.columns and "lon" in df.columns:
+        scatter = pdk.Layer(
+            "ScatterplotLayer",
+            data=df,
+            get_position=["lon", "lat"],
+            get_color="color",
+            get_radius=550000,
+            radius_min_pixels=6,
+            radius_max_pixels=25,
+            pickable=True,
+            auto_highlight=True
+        )
+        layers.append(scatter)
 
     deck = pdk.Deck(
-        layers=[scatter],
+        layers=layers,
         initial_view_state=view_state,
         map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
         tooltip={"text": "🚨 {name}\nThreat: {threat}\nAnomaly Score: {score}"}
     )
 
     return deck
-

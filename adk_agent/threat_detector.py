@@ -57,8 +57,15 @@ class ThreatDetector:
         self.max_bytes_billed = max_bytes_billed
         self.max_merge_attempts = max_merge_attempts
         self.merge_retry_delay = merge_retry_delay
-        self.bq_client = bigquery.Client(project=project_id)
-        self.publisher = pubsub_v1.PublisherClient()
+        creds = None
+        try:
+            from src.demo.soc_ticketing.ticketing_service import get_gcp_credentials
+            creds = get_gcp_credentials()
+        except Exception:
+            pass
+
+        self.bq_client = bigquery.Client(project=project_id, credentials=creds) if creds else bigquery.Client(project=project_id)
+        self.publisher = pubsub_v1.PublisherClient(credentials=creds) if creds else pubsub_v1.PublisherClient()
         self.topic_path = self.publisher.topic_path(project_id, topic_id)
 
     def run_detection_cycle(self, lookback_minutes: int = 15, min_score: int = 100) -> int:

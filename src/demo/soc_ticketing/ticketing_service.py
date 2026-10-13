@@ -5,7 +5,9 @@ Manages the end-to-end incident ticketing lifecycle:
 1. Passes validated security incident tickets to the active SOC ticketing queue.
 2. Archives and queries historical tickets (approved genuine threats and dismissed false positives).
 3. Persists ticket state across BigQuery (Cymbal_Cyber.soc_tickets), GCS, and local file storage.
-4. Provides aggregated metrics for dashboard visualization.
+4. Queries BigQuery directly as the Single Source of Truth for tickets and dashboard telemetry.
+5. Employs append-resolution and CTE deduplication to seamlessly handle BigQuery streaming buffers.
+6. Provides dynamic aggregated metrics for dashboard visualization.
 """
 
 import glob
@@ -30,6 +32,47 @@ LOCAL_QUEUE_DIR = os.getenv("LOCAL_QUEUE_DIR", str(REPO_ROOT / "local_demo_data"
 LOCAL_HISTORY_DIR = os.path.join(LOCAL_QUEUE_DIR, "history")
 
 
+def get_gcp_credentials():
+    """
+    Retrieves active Google Cloud credentials with multi-layer fallback:
+    1. Standard google.auth.default() (Cloud Run metadata / ADC) verified with token refresh
+    2. GOOGLE_OAUTH_ACCESS_TOKEN environment variable
+    3. gcloud auth print-access-token subprocess
+    """
+    import google.auth
+    from google.oauth2.credentials import Credentials
+
+    # 1. Try google.auth.default() and test token validity
+    try:
+        creds, _ = google.auth.default()
+        from google.auth.transport.requests import Request
+        creds.refresh(Request())
+        if creds.token:
+            return creds
+    except Exception as e:
+        logger.debug("google.auth.default() token check fallback: %s", e)
+
+    # 2. Try explicit environment variable
+    token = os.getenv("GOOGLE_OAUTH_ACCESS_TOKEN")
+    if token:
+        return Credentials(token)
+
+    # 3. Try gcloud auth print-access-token
+    try:
+        import subprocess
+        token = subprocess.check_output(
+            ["gcloud", "auth", "print-access-token"],
+            text=True,
+            stderr=subprocess.DEVNULL
+        ).strip()
+        if token:
+            return Credentials(token)
+    except Exception:
+        pass
+
+    return None
+
+
 class SocTicketingService:
     def __init__(
         self,
@@ -42,7 +85,7 @@ class SocTicketingService:
         self.dataset_id = dataset_id
         self.escalation_bucket_name = (
             escalation_bucket
-            or os.getenv("ESCALATION_BUCKET", f"cymbal-cyber-adk-escalations-bucket_{project_id}")
+            or os.getenv("ESCALATION_BUCKET", f"cymbal-cyber-adk-escalations-bucket_{self.project_id}")
         )
         self.webhook_url = webhook_url or os.getenv("SOC_WEBHOOK_URL")
 
@@ -67,46 +110,84 @@ class SocTicketingService:
     @property
     def bq_client(self):
         if self._bq_client is None:
+            if os.getenv("LOCAL_MODE", "false").lower() == "true":
+                return None
             try:
                 from google.cloud import bigquery
-                self._bq_client = bigquery.Client(project=self.project_id)
-            except Exception:
+                creds = get_gcp_credentials()
+                if creds is not None:
+                    try:
+                        self._bq_client = bigquery.Client(project=self.project_id, credentials=creds)
+                    except Exception:
+                        pass
+                if self._bq_client is None:
+                    import subprocess
+                    from google.oauth2.credentials import Credentials
+                    token = subprocess.check_output(
+                        ["gcloud", "auth", "print-access-token"],
+                        text=True,
+                        stderr=subprocess.DEVNULL
+                    ).strip()
+                    if token:
+                        self._bq_client = bigquery.Client(project=self.project_id, credentials=Credentials(token))
+            except Exception as e:
+                logger.debug("BigQuery client initialization fallback: %s", e)
                 self._bq_client = None
         return self._bq_client
 
     @property
     def storage_client(self):
         if self._storage_client is None:
+            if os.getenv("LOCAL_MODE", "false").lower() == "true":
+                return None
             try:
                 from google.cloud import storage
-                self._storage_client = storage.Client(project=self.project_id)
-            except Exception:
+                creds = get_gcp_credentials()
+                if creds is not None:
+                    try:
+                        self._storage_client = storage.Client(project=self.project_id, credentials=creds)
+                    except Exception:
+                        pass
+                if self._storage_client is None:
+                    import subprocess
+                    from google.oauth2.credentials import Credentials
+                    token = subprocess.check_output(
+                        ["gcloud", "auth", "print-access-token"],
+                        text=True,
+                        stderr=subprocess.DEVNULL
+                    ).strip()
+                    if token:
+                        self._storage_client = storage.Client(project=self.project_id, credentials=Credentials(token))
+            except Exception as e:
+                logger.debug("Storage client initialization fallback: %s", e)
                 self._storage_client = None
         return self._storage_client
 
     def is_cloud_enabled(self) -> bool:
-        """Determines if GCP Cloud Storage is actively accessible."""
+        """Determines if GCP BigQuery or Cloud Storage is actively accessible."""
         if os.getenv("LOCAL_MODE", "false").lower() == "true":
             return False
-        try:
-            if self.storage_client is not None:
+        if self.bq_client is not None:
+            return True
+        if self.storage_client is not None:
+            try:
                 self.storage_client.bucket(self.escalation_bucket_name)
                 return True
-        except Exception:
-            pass
+            except Exception:
+                pass
         return False
 
     def create_and_dispatch_ticket(self, ticket: SocTicket) -> str:
         """
         Ingests and dispatches a new incident ticket to the SOC ticketing system:
-        - Uploads ticket payload to GCS (or local file queue in local mode)
         - Inserts ticket row into BigQuery soc_tickets and adk_threat_assessment
+        - Uploads ticket payload to GCS (or local file queue in local mode)
         """
         logger.info("Passing ticket %s to SOC ticketing system...", ticket.ticket_id)
         payload = ticket.model_dump()
 
         # 1. Cloud Storage write (if cloud available)
-        if self.is_cloud_enabled():
+        if self.is_cloud_enabled() and self.storage_client is not None:
             try:
                 bucket = self.storage_client.bucket(self.escalation_bucket_name)
                 filename = f"human_escalation_information_{ticket.ticket_id}.json"
@@ -118,15 +199,39 @@ class SocTicketingService:
 
         # 2. Local File Queue write
         local_file = os.path.join(self.queue_dir, f"human_escalation_information_{ticket.ticket_id}.json")
-        with open(local_file, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
+        try:
+            with open(local_file, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+        except Exception as e:
+            logger.debug("Local file write skipped: %s", e)
 
-        # 3. BigQuery write (if available)
+        # 3. BigQuery write (Single Source of Truth)
         if self.bq_client is not None:
             try:
                 soc_table_id = f"{self.project_id}.{self.dataset_id}.soc_tickets"
-                self.bq_client.insert_rows_json(soc_table_id, [payload])
-                logger.info("Persisted ticket %s to %s", ticket.ticket_id, soc_table_id)
+                soc_columns = {
+                    "ticket_id", "created_at", "user_id", "device_id", "source_ip",
+                    "threat_score", "severity", "status", "agent_decision", "agent_reason",
+                    "mitre_tactics", "indicators_of_compromise", "screenshot_url",
+                    "structured_report", "human_decision", "human_comment", "adjudicated_at"
+                }
+                soc_row = {k: v for k, v in payload.items() if k in soc_columns}
+                if not isinstance(soc_row.get("mitre_tactics"), list):
+                    soc_row["mitre_tactics"] = []
+                if not isinstance(soc_row.get("indicators_of_compromise"), list):
+                    soc_row["indicators_of_compromise"] = []
+                for req_str in [
+                    "ticket_id", "created_at", "user_id", "device_id", "source_ip",
+                    "severity", "status", "agent_decision", "agent_reason", "structured_report"
+                ]:
+                    if soc_row.get(req_str) is None:
+                        soc_row[req_str] = ""
+
+                errors = self.bq_client.insert_rows_json(soc_table_id, [soc_row], ignore_unknown_values=True)
+                if errors:
+                    logger.warning("BigQuery insert errors into soc_tickets: %s", errors)
+                else:
+                    logger.info("Persisted ticket %s to %s", ticket.ticket_id, soc_table_id)
             except Exception as e:
                 logger.warning("Could not persist ticket to BigQuery soc_tickets: %s", e)
 
@@ -144,30 +249,69 @@ class SocTicketingService:
                     "human_reason": None,
                     "alert_payload": json.dumps(payload)
                 }
-                self.bq_client.insert_rows_json(assessment_table_id, [assessment_row])
-                logger.info("Persisted assessment for user %s to %s", ticket.user_id, assessment_table_id)
+                errors = self.bq_client.insert_rows_json(assessment_table_id, [assessment_row], ignore_unknown_values=True)
+                if errors:
+                    logger.warning("BigQuery insert errors into adk_threat_assessment: %s", errors)
+                else:
+                    logger.info("Persisted assessment for user %s to %s", ticket.user_id, assessment_table_id)
             except Exception as e:
                 logger.warning("Could not persist ticket to BigQuery adk_threat_assessment: %s", e)
 
         return f"Successfully dispatched ticket {ticket.ticket_id} to SOC ticketing system with severity {ticket.severity}."
 
     def fetch_new_tickets(self) -> list[dict[str, Any]]:
-        """Retrieves all active, pending incident tickets awaiting analyst review."""
+        """
+        Retrieves all active, pending incident tickets awaiting analyst review.
+        Queries BigQuery Cymbal_Cyber.soc_tickets as the Single Source of Truth.
+        Uses CTE deduplication to reliably reflect the latest state even with streaming buffers.
+        Falls back to local file queue only if BigQuery is unavailable (local mode).
+        """
         tickets: list[dict[str, Any]] = []
 
-        if self.is_cloud_enabled():
+        if self.bq_client is not None:
             try:
-                bucket = self.storage_client.bucket(self.escalation_bucket_name)
-                for blob in bucket.list_blobs():
-                    if blob.name.startswith("human_escalation_information_") and blob.name.endswith(".json"):
-                        try:
-                            data = json.loads(blob.download_as_text())
-                            tickets.append(data)
-                        except Exception:
-                            pass
-                return tickets
-            except Exception:
-                pass
+                query = f"""
+                WITH deduplicated_tickets AS (
+                  SELECT * EXCEPT(rn) FROM (
+                    SELECT *,
+                      ROW_NUMBER() OVER (
+                        PARTITION BY ticket_id
+                        ORDER BY
+                          CASE WHEN human_decision IS NOT NULL AND human_decision != '' THEN 1 ELSE 2 END,
+                          COALESCE(adjudicated_at, created_at) DESC
+                      ) AS rn
+                    FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
+                  )
+                  WHERE rn = 1
+                )
+                SELECT
+                  ticket_id,
+                  created_at,
+                  user_id,
+                  device_id,
+                  source_ip,
+                  threat_score,
+                  severity,
+                  status,
+                  agent_decision,
+                  agent_reason,
+                  mitre_tactics,
+                  indicators_of_compromise,
+                  screenshot_url,
+                  structured_report,
+                  human_decision,
+                  human_comment,
+                  adjudicated_at
+                FROM deduplicated_tickets
+                WHERE (status IN ('OPEN', 'ESCALATED', 'UNDER_INVESTIGATION') OR status IS NULL)
+                  AND (human_decision IS NULL OR human_decision = '')
+                ORDER BY created_at DESC
+                LIMIT 100
+                """
+                results = list(self.bq_client.query(query).result())
+                return [dict(row.items()) for row in results]
+            except Exception as e:
+                logger.warning("BigQuery fetch_new_tickets query failed: %s", e)
 
         # Fallback to local queue
         for path in glob.glob(os.path.join(self.queue_dir, "human_escalation_information_*.json")):
@@ -189,14 +333,16 @@ class SocTicketingService:
     ) -> bool:
         """
         Records human analyst adjudication:
-        - Resolves ticket as GENUINE_THREAT or FALSE_POSITIVE
+        - Resolves ticket as GENUINE_THREAT or FALSE_POSITIVE in BigQuery
+        - Updates adk_threat_assessment table with human decision
+        - Handles BigQuery streaming buffer with append-resolution
         - Archives ticket into historical store
         - Removes from active escalation queue
         """
         logger.info("Recording analyst verdict for ticket %s: %s", ticket_id, human_decision)
         now_iso = datetime.now(UTC).isoformat()
 
-        # Find existing ticket
+        # Find existing ticket locally, in GCS, or in BigQuery
         ticket_data = None
         active_local_path = os.path.join(self.queue_dir, f"human_escalation_information_{ticket_id}.json")
 
@@ -207,12 +353,28 @@ class SocTicketingService:
             except Exception:
                 pass
 
-        if not ticket_data and self.is_cloud_enabled():
+        if not ticket_data and self.is_cloud_enabled() and self.storage_client is not None:
             try:
                 bucket = self.storage_client.bucket(self.escalation_bucket_name)
                 blob = bucket.blob(f"human_escalation_information_{ticket_id}.json")
                 if blob.exists():
                     ticket_data = json.loads(blob.download_as_text())
+            except Exception:
+                pass
+
+        if not ticket_data and self.bq_client is not None:
+            try:
+                query = f"""
+                SELECT * FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
+                WHERE ticket_id = @ticket_id LIMIT 1
+                """
+                from google.cloud import bigquery
+                cfg = bigquery.QueryJobConfig(
+                    query_parameters=[bigquery.ScalarQueryParameter("ticket_id", "STRING", ticket_id)]
+                )
+                b_rows = list(self.bq_client.query(query, job_config=cfg).result())
+                if b_rows:
+                    ticket_data = dict(b_rows[0].items())
             except Exception:
                 pass
 
@@ -240,21 +402,23 @@ class SocTicketingService:
         # 1. Save to Local History Archive
         os.makedirs(self.history_dir, exist_ok=True)
         hist_local_path = os.path.join(self.history_dir, f"resolved_{ticket_id}.json")
-        with open(hist_local_path, "w", encoding="utf-8") as f:
-            json.dump(ticket_data, f, indent=2)
+        try:
+            with open(hist_local_path, "w", encoding="utf-8") as f:
+                json.dump(ticket_data, f, indent=2)
+        except Exception:
+            pass
 
-        # 2. Remove active request file
+        # 2. Remove active local request file
         if os.path.exists(active_local_path):
             try:
                 os.remove(active_local_path)
             except Exception:
                 pass
 
-        # 3. Cloud update
-        if self.is_cloud_enabled():
+        # 3. Cloud Storage update
+        if self.is_cloud_enabled() and self.storage_client is not None:
             try:
                 bucket = self.storage_client.bucket(self.escalation_bucket_name)
-                # Upload response file for waiting ADK agent runner
                 resp_blob = bucket.blob(f"human_escalation_response_{ticket_id}.json")
                 resp_payload = {
                     "ticket_id": ticket_id,
@@ -264,19 +428,18 @@ class SocTicketingService:
                 }
                 resp_blob.upload_from_string(json.dumps(resp_payload, indent=2), content_type="application/json")
 
-                # Upload to archive folder
                 hist_blob = bucket.blob(f"history/resolved_{ticket_id}.json")
                 hist_blob.upload_from_string(json.dumps(ticket_data, indent=2), content_type="application/json")
 
-                # Delete active pending request
                 req_blob = bucket.blob(f"human_escalation_information_{ticket_id}.json")
                 if req_blob.exists():
                     req_blob.delete()
             except Exception as e:
                 logger.warning("Cloud verdict sync warning: %s", e)
 
-        # 4. BigQuery Update
+        # 4. BigQuery Update (Single Source of Truth)
         if self.bq_client is not None:
+            updated_via_dml = False
             try:
                 from google.cloud import bigquery
                 query = f"""
@@ -297,33 +460,120 @@ class SocTicketingService:
                     ]
                 )
                 self.bq_client.query(query, job_config=job_config).result()
+                updated_via_dml = True
+                logger.info("Successfully updated ticket %s in BigQuery via DML", ticket_id)
             except Exception as e:
-                logger.warning("BigQuery verdict update warning: %s", e)
+                logger.info("Direct UPDATE blocked (e.g. streaming buffer). Using append resolution: %s", e)
+
+            # If DML UPDATE was blocked by BigQuery streaming buffer, insert the resolved row directly
+            if not updated_via_dml and ticket_data:
+                try:
+                    soc_table_id = f"{self.project_id}.{self.dataset_id}.soc_tickets"
+                    soc_columns = {
+                        "ticket_id", "created_at", "user_id", "device_id", "source_ip",
+                        "threat_score", "severity", "status", "agent_decision", "agent_reason",
+                        "mitre_tactics", "indicators_of_compromise", "screenshot_url",
+                        "structured_report", "human_decision", "human_comment", "adjudicated_at"
+                    }
+                    resolved_row = {k: v for k, v in ticket_data.items() if k in soc_columns}
+                    resolved_row["status"] = "RESOLVED"
+                    resolved_row["human_decision"] = human_decision
+                    resolved_row["human_comment"] = human_comment
+                    resolved_row["adjudicated_at"] = now_iso
+                    if not isinstance(resolved_row.get("mitre_tactics"), list):
+                        resolved_row["mitre_tactics"] = []
+                    if not isinstance(resolved_row.get("indicators_of_compromise"), list):
+                        resolved_row["indicators_of_compromise"] = []
+                    for req_str in [
+                        "ticket_id", "created_at", "user_id", "device_id", "source_ip",
+                        "severity", "status", "agent_decision", "agent_reason", "structured_report"
+                    ]:
+                        if resolved_row.get(req_str) is None:
+                            resolved_row[req_str] = ""
+
+                    self.bq_client.insert_rows_json(soc_table_id, [resolved_row], ignore_unknown_values=True)
+                    logger.info("Inserted resolved state row for %s into BigQuery soc_tickets", ticket_id)
+                except Exception as ins_err:
+                    logger.warning("Could not append resolved state row into BigQuery: %s", ins_err)
+
+            try:
+                from google.cloud import bigquery
+                user_id = ticket_data.get("user_id")
+                if user_id and user_id != "unknown_user":
+                    assess_query = f"""
+                    UPDATE `{self.project_id}.{self.dataset_id}.adk_threat_assessment`
+                    SET
+                      human_decision = @decision,
+                      human_reason = @comment
+                    WHERE user_id = @user_id
+                    """
+                    assess_config = bigquery.QueryJobConfig(
+                        query_parameters=[
+                            bigquery.ScalarQueryParameter("decision", "STRING", human_decision),
+                            bigquery.ScalarQueryParameter("comment", "STRING", human_comment),
+                            bigquery.ScalarQueryParameter("user_id", "STRING", user_id)
+                        ]
+                    )
+                    self.bq_client.query(assess_query, job_config=assess_config).result()
+            except Exception as e:
+                logger.debug("adk_threat_assessment update notice: %s", e)
 
         return True
 
     def fetch_historic_tickets(self) -> list[dict[str, Any]]:
         """
-        Retrieves all archived and historical tickets (both Approved Genuine Threats and False Positives).
-        Seeds a rich historical baseline if history is empty.
+        Retrieves all archived and historical tickets (Approved Threats and False Positives).
+        Queries BigQuery Cymbal_Cyber.soc_tickets as the Single Source of Truth.
+        Uses CTE deduplication to reliably reflect the latest state even with streaming buffers.
+        Falls back to local history files only if BigQuery is unavailable (local mode).
         """
         historic: list[dict[str, Any]] = []
 
-        # 1. Cloud BigQuery query if available
         if self.bq_client is not None:
             try:
                 query = f"""
-                SELECT * FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
-                WHERE status = 'RESOLVED' OR human_decision IS NOT NULL
-                ORDER BY adjudicated_at DESC LIMIT 100
+                WITH deduplicated_tickets AS (
+                  SELECT * EXCEPT(rn) FROM (
+                    SELECT *,
+                      ROW_NUMBER() OVER (
+                        PARTITION BY ticket_id
+                        ORDER BY
+                          CASE WHEN human_decision IS NOT NULL AND human_decision != '' THEN 1 ELSE 2 END,
+                          COALESCE(adjudicated_at, created_at) DESC
+                      ) AS rn
+                    FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
+                  )
+                  WHERE rn = 1
+                )
+                SELECT
+                  ticket_id,
+                  created_at,
+                  user_id,
+                  device_id,
+                  source_ip,
+                  threat_score,
+                  severity,
+                  status,
+                  agent_decision,
+                  agent_reason,
+                  mitre_tactics,
+                  indicators_of_compromise,
+                  screenshot_url,
+                  structured_report,
+                  human_decision,
+                  human_comment,
+                  adjudicated_at
+                FROM deduplicated_tickets
+                WHERE status = 'RESOLVED' OR (human_decision IS NOT NULL AND human_decision != '')
+                ORDER BY adjudicated_at DESC, created_at DESC
+                LIMIT 200
                 """
                 results = list(self.bq_client.query(query).result())
-                if results:
-                    return [dict(row.items()) for row in results]
-            except Exception:
-                pass
+                return [dict(row.items()) for row in results]
+            except Exception as e:
+                logger.warning("BigQuery fetch_historic_tickets failed: %s", e)
 
-        # 2. Local History Files
+        # Fallback to Local History Files
         for path in glob.glob(os.path.join(self.history_dir, "resolved_*.json")):
             try:
                 with open(path, encoding="utf-8") as f:
@@ -331,11 +581,9 @@ class SocTicketingService:
             except Exception:
                 pass
 
-        # If history has fewer than 5 records, seed realistic historical items for demonstration
         if len(historic) < 5:
             seed_items = self._generate_seed_history()
             for item in seed_items:
-                # Save locally so they persist across runs
                 hist_file = os.path.join(self.history_dir, f"resolved_{item['ticket_id']}.json")
                 if not os.path.exists(hist_file):
                     try:
@@ -347,6 +595,393 @@ class SocTicketingService:
 
         historic.sort(key=lambda x: x.get("adjudicated_at") or x.get("created_at") or "", reverse=True)
         return historic
+
+    def _build_time_clauses(self, time_range: str) -> tuple[str, str, str, str]:
+        """
+        Builds WHERE clauses for each table based on the selected time range.
+        Returns: (access_clause, net_clause, alert_clause, ticket_clause)
+        """
+        interval_map = {
+            "Last 24 Hours": ("INTERVAL 24 HOUR", 1),
+            "Last 7 Days": ("INTERVAL 7 DAY", 7),
+            "Last 30 Days": ("INTERVAL 30 DAY", 30),
+            "Last 90 Days": ("INTERVAL 90 DAY", 90),
+        }
+        if time_range not in interval_map:
+            return ("", "", "", "")
+
+        interval_sql, days = interval_map[time_range]
+        access_clause = (
+            f"WHERE DATE(event_timestamp) >= DATE_SUB(CURRENT_DATE(), INTERVAL {days} DAY) "
+            f"AND event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), {interval_sql})"
+        )
+        net_clause = (
+            f"WHERE DATE(event_timestamp) >= DATE_SUB(CURRENT_DATE(), INTERVAL {days} DAY) "
+            f"AND event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), {interval_sql})"
+        )
+        alert_clause = (
+            f"WHERE DATE(window_end) >= DATE_SUB(CURRENT_DATE(), INTERVAL {days} DAY) "
+            f"AND window_end >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), {interval_sql})"
+        )
+        ticket_clause = (
+            f"WHERE SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*S%Ez', created_at) >= "
+            f"TIMESTAMP_SUB(CURRENT_TIMESTAMP(), {interval_sql})"
+        )
+        return (access_clause, net_clause, alert_clause, ticket_clause)
+
+    def fetch_dashboard_metrics(self, time_range: str = "All Time") -> dict[str, Any]:
+        """
+        Dynamically calculates all SOC dashboard metrics directly from BigQuery tables.
+        Provides clean fallback / zero counts when tables are empty.
+        Uses CTE deduplication on soc_tickets so metrics always reflect the latest state.
+        """
+        metrics: dict[str, Any] = {
+            "monitored_devices": 0,
+            "monitored_endpoints": 0,
+            "monitored_users": 0,
+            "processed_logs": 0,
+            "security_events": 0,
+            "triaged_alerts": 0,
+            "escalated_alerts": 0,
+            "alerts_by_severity": [],
+            "alerts_by_status": [],
+            "alerts_by_sla": [],
+            "alerts_by_category": [],
+            "log_rate_trend": [],
+            "log_breakdown": [],
+            "threat_trend": [],
+            "threat_points": []
+        }
+
+        if self.bq_client is None:
+            new_t = self.fetch_new_tickets()
+            hist_t = self.fetch_historic_tickets()
+            metrics["escalated_alerts"] = len(new_t)
+            metrics["triaged_alerts"] = len(hist_t)
+            return metrics
+
+        access_where, net_where, alert_where, ticket_where = self._build_time_clauses(time_range)
+
+        # 1. Summary KPIs
+        try:
+            summary_sql = f"""
+            WITH deduplicated_tickets AS (
+              SELECT * EXCEPT(rn) FROM (
+                SELECT *,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY ticket_id
+                    ORDER BY
+                      CASE WHEN human_decision IS NOT NULL AND human_decision != '' THEN 1 ELSE 2 END,
+                      COALESCE(adjudicated_at, created_at) DESC
+                  ) AS rn
+                FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
+              )
+              WHERE rn = 1
+            ),
+            access_stats AS (
+              SELECT
+                COUNT(*) AS total_access_logs,
+                COUNT(DISTINCT user_id) AS distinct_users,
+                COUNT(DISTINCT device_id) AS distinct_devices,
+                COUNT(DISTINCT assigned_internal_ip) AS distinct_endpoints
+              FROM `{self.project_id}.{self.dataset_id}.user_access_events`
+              {access_where}
+            ),
+            network_stats AS (
+              SELECT
+                COUNT(*) AS total_net_logs
+              FROM `{self.project_id}.{self.dataset_id}.network_events`
+              {net_where}
+            ),
+            alert_stats AS (
+              SELECT
+                COUNT(*) AS total_security_events
+              FROM `{self.project_id}.{self.dataset_id}.alerts`
+              {alert_where}
+            ),
+            ticket_stats AS (
+              SELECT
+                COUNT(*) AS total_tickets,
+                COUNTIF(status = 'RESOLVED' OR (human_decision IS NOT NULL AND human_decision != '')) AS triaged_alerts,
+                COUNTIF(status IN ('OPEN', 'ESCALATED', 'UNDER_INVESTIGATION') AND (human_decision IS NULL OR human_decision = '')) AS escalated_alerts
+              FROM deduplicated_tickets
+              {ticket_where}
+            )
+            SELECT *
+            FROM access_stats
+            CROSS JOIN network_stats
+            CROSS JOIN alert_stats
+            CROSS JOIN ticket_stats;
+            """
+            rows = list(self.bq_client.query(summary_sql).result())
+            if rows:
+                r = rows[0]
+                total_access = r.get("total_access_logs") or 0
+                total_net = r.get("total_net_logs") or 0
+                metrics["processed_logs"] = total_access + total_net
+                metrics["monitored_users"] = r.get("distinct_users") or 0
+                metrics["monitored_devices"] = r.get("distinct_devices") or 0
+                metrics["monitored_endpoints"] = r.get("distinct_endpoints") or 0
+                metrics["security_events"] = r.get("total_security_events") or 0
+                metrics["triaged_alerts"] = r.get("triaged_alerts") or 0
+                metrics["escalated_alerts"] = r.get("escalated_alerts") or 0
+        except Exception as e:
+            logger.warning("Error querying summary KPIs: %s", e)
+
+        # 2. Alerts by Severity
+        try:
+            sev_sql = f"""
+            WITH deduplicated_tickets AS (
+              SELECT * EXCEPT(rn) FROM (
+                SELECT *,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY ticket_id
+                    ORDER BY
+                      CASE WHEN human_decision IS NOT NULL AND human_decision != '' THEN 1 ELSE 2 END,
+                      COALESCE(adjudicated_at, created_at) DESC
+                  ) AS rn
+                FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
+              )
+              WHERE rn = 1
+            )
+            SELECT
+              INITCAP(severity) AS severity,
+              COUNT(*) AS count
+            FROM deduplicated_tickets
+            {ticket_where}
+            GROUP BY severity
+            """
+            metrics["alerts_by_severity"] = [dict(row.items()) for row in self.bq_client.query(sev_sql).result()]
+        except Exception as e:
+            logger.warning("Error querying alerts by severity: %s", e)
+
+        # 3. Alerts by Status
+        try:
+            stat_sql = f"""
+            WITH deduplicated_tickets AS (
+              SELECT * EXCEPT(rn) FROM (
+                SELECT *,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY ticket_id
+                    ORDER BY
+                      CASE WHEN human_decision IS NOT NULL AND human_decision != '' THEN 1 ELSE 2 END,
+                      COALESCE(adjudicated_at, created_at) DESC
+                  ) AS rn
+                FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
+              )
+              WHERE rn = 1
+            )
+            SELECT
+              CASE
+                WHEN status IN ('OPEN', 'ESCALATED', 'UNDER_INVESTIGATION') AND (human_decision IS NULL OR human_decision = '') THEN 'Open'
+                WHEN status = 'RESOLVED' AND human_decision = 'Genuine Threat' THEN 'Escalated'
+                WHEN status = 'RESOLVED' THEN 'Closed'
+                ELSE 'In Progress'
+              END AS status,
+              COUNT(*) AS count
+            FROM deduplicated_tickets
+            {ticket_where}
+            GROUP BY status
+            """
+            metrics["alerts_by_status"] = [dict(row.items()) for row in self.bq_client.query(stat_sql).result()]
+        except Exception as e:
+            logger.warning("Error querying alerts by status: %s", e)
+
+        # 4. Alerts by SLA
+        try:
+            sla_sql = f"""
+            WITH deduplicated_tickets AS (
+              SELECT * EXCEPT(rn) FROM (
+                SELECT *,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY ticket_id
+                    ORDER BY
+                      CASE WHEN human_decision IS NOT NULL AND human_decision != '' THEN 1 ELSE 2 END,
+                      COALESCE(adjudicated_at, created_at) DESC
+                  ) AS rn
+                FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
+              )
+              WHERE rn = 1
+            )
+            SELECT
+              CASE
+                WHEN status = 'RESOLVED' THEN 'Within SLA'
+                WHEN TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*S%Ez', created_at), MINUTE) > 60 THEN 'Breached SLA'
+                WHEN TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*S%Ez', created_at), MINUTE) > 30 THEN 'Approaching SLA'
+                ELSE 'Within SLA'
+              END AS sla,
+              COUNT(*) AS count
+            FROM deduplicated_tickets
+            {ticket_where}
+            GROUP BY sla
+            """
+            metrics["alerts_by_sla"] = [dict(row.items()) for row in self.bq_client.query(sla_sql).result()]
+        except Exception as e:
+            logger.warning("Error querying alerts by SLA: %s", e)
+
+        # 5. Alerts by Category (MITRE tactics)
+        try:
+            cat_sql = f"""
+            WITH deduplicated_tickets AS (
+              SELECT * EXCEPT(rn) FROM (
+                SELECT *,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY ticket_id
+                    ORDER BY
+                      CASE WHEN human_decision IS NOT NULL AND human_decision != '' THEN 1 ELSE 2 END,
+                      COALESCE(adjudicated_at, created_at) DESC
+                  ) AS rn
+                FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
+              )
+              WHERE rn = 1
+            )
+            SELECT
+              tactic AS category,
+              COUNT(*) AS count
+            FROM deduplicated_tickets,
+            UNNEST(mitre_tactics) AS tactic
+            {ticket_where}
+            GROUP BY category
+            ORDER BY count DESC
+            LIMIT 6
+            """
+            metrics["alerts_by_category"] = [dict(row.items()) for row in self.bq_client.query(cat_sql).result()]
+        except Exception as e:
+            logger.warning("Error querying alerts by category: %s", e)
+
+        # 6. Log Rate Trend
+        try:
+            rate_sql = f"""
+            SELECT
+              FORMAT_DATE('%m/%d', DATE(event_timestamp)) AS date,
+              COUNT(*) AS count
+            FROM (
+              SELECT event_timestamp FROM `{self.project_id}.{self.dataset_id}.user_access_events`
+              {access_where}
+              UNION ALL
+              SELECT event_timestamp FROM `{self.project_id}.{self.dataset_id}.network_events`
+              {net_where}
+            )
+            GROUP BY date
+            ORDER BY date ASC
+            LIMIT 7
+            """
+            rate_rows = [dict(row.items()) for row in self.bq_client.query(rate_sql).result()]
+            metrics["log_rate_trend"] = [
+                {"date": r["date"], "rate": round(r["count"] / 86400.0, 2) if r.get("count") else 0.0}
+                for r in rate_rows
+            ]
+        except Exception as e:
+            logger.warning("Error querying log rate trend: %s", e)
+
+        # 7. Log Collection Breakdown
+        try:
+            breakdown_sql = f"""
+            SELECT
+              FORMAT_DATE('%m/%d', DATE(event_timestamp)) AS date,
+              event_type AS type,
+              COUNT(*) AS volume
+            FROM (
+              SELECT event_timestamp, event_type FROM `{self.project_id}.{self.dataset_id}.user_access_events`
+              {access_where}
+              UNION ALL
+              SELECT event_timestamp, event_type FROM `{self.project_id}.{self.dataset_id}.network_events`
+              {net_where}
+            )
+            GROUP BY date, type
+            ORDER BY date ASC
+            LIMIT 25
+            """
+            metrics["log_breakdown"] = [dict(row.items()) for row in self.bq_client.query(breakdown_sql).result()]
+        except Exception as e:
+            logger.warning("Error querying log breakdown: %s", e)
+
+        # 8. Threat Detection Trend
+        try:
+            trend_sql = f"""
+            SELECT
+              FORMAT_DATE('%m/%d', DATE(window_end)) AS date,
+              COUNT(*) AS count
+            FROM `{self.project_id}.{self.dataset_id}.alerts`
+            {alert_where}
+            GROUP BY date
+            ORDER BY date ASC
+            LIMIT 7
+            """
+            trend_rows = [dict(row.items()) for row in self.bq_client.query(trend_sql).result()]
+            metrics["threat_trend"] = [
+                {"date": r["date"], "metric": "Security Events", "count": r["count"]}
+                for r in trend_rows
+            ]
+        except Exception as e:
+            logger.warning("Error querying threat trend: %s", e)
+
+        # 9. Geographical Threat Origins (Threat Points)
+        try:
+            map_sql = f"""
+            WITH deduplicated_tickets AS (
+              SELECT * EXCEPT(rn) FROM (
+                SELECT *,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY ticket_id
+                    ORDER BY
+                      CASE WHEN human_decision IS NOT NULL AND human_decision != '' THEN 1 ELSE 2 END,
+                      COALESCE(adjudicated_at, created_at) DESC
+                  ) AS rn
+                FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
+              )
+              WHERE rn = 1
+            )
+            SELECT
+              user_id,
+              source_ip,
+              threat_score,
+              severity,
+              agent_reason
+            FROM deduplicated_tickets
+            {ticket_where}
+            ORDER BY created_at DESC
+            LIMIT 50
+            """
+            map_rows = [dict(row.items()) for row in self.bq_client.query(map_sql).result()]
+            points = []
+            for r in map_rows:
+                ip = r.get("source_ip", "")
+                geo = self._resolve_ip_geo(ip, r.get("user_id", ""))
+                points.append({
+                    "name": f"{r.get('user_id')} ({geo['country']})",
+                    "lat": geo["lat"],
+                    "lon": geo["lon"],
+                    "threat": str(r.get("agent_reason", "Perceived Threat"))[:60],
+                    "score": r.get("threat_score", 100),
+                    "color": [244, 67, 54, 220] if r.get("severity") == "CRITICAL" else [255, 152, 0, 200]
+                })
+            metrics["threat_points"] = points
+        except Exception as e:
+            logger.warning("Error querying threat points: %s", e)
+
+        return metrics
+
+    @staticmethod
+    def _resolve_ip_geo(ip: str, user_id: str) -> dict[str, Any]:
+        """Maps IP or user scenario to known geographic coordinates."""
+        known_geos = {
+            "175.45.176.10": {"country": "North Korea", "lat": 39.0392, "lon": 125.7625},
+            "175.45.177.32": {"country": "North Korea", "lat": 39.0392, "lon": 125.7625},
+            "194.26.135.68": {"country": "Russia", "lat": 55.7558, "lon": 37.6173},
+            "185.220.101.5": {"country": "Germany", "lat": 52.5200, "lon": 13.4050},
+            "74.125.70.93": {"country": "United States", "lat": 37.7749, "lon": -122.4194},
+            "74.125.10.15": {"country": "United States", "lat": 40.7128, "lon": -74.0060},
+        }
+        if ip in known_geos:
+            return known_geos[ip]
+        if "u.lewis" in user_id or "g.harris" in user_id:
+            return {"country": "North Korea", "lat": 39.0392, "lon": 125.7625}
+        if "r.patel" in user_id:
+            return {"country": "Russia", "lat": 55.7558, "lon": 37.6173}
+        if "contractor" in user_id:
+            return {"country": "Germany", "lat": 52.5200, "lon": 13.4050}
+        return {"country": "External Origin", "lat": 20.0, "lon": 0.0}
 
     def _generate_seed_history(self) -> list[dict[str, Any]]:
         """Generates realistic baseline historic tickets for the dashboard."""
