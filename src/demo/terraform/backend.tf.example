@@ -18,3 +18,4 @@ terraform {
     prefix = "cymbal-cyber/state"
   }
 }
+
