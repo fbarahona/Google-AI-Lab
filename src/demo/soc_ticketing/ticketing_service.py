@@ -613,137 +613,102 @@ class SocTicketingService:
             except Exception as e:
                 logger.warning("Cloud verdict sync warning: %s", e)
 
-        # 4. BigQuery Update (Single Source of Truth)
-        if self.bq_client is not None:
-            updated_via_dml = False
+        # 4. BigQuery Update via Immutable Event-Sourcing (Single Source of Truth)
+        # Note: BigQuery prohibits DML UPDATE/DELETE statements over rows in an active streaming buffer.
+        # We append the resolved state row directly using insert_rows_json. Deduplicating readers
+        # (fetch_historic_tickets, fetch_new_tickets, fetch_dashboard_metrics) dynamically pick
+        # the latest adjudicated row via ROW_NUMBER() windowing with zero streaming buffer errors.
+        if self.bq_client is not None and ticket_data:
             try:
-                from google.cloud import bigquery
+                soc_table_id = f"{self.project_id}.{self.dataset_id}.soc_tickets"
+                soc_columns = {
+                    "ticket_id",
+                    "created_at",
+                    "user_id",
+                    "device_id",
+                    "source_ip",
+                    "threat_score",
+                    "severity",
+                    "status",
+                    "agent_decision",
+                    "agent_reason",
+                    "mitre_tactics",
+                    "indicators_of_compromise",
+                    "screenshot_url",
+                    "structured_report",
+                    "human_decision",
+                    "human_comment",
+                    "adjudicated_at",
+                }
+                resolved_row = {
+                    k: v for k, v in ticket_data.items() if k in soc_columns
+                }
+                resolved_row["status"] = "RESOLVED"
+                resolved_row["human_decision"] = human_decision
+                resolved_row["human_comment"] = human_comment
+                resolved_row["adjudicated_at"] = now_iso
+                if not isinstance(resolved_row.get("mitre_tactics"), list):
+                    resolved_row["mitre_tactics"] = []
+                if not isinstance(
+                    resolved_row.get("indicators_of_compromise"), list
+                ):
+                    resolved_row["indicators_of_compromise"] = []
+                for req_str in [
+                    "ticket_id",
+                    "created_at",
+                    "user_id",
+                    "device_id",
+                    "source_ip",
+                    "severity",
+                    "status",
+                    "agent_decision",
+                    "agent_reason",
+                    "structured_report",
+                ]:
+                    if resolved_row.get(req_str) is None:
+                        resolved_row[req_str] = ""
 
-                query = f"""
-                UPDATE `{self.project_id}.{self.dataset_id}.soc_tickets`
-                SET
-                  status = 'RESOLVED',
-                  human_decision = @decision,
-                  human_comment = @comment,
-                  adjudicated_at = @adjudicated_at
-                WHERE ticket_id = @ticket_id
-                """
-                job_config = bigquery.QueryJobConfig(
-                    query_parameters=[
-                        bigquery.ScalarQueryParameter(
-                            "decision", "STRING", human_decision
-                        ),
-                        bigquery.ScalarQueryParameter(
-                            "comment", "STRING", human_comment
-                        ),
-                        bigquery.ScalarQueryParameter(
-                            "adjudicated_at", "STRING", now_iso
-                        ),
-                        bigquery.ScalarQueryParameter("ticket_id", "STRING", ticket_id),
-                    ]
+                self.bq_client.insert_rows_json(
+                    soc_table_id, [resolved_row], ignore_unknown_values=True
                 )
-                self.bq_client.query(query, job_config=job_config).result()
-                updated_via_dml = True
                 logger.info(
-                    "Successfully updated ticket %s in BigQuery via DML", ticket_id
+                    "Inserted resolved state row for %s into BigQuery soc_tickets",
+                    ticket_id,
                 )
-            except Exception as e:
-                logger.info(
-                    "Direct UPDATE blocked (e.g. streaming buffer). Using append resolution: %s",
-                    e,
+            except Exception as ins_err:
+                logger.warning(
+                    "Could not append resolved state row into BigQuery: %s", ins_err
                 )
 
-            # If DML UPDATE was blocked by BigQuery streaming buffer, insert the resolved row directly
-            if not updated_via_dml and ticket_data:
-                try:
-                    soc_table_id = f"{self.project_id}.{self.dataset_id}.soc_tickets"
-                    soc_columns = {
-                        "ticket_id",
-                        "created_at",
-                        "user_id",
-                        "device_id",
-                        "source_ip",
-                        "threat_score",
-                        "severity",
-                        "status",
-                        "agent_decision",
-                        "agent_reason",
-                        "mitre_tactics",
-                        "indicators_of_compromise",
-                        "screenshot_url",
-                        "structured_report",
-                        "human_decision",
-                        "human_comment",
-                        "adjudicated_at",
-                    }
-                    resolved_row = {
-                        k: v for k, v in ticket_data.items() if k in soc_columns
-                    }
-                    resolved_row["status"] = "RESOLVED"
-                    resolved_row["human_decision"] = human_decision
-                    resolved_row["human_comment"] = human_comment
-                    resolved_row["adjudicated_at"] = now_iso
-                    if not isinstance(resolved_row.get("mitre_tactics"), list):
-                        resolved_row["mitre_tactics"] = []
-                    if not isinstance(
-                        resolved_row.get("indicators_of_compromise"), list
-                    ):
-                        resolved_row["indicators_of_compromise"] = []
-                    for req_str in [
-                        "ticket_id",
-                        "created_at",
-                        "user_id",
-                        "device_id",
-                        "source_ip",
-                        "severity",
-                        "status",
-                        "agent_decision",
-                        "agent_reason",
-                        "structured_report",
-                    ]:
-                        if resolved_row.get(req_str) is None:
-                            resolved_row[req_str] = ""
-
-                    self.bq_client.insert_rows_json(
-                        soc_table_id, [resolved_row], ignore_unknown_values=True
-                    )
-                    logger.info(
-                        "Inserted resolved state row for %s into BigQuery soc_tickets",
-                        ticket_id,
-                    )
-                except Exception as ins_err:
-                    logger.warning(
-                        "Could not append resolved state row into BigQuery: %s", ins_err
-                    )
-
+            # Similarly append resolved assessment to adk_threat_assessment
             try:
-                from google.cloud import bigquery
-
-                user_id = ticket_data.get("user_id")
-                if user_id and user_id != "unknown_user":
-                    assess_query = f"""
-                    UPDATE `{self.project_id}.{self.dataset_id}.adk_threat_assessment`
-                    SET
-                      human_decision = @decision,
-                      human_reason = @comment
-                    WHERE user_id = @user_id
-                    """
-                    assess_config = bigquery.QueryJobConfig(
-                        query_parameters=[
-                            bigquery.ScalarQueryParameter(
-                                "decision", "STRING", human_decision
-                            ),
-                            bigquery.ScalarQueryParameter(
-                                "comment", "STRING", human_comment
-                            ),
-                            bigquery.ScalarQueryParameter("user_id", "STRING", user_id),
-                        ]
-                    )
-                    self.bq_client.query(
-                        assess_query, job_config=assess_config
-                    ).result()
-            except Exception as e:
-                logger.debug("adk_threat_assessment update notice: %s", e)
+                assessment_table_id = (
+                    f"{self.project_id}.{self.dataset_id}.adk_threat_assessment"
+                )
+                assessment_row = {
+                    "transaction_window_end": ticket_data.get("transaction_window_end")
+                    or now_iso,
+                    "user_id": ticket_data.get("user_id"),
+                    "device_id": ticket_data.get("device_id"),
+                    "source_ip": ticket_data.get("source_ip"),
+                    "total_2_min_threat_score": ticket_data.get("threat_score") or 0,
+                    "agent_decision": ticket_data.get("agent_decision") or "GENUINE_THREAT",
+                    "agent_reason": ticket_data.get("agent_reason"),
+                    "human_decision": human_decision,
+                    "human_reason": human_comment,
+                    "alert_payload": json.dumps(ticket_data),
+                }
+                self.bq_client.insert_rows_json(
+                    assessment_table_id, [assessment_row], ignore_unknown_values=True
+                )
+                logger.info(
+                    "Appended resolved assessment for %s into BigQuery adk_threat_assessment",
+                    ticket_data.get("user_id"),
+                )
+            except Exception as assess_err:
+                logger.debug(
+                    "adk_threat_assessment append notice: %s", assess_err
+                )
 
         return True
 
