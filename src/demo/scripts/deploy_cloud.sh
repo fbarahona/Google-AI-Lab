@@ -146,11 +146,25 @@ elif command -v docker >/dev/null 2>&1; then
   docker build -t "${IMAGE_TAG}" -f "${REPO_ROOT}/Dockerfile" "${REPO_ROOT}"
   docker push "${IMAGE_TAG}"
 elif command -v gcloud >/dev/null 2>&1; then
-  echo "Docker CLI not detected; building image remotely via Cloud Build..."
-  gcloud builds submit \
+  echo "Submitting container image build to Cloud Build (--async)..."
+  BUILD_ID=$(gcloud builds submit \
     --project="${PROJECT_ID}" \
     --tag="${IMAGE_TAG}" \
-    "${REPO_ROOT}"
+    --async \
+    --format="value(id)" \
+    "${REPO_ROOT}" | tr -d '[:space:]')
+  echo "Cloud Build job submitted: ${BUILD_ID}. Polling status..."
+  while true; do
+    BUILD_STATUS=$(gcloud builds describe "${BUILD_ID}" --project="${PROJECT_ID}" --format="value(status)" 2>/dev/null || echo "UNKNOWN")
+    if [[ "${BUILD_STATUS}" == "SUCCESS" ]]; then
+      echo "Cloud Build ${BUILD_ID} finished successfully!"
+      break
+    elif [[ "${BUILD_STATUS}" =~ ^(FAILURE|INTERNAL_ERROR|TIMEOUT|CANCELLED)$ ]]; then
+      echo "Error: Cloud Build ${BUILD_ID} failed with status: ${BUILD_STATUS}"
+      exit 1
+    fi
+    sleep 10
+  done
 else
   echo "Error: Neither docker nor gcloud is available to build and push the container."
   exit 1
