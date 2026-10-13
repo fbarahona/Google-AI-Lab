@@ -39,6 +39,10 @@ resource "google_cloud_run_v2_service" "adk_agent_service" {
         value = var.project_id
       }
       env {
+        name  = "GEMINI_API_KEY"
+        value = var.gemini_api_key
+      }
+      env {
         name  = "LOCAL_MODE"
         value = "false"
       }
@@ -68,14 +72,7 @@ resource "google_cloud_run_v2_service" "adk_agent_service" {
   depends_on = [google_project_service.required]
 }
 
-# Allow Pub/Sub Invoker SA to invoke the Cloud Run Agent Service
-resource "google_cloud_run_v2_service_iam_member" "agent_invoker" {
-  name     = google_cloud_run_v2_service.adk_agent_service.name
-  location = google_cloud_run_v2_service.adk_agent_service.location
-  project  = google_cloud_run_v2_service.adk_agent_service.project
-  role     = "roles/run.invoker"
-  member   = "serviceAccount:${google_service_account.invoker_sa.email}"
-}
+# NOTE: Invoker IAM binding (google_cloud_run_v2_service_iam_member.agent_invoker) is centralized in iam.tf
 
 # 2. Scheduled Micro-Batch Threat Detector Cloud Run Job
 resource "google_cloud_run_v2_job" "threat_detector" {
@@ -92,9 +89,9 @@ resource "google_cloud_run_v2_job" "threat_detector" {
 
       containers {
         # Set to var.agent_image if provided, otherwise placeholder until built/pushed
-        image = var.agent_image != "" ? var.agent_image : "us-docker.pkg.dev/cloudrun/container/job"
-        command = [
-          "python",
+        image   = var.agent_image != "" ? var.agent_image : "us-docker.pkg.dev/cloudrun/container/job"
+        command = ["python"]
+        args = [
           "-m",
           "adk_agent.threat_detector"
         ]
@@ -174,11 +171,4 @@ resource "google_cloud_scheduler_job" "threat_detector_schedule" {
   ]
 }
 
-# Grant Invoker SA permission to run the detector job
-resource "google_cloud_run_v2_job_iam_member" "scheduler_invokes_detector" {
-  project  = var.project_id
-  location = var.region
-  name     = google_cloud_run_v2_job.threat_detector.name
-  role     = "roles/run.invoker"
-  member   = "serviceAccount:${google_service_account.invoker_sa.email}"
-}
+# NOTE: Cloud Scheduler Job invoker IAM binding (google_cloud_run_v2_job_iam_member.scheduler_invokes_detector) is centralized in iam.tf

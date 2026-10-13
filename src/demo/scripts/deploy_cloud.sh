@@ -25,6 +25,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 TERRAFORM_DIR="${REPO_ROOT}/src/demo/terraform"
 
+# Load GEMINI_API_KEY from .env if present and not already exported in environment
+if [ -z "${GEMINI_API_KEY:-}" ] && [ -f "${REPO_ROOT}/.env" ]; then
+  GEMINI_API_KEY="$(grep -E '^GEMINI_API_KEY=' "${REPO_ROOT}/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)"
+fi
+
 # Validation guard: Verify active billing is enabled for the target GCP project
 if command -v gcloud >/dev/null 2>&1; then
   echo "Validating billing status for project: ${PROJECT_ID}..."
@@ -44,18 +49,30 @@ if command -v gcloud >/dev/null 2>&1; then
     --project="${PROJECT_ID}" --quiet || true
 fi
 
-IMAGE_TAG="${REGION}-docker.pkg.dev/${PROJECT_ID}/cymbal-cyber/cymbal-cyber-agent:latest"
+ARTIFACT_REPO="${ARTIFACT_REPO:-cymbal-cyber}"
+IMAGE_TAG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REPO}/cymbal-cyber-agent:latest"
 
 echo "================================================================="
 echo "Building unified container image: ${IMAGE_TAG}"
 echo "Project: ${PROJECT_ID} | Region: ${REGION}"
 echo "================================================================="
 
-# Explicitly configure Docker credential helper for Artifact Registry regional domain.
-# Standard 'gcloud auth configure-docker' only registers legacy gcr.io hosts.
+# Pre-flight Docker & Artifact Registry Setup:
+# 1. Explicitly configure Docker credential helper for Artifact Registry regional domain.
+#    Standard 'gcloud auth configure-docker' only registers legacy gcr.io hosts.
+# 2. Ensure Artifact Registry repository exists prior to pushing to prevent 404 Not Found.
 if command -v gcloud >/dev/null 2>&1; then
   echo "Configuring Docker authentication for Artifact Registry (${REGION}-docker.pkg.dev)..."
   gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+  if ! gcloud artifacts repositories describe "${ARTIFACT_REPO}" --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+    echo "Provisioning Artifact Registry repository (${ARTIFACT_REPO})..."
+    gcloud artifacts repositories create "${ARTIFACT_REPO}" \
+      --repository-format=docker \
+      --location="${REGION}" \
+      --description="Cymbal Cyber Agent Registry" \
+      --project="${PROJECT_ID}"
+  fi
 fi
 
 # 1. Build & Push Image (anchored to repository root where Dockerfile resides)
@@ -83,10 +100,26 @@ if command -v terraform >/dev/null 2>&1 && [ -d "${TERRAFORM_DIR}" ]; then
     echo "Initializing Terraform..."
     terraform -chdir="${TERRAFORM_DIR}" init
   fi
+
+  # If Artifact Registry repository exists in GCP, ensure it is imported into Terraform state to prevent 409 Conflict
+  if command -v gcloud >/dev/null 2>&1 && gcloud artifacts repositories describe "${ARTIFACT_REPO}" --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+    if ! terraform -chdir="${TERRAFORM_DIR}" state list 2>/dev/null | grep -q "google_artifact_registry_repository.agent_repo"; then
+      echo "Importing Artifact Registry repository into Terraform state..."
+      terraform -chdir="${TERRAFORM_DIR}" import \
+        -var="project_id=${PROJECT_ID}" \
+        -var="region=${REGION}" \
+        -var="agent_image=${IMAGE_TAG}" \
+        -var="gemini_api_key=${GEMINI_API_KEY:-}" \
+        google_artifact_registry_repository.agent_repo \
+        "projects/${PROJECT_ID}/locations/${REGION}/repositories/${ARTIFACT_REPO}" 2>/dev/null || true
+    fi
+  fi
+
   terraform -chdir="${TERRAFORM_DIR}" apply -auto-approve \
     -var="project_id=${PROJECT_ID}" \
     -var="region=${REGION}" \
-    -var="agent_image=${IMAGE_TAG}"
+    -var="agent_image=${IMAGE_TAG}" \
+    -var="gemini_api_key=${GEMINI_API_KEY:-}"
 fi
 
 # 3. Direct update of Cloud Run Service & Job (ensures active revision rollout)
@@ -118,7 +151,7 @@ echo ""
 echo "================================================================="
 echo "Live Verification Workflow:"
 echo "1. Publish synthetic threat telemetry to Pub/Sub:"
-echo "   python -m src.demo.data_generator.log_generator --mode threat --threat-type malicious --user u.lewis --destination pubsub"
+echo "   PYTHONPATH=src uv run python -m demo.data_generator.log_generator --mode threat --threat-type malicious --user u.lewis --sink=pubsub"
 echo ""
 echo "2. Allow 60s for BigQuery Storage Write API buffer ingestion:"
 echo "   echo \"Allowing 60s for BigQuery streaming buffer ingestion...\" && sleep 60"

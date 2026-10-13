@@ -87,3 +87,10 @@ variable "agent_image" {
   default     = ""
 }
 
+variable "gemini_api_key" {
+  description = "Optional Gemini API key for Google AI Studio / Gemini API authentication. If omitted (empty string), Vertex AI workload identity authentication is used."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+

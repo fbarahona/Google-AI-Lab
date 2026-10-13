@@ -141,15 +141,33 @@ resource "google_service_account_iam_member" "agent_self_impersonation" {
 }
 
 
-# 3. Pub/Sub Push Subscription Invoker Service Account
-# Role: Dedicated identity used by Pub/Sub push subscription to authenticate to Agent Runtime endpoint.
+# 3. Pub/Sub Push Subscription & Cloud Scheduler Invoker Service Account
+# Role: Dedicated identity used by Pub/Sub push subscription and Cloud Scheduler to authenticate to Agent Runtime endpoint and trigger the Threat Detector job.
 resource "google_service_account" "invoker_sa" {
   project      = var.project_id
   account_id   = var.invoker_service_account_id
-  display_name = "Cymbal Cyber Pub/Sub Invoker SA"
-  description  = "Dedicated identity used by Pub/Sub push subscription to authenticate to Agent Runtime endpoint."
+  display_name = "Cymbal Cyber Pub/Sub & Scheduler Invoker SA"
+  description  = "Dedicated identity used by Pub/Sub and Cloud Scheduler to invoke Cloud Run services and jobs."
 
   depends_on = [google_project_service.required]
+}
+
+# Allow Invoker SA to invoke the Cloud Run Agent Service (Pub/Sub push webhook)
+resource "google_cloud_run_v2_service_iam_member" "agent_invoker" {
+  name     = google_cloud_run_v2_service.adk_agent_service.name
+  location = google_cloud_run_v2_service.adk_agent_service.location
+  project  = google_cloud_run_v2_service.adk_agent_service.project
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.invoker_sa.email}"
+}
+
+# Allow Invoker SA to trigger the threat detector Cloud Run Job (Cloud Scheduler 5-minute trigger)
+resource "google_cloud_run_v2_job_iam_member" "scheduler_invokes_detector" {
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_job.threat_detector.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.invoker_sa.email}"
 }
 
 

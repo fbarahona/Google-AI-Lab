@@ -138,24 +138,24 @@ Modular CLI tool and Python API generating high-fidelity security logs:
 
 ```bash
 # Generate batch benign logs locally:
-python -m src.demo.data_generator.log_generator --mode benign --batch-size 100 --destination local
+PYTHONPATH=src uv run python -m demo.data_generator.log_generator --mode benign --batch-size 100 --sink=local
 
 # Stream benign logs directly to BigQuery:
-python -m src.demo.data_generator.log_generator --mode continuous --rate 50 --destination bigquery
+PYTHONPATH=src uv run python -m demo.data_generator.log_generator --mode continuous --rate 50 --sink=bigquery
 
 # Upload batch logs to Cloud Storage:
-python -m src.demo.data_generator.log_generator --mode benign --batch-size 250 --destination gcs --bucket cymbal-cyber-raw-logs_<PROJECT_ID>
+PYTHONPATH=src uv run python -m demo.data_generator.log_generator --mode benign --batch-size 250 --sink=gcs --bucket cymbal-cyber-raw-logs_<PROJECT_ID>
 
 # Inject ad-hoc MALICIOUS threat scenario directly to BigQuery:
-python -m src.demo.data_generator.log_generator --mode threat --threat-type malicious --user u.lewis --destination bigquery
+PYTHONPATH=src uv run python -m demo.data_generator.log_generator --mode threat --threat-type malicious --user u.lewis --sink=bigquery
 
 # Or publish to Pub/Sub (allow 60s for BigQuery Storage Write API buffer ingestion before detection):
-python -m src.demo.data_generator.log_generator --mode threat --threat-type malicious --user u.lewis --destination pubsub
+PYTHONPATH=src uv run python -m demo.data_generator.log_generator --mode threat --threat-type malicious --user u.lewis --sink=pubsub
 echo "Allowing 60s for BigQuery streaming buffer ingestion..." && sleep 60
-python -m adk_agent.threat_detector --lookback 15 --min-score 100
+uv run python -m adk_agent.threat_detector --lookback 15 --min-score 100
 
 # Inject ad-hoc FALSE POSITIVE threat scenario:
-python -m src.demo.data_generator.log_generator --mode threat --threat-type false_positive --user l.taylor --destination bigquery
+PYTHONPATH=src uv run python -m demo.data_generator.log_generator --mode threat --threat-type false_positive --user l.taylor --sink=bigquery
 ```
 
 ---

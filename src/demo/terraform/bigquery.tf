@@ -26,7 +26,7 @@ resource "google_bigquery_table" "user_access_events" {
   table_id                 = "user_access_events"
   description              = "Logs user login attempts and session creation, linking users to assigned internal IPs."
   deletion_protection      = false
-  require_partition_filter = true
+  require_partition_filter = false
 
   dynamic "encryption_configuration" {
     for_each = var.kms_key_name != "" ? [var.kms_key_name] : []
@@ -63,7 +63,7 @@ resource "google_bigquery_table" "network_events" {
   table_id                 = "network_events"
   description              = "Logs granular network activity like DNS queries, connections, and file transfers."
   deletion_protection      = false
-  require_partition_filter = true
+  require_partition_filter = false
 
   dynamic "encryption_configuration" {
     for_each = var.kms_key_name != "" ? [var.kms_key_name] : []

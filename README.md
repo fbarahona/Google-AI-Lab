@@ -247,7 +247,7 @@ gcloud run jobs update threat-detector \
 
 # 4. Live Cloud Verification Workflow:
 # Step A: Publish synthetic threat scenario to Pub/Sub
-python -m src.demo.data_generator.log_generator --mode threat --threat-type malicious --user u.lewis --destination pubsub
+PYTHONPATH=src uv run python -m demo.data_generator.log_generator --mode threat --threat-type malicious --user u.lewis --sink=pubsub
 
 # Step B: Allow 60s for BigQuery Storage Write API buffer ingestion
 # (Freshly provisioned BigQuery subscriptions take 30-90s to commit records to streaming buffers)
