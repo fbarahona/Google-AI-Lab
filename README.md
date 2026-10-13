@@ -332,6 +332,75 @@ gcloud run jobs execute threat-detector \
 
 ---
 
+### 🖥️ Accessing the Cloud Consoles (SOC Portal & ADK Web Playground)
+
+Both Cloud Run services are deployed with IAM protection (`--no-allow-unauthenticated`) to secure internal security telemetry. You can access the consoles using either a **local authenticated proxy** (recommended) or **direct HTTPS**.
+
+#### Option 1: Proxied Access via `gcloud` (Recommended)
+The `gcloud run services proxy` command tunnels traffic locally through your authenticated `gcloud` identity, bypassing browser authentication headers and CORS issues:
+
+* **Interactive SOC Analyst Console (Streamlit):**
+  ```bash
+  gcloud run services proxy cymbal-cyber-soc-console \
+    --project="<PROJECT_ID>" \
+    --region="<REGION>" \
+    --port=8501
+  ```
+  Open **`http://localhost:8501`** in your browser to view the incident queue, triage tickets, and examine forensic evidence.
+
+* **ADK Agent Web Playground & FastAPI Backend:**
+  ```bash
+  gcloud run services proxy cymbal-cyber-adk-agent \
+    --project="<PROJECT_ID>" \
+    --region="<REGION>" \
+    --port=8080
+  ```
+  Open **`http://localhost:8080`** for the interactive ADK agent chat playground, or **`http://localhost:8080/docs`** for interactive Swagger API documentation.
+
+#### Option 2: Direct HTTPS Access
+
+1. **Retrieve the live service URLs:**
+   ```bash
+   # SOC Analyst Console URL
+   gcloud run services describe cymbal-cyber-soc-console \
+     --project="<PROJECT_ID>" \
+     --region="<REGION>" \
+     --format="value(status.url)"
+
+   # ADK Multi-Agent Service URL
+   gcloud run services describe cymbal-cyber-adk-agent \
+     --project="<PROJECT_ID>" \
+     --region="<REGION>" \
+     --format="value(status.url)"
+   ```
+
+2. **Open in Web Browser:**
+   Navigate directly to the printed HTTPS URL in any browser logged into your Google account (ensure your user account has `roles/run.invoker`).
+
+3. **Programmatic / API Invocation (OIDC Bearer Token):**
+   When invoking webhooks or testing endpoints directly from the command line:
+   ```bash
+   ADK_URL="$(gcloud run services describe cymbal-cyber-adk-agent --project="<PROJECT_ID>" --region="<REGION>" --format="value(status.url)")"
+   TOKEN="$(gcloud auth print-identity-token)"
+
+   curl -X POST "${ADK_URL}/apps/adk_agent/trigger/pubsub" \
+     -H "Authorization: Bearer ${TOKEN}" \
+     -H "Content-Type: application/json" \
+     -d '{"ping": true}'
+   ```
+
+4. **Optional: Public Access for Live Demos / Workshops:**
+   To permit unauthenticated web access for public presentations:
+   ```bash
+   gcloud run services add-iam-policy-binding cymbal-cyber-soc-console \
+     --project="<PROJECT_ID>" \
+     --region="<REGION>" \
+     --member="allUsers" \
+     --role="roles/run.invoker"
+   ```
+
+---
+
 ## 💰 FinOps: Cost Control & Teardown
 
 > **⚠️ Cloud Resource Billing Warning:**  
