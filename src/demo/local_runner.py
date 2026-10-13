@@ -33,7 +33,7 @@ from src.demo.soc_ticketing.ticketing_service import SocTicketingService
 LOCAL_DATA_DIR = "./local_demo_data"
 LOGS_DIR = os.path.join(LOCAL_DATA_DIR, "logs")
 ESCALATIONS_DIR = os.path.join(LOCAL_DATA_DIR, "escalations")
-SCREENSHOTS_DIR = "src/demo/user_screenshots"
+SCREENSHOTS_DIR = os.path.join(LOCAL_DATA_DIR, "user_screenshots") if os.path.exists(os.path.join(LOCAL_DATA_DIR, "user_screenshots")) else "src/demo/user_screenshots"
 
 
 def step_1_generate_logs(threat_type: str = "malicious", target_user: str = "u.lewis") -> dict[str, Any]:

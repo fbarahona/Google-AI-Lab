@@ -132,7 +132,7 @@ resource "google_bigquery_reservation_assignment" "continuous_query_assignment" 
 
 # 3. Dataflow Streaming Ingestion Pipeline (Optional, gated behind enable_dataflow_streaming)
 # Default ingestion uses zero-compute Pub/Sub -> BigQuery subscriptions (see pubsub.tf).
-# For live demos, prefer the on-demand launcher: scripts/run_dataflow_demo.sh
+# For live demos, prefer the on-demand launcher: src/demo/scripts/run_dataflow_demo.sh
 resource "google_pubsub_subscription" "raw_logs_dataflow_sub" {
   count                      = var.enable_dataflow_streaming ? 1 : 0
   project                    = var.project_id
@@ -186,7 +186,7 @@ locals {
 resource "google_storage_bucket_object" "seed_screenshots" {
   for_each = toset(local.seed_screenshots)
   name     = each.key
-  source   = "${path.module}/../user_screenshots/${each.key}"
+  source   = fileexists("${path.module}/../../../local_demo_data/user_screenshots/${each.key}") ? "${path.module}/../../../local_demo_data/user_screenshots/${each.key}" : "${path.module}/../user_screenshots/${each.key}"
   bucket   = google_storage_bucket.screenshots.name
 }
 

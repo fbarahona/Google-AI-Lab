@@ -12,7 +12,7 @@ agents-cli eval run
 
 ### Custom Dataset
 ```bash
-agents-cli eval run --dataset tests/eval/datasets/custom-dataset.json --metrics general_quality
+agents-cli eval run --dataset src/demo/tests/eval/datasets/custom-dataset.json --metrics general_quality
 ```
 
 ### Decoupled Runs
@@ -21,7 +21,7 @@ Split the run when you want traces in a custom location, or want to re-grade
 existing traces without re-running the agent:
 
 ```bash
-agents-cli eval generate --dataset tests/eval/datasets/custom-dataset.json --output custom_traces/
+agents-cli eval generate --dataset src/demo/tests/eval/datasets/custom-dataset.json --output custom_traces/
 agents-cli eval grade --metrics general_quality --traces custom_traces/
 ```
 

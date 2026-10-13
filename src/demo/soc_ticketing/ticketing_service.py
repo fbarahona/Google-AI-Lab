@@ -348,6 +348,7 @@ class SocTicketingService:
     def _generate_seed_history(self) -> list[dict[str, Any]]:
         """Generates realistic baseline historic tickets for the dashboard."""
         now = datetime.now(UTC)
+        screenshots_dir = "local_demo_data/user_screenshots" if os.path.exists("local_demo_data/user_screenshots") else "src/demo/user_screenshots"
         return [
             {
                 "ticket_id": "SOC-TICKET-g.harris-1791600100",
@@ -367,7 +368,7 @@ class SocTicketingService:
                 "agent_reason": "C2 beaconing and unauthorized PowerShell script execution detected from known Lazarus Group IP.",
                 "mitre_tactics": ["Command and Control", "Execution", "Initial Access"],
                 "indicators_of_compromise": ["175.45.176.10", "c2-server-1.xyz"],
-                "screenshot_url": "src/demo/user_screenshots/g.harris.png",
+                "screenshot_url": f"{screenshots_dir}/g.harris.png",
                 "structured_report": "### Security Incident Report\n* **User:** g.harris\n* **Verdict:** Genuine Threat\n* **Evidence:** Visual terminal confirmed Mimikatz execution.",
                 "human_decision": "Genuine Threat",
                 "human_comment": "Confirmed credential theft and lateral movement attempt. Workstation isolated and credentials revoked.",
@@ -391,7 +392,7 @@ class SocTicketingService:
                 "agent_reason": "Automated IT backup script triggering threshold; no hostile foreign IPs or escalation detected.",
                 "mitre_tactics": ["Discovery"],
                 "indicators_of_compromise": ["74.125.70.93"],
-                "screenshot_url": "src/demo/user_screenshots/l.taylor.png",
+                "screenshot_url": f"{screenshots_dir}/l.taylor.png",
                 "structured_report": "### Security Incident Report\n* **User:** l.taylor\n* **Verdict:** False Positive\n* **Evidence:** Standard maintenance script.",
                 "human_decision": "False Positive",
                 "human_comment": "Scheduled maintenance routine verified with DevOps team.",
@@ -415,7 +416,7 @@ class SocTicketingService:
                 "agent_reason": "High-risk domain connection to 'my-payload-downloader.ru' and multiple login failures.",
                 "mitre_tactics": ["Initial Access", "Command and Control"],
                 "indicators_of_compromise": ["194.26.135.68", "my-payload-downloader.ru"],
-                "screenshot_url": "src/demo/user_screenshots/r.patel.png",
+                "screenshot_url": f"{screenshots_dir}/r.patel.png",
                 "structured_report": "### Security Incident Report\n* **User:** r.patel\n* **Origin:** Moscow, Russia\n* **Domain:** my-payload-downloader.ru",
                 "human_decision": "Genuine Threat",
                 "human_comment": "Blocked external IP at perimeter firewall. Domain sinkholed.",
@@ -439,7 +440,7 @@ class SocTicketingService:
                 "agent_reason": "Elevated outbound file transfer volume during quarter-end financial reconciliation.",
                 "mitre_tactics": ["Collection"],
                 "indicators_of_compromise": ["74.125.10.15"],
-                "screenshot_url": "src/demo/user_screenshots/c.wilson.png",
+                "screenshot_url": f"{screenshots_dir}/c.wilson.png",
                 "structured_report": "### Security Incident Report\n* **User:** c.wilson\n* **Type:** Financial data transfer",
                 "human_decision": "False Positive",
                 "human_comment": "Approved quarterly financial ledger sync with authorized external auditor.",
@@ -463,7 +464,7 @@ class SocTicketingService:
                 "agent_reason": "Connection originating from known Tor exit node with port scanning activity.",
                 "mitre_tactics": ["Reconnaissance"],
                 "indicators_of_compromise": ["185.220.101.5"],
-                "screenshot_url": "src/demo/user_screenshots/temp_contractor.png",
+                "screenshot_url": f"{screenshots_dir}/temp_contractor.png",
                 "structured_report": "### Security Incident Report\n* **User:** temp_contractor\n* **IP:** Tor exit node",
                 "human_decision": "Genuine Threat",
                 "human_comment": "Contractor VPN session terminated. Tor IP added to dynamic blocklist.",

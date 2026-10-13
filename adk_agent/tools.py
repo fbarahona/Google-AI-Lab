@@ -707,7 +707,13 @@ def get_visual_analysis_for_user(gcs_uri: str, tool_context: ToolContext | None 
     if is_local_mode or "file://" in gcs_uri:
         # Local forensic inspection: Extract OCR metadata from local screenshot file
         filename = gcs_uri.split("/")[-1].replace(".png", "")
-        local_path = os.path.join(os.getcwd(), "src", "demo", "user_screenshots", f"{filename}.png")
+        file_path_candidate = gcs_uri.replace("file://", "") if gcs_uri.startswith("file://") else ""
+        if file_path_candidate and os.path.exists(file_path_candidate):
+            local_path = file_path_candidate
+        elif os.path.exists(os.path.join(os.getcwd(), "local_demo_data", "user_screenshots", f"{filename}.png")):
+            local_path = os.path.join(os.getcwd(), "local_demo_data", "user_screenshots", f"{filename}.png")
+        else:
+            local_path = os.path.join(os.getcwd(), "src", "demo", "user_screenshots", f"{filename}.png")
         ocr_chunks = read_png_text_chunks(local_path)
         if "forensic_ocr_text" in ocr_chunks:
             visual_text = f"Forensic Desktop OCR Output:\n{ocr_chunks['forensic_ocr_text']}"

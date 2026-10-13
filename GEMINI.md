@@ -35,16 +35,16 @@ The project features an end-to-end near real-time cybersecurity threat detection
 │   └── demo/                       # Cybersecurity AI & Cloud Architecture demo
 │       ├── data_generator/         # Synthetic log generator & threat scenarios
 │       ├── data_pipeline/          # BigQuery Continuous Queries & Dataflow pipelines
+│       ├── scripts/                # Deployment, Continuous Query, & Dataflow demo launcher scripts
 │       ├── soc_ticketing/          # SOC ticketing service & Streamlit analyst console
 │       ├── terraform/              # GCP Terraform IaC modules (zero-cost default)
-│       ├── tests/                  # Demo unit tests (agent structure, tools, logs, SOC)
+│       ├── tests/                  # Test suites (unit, integration, eval datasets)
+│       │   ├── unit/               # Unit tests (agent structure, tools, logs, security, detector)
+│       │   ├── integration/        # Agent and server integration tests
+│       │   └── eval/               # agents-cli evaluation datasets and configs
 │       ├── user_screenshots/       # Forensic desktop screenshots for vision agent
 │       ├── local_runner.py         # Zero-cloud end-to-end demo runner
 │       └── other_code/             # Supporting SQL queries and analyst scripts
-├── tests/
-│   ├── unit/                       # Project unit tests (model config, dummy tests)
-│   ├── integration/                # Agent integration tests
-│   └── eval/                       # agents-cli evaluation datasets and configs
 ├── agents-cli-manifest.yaml        # agents-cli configuration (agent_directory: adk_agent)
 ├── pyproject.toml                  # Python package configuration & dependencies
 ├── pytest.ini                      # Pytest runner configuration
@@ -82,11 +82,11 @@ Environment variables are loaded automatically at startup via `python-dotenv`:
 ### 1. Automated Tests
 Run unit tests, agent structure tests, and demo tests with `uv`:
 ```bash
-# Run all unit and demo test suites
-uv run pytest src/demo/tests/ tests/unit/
+# Run all unit tests
+uv run pytest src/demo/tests/unit/
 
 # Run integration tests (requires cloud credentials/ADC)
-uv run pytest tests/integration/
+uv run pytest src/demo/tests/integration/
 ```
 
 ### 2. Interactive Agent Testing (agents-cli)
@@ -132,9 +132,9 @@ python -m adk_agent.threat_detector --lookback 15 --min-score 100
 
 1. **Understand Requirements:** Identify tools, constraints, and success criteria.
 2. **Build and Implement:** Implement agent logic in `adk_agent/`. Use `agents-cli playground` for interactive validation.
-3. **Evaluation Loop:** Run `agents-cli eval run` against datasets in `tests/eval/`. Inspect cluster failures with `agents-cli eval analyze` and auto-tune with `agents-cli eval optimize`.
-4. **Pre-Deployment Tests:** Run `uv run pytest src/demo/tests/ tests/unit/`.
-5. **Deploy:** Deploy container image to Cloud Run service and threat detector job with `./src/demo/deploy_cloud.sh` (or `gcloud run jobs update threat-detector --image <image>`).
+3. **Evaluation Loop:** Run `agents-cli eval run` against datasets in `src/demo/tests/eval/`. Inspect cluster failures with `agents-cli eval analyze` and auto-tune with `agents-cli eval optimize`.
+4. **Pre-Deployment Tests:** Run `uv run pytest src/demo/tests/unit/`.
+5. **Deploy:** Deploy container image to Cloud Run service and threat detector job with `./src/demo/scripts/deploy_cloud.sh` (or `gcloud run jobs update threat-detector --image <image>`).
 
 ---
 
@@ -145,4 +145,4 @@ python -m adk_agent.threat_detector --lookback 15 --min-score 100
 - **Model Configuration:** Read the model from `os.getenv("GEMINI_MODEL", "gemini-3.8-flash")` and load environment variables with `dotenv.load_dotenv()`. NEVER hardcode deprecated models.
 - **Tool Imports:** Import tool instances rather than modules (e.g., `from google.adk.tools import google_search`).
 - **Python Execution:** Always execute Python commands and tests with `uv run` (e.g., `uv run pytest`).
-- **Verify All Changes:** Always run `uv run pytest src/demo/tests/ tests/unit/` after modifying code to confirm zero regressions.
+- **Verify All Changes:** Always run `uv run pytest src/demo/tests/unit/` after modifying code to confirm zero regressions.

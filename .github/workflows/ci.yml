@@ -34,7 +34,7 @@ jobs:
       - name: Run Pytest
         env:
           LOCAL_MODE: "true"
-        run: uv run pytest src/demo/tests/ tests/unit/
+        run: uv run pytest src/demo/tests/unit/
 
   terraform:
     name: Terraform Validation & Linting

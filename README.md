@@ -131,16 +131,16 @@ This project deploys the ADK Multi-Agent Team to **Google Cloud Run** rather tha
 │   └── demo/                       # Cybersecurity AI & Cloud Architecture demo
 │       ├── data_generator/         # Synthetic log generator & threat scenarios
 │       ├── data_pipeline/          # BigQuery Continuous Queries & Dataflow pipelines
+│       ├── scripts/                # Deployment, Continuous Query, & Dataflow demo launcher scripts
 │       ├── soc_ticketing/          # SOC ticketing service & Streamlit analyst console
 │       ├── terraform/              # GCP Terraform IaC modules
-│       ├── tests/                  # Demo unit tests (agent structure, tools, logs, SOC)
+│       ├── tests/                  # Consolidated test suites (unit, integration, eval datasets)
+│       │   ├── unit/               # Unit tests (agent structure, tools, logs, security, detector)
+│       │   ├── integration/        # Agent and server integration tests
+│       │   └── eval/               # agents-cli evaluation datasets and configs
 │       ├── user_screenshots/       # Forensic desktop screenshots for vision agent
 │       ├── local_runner.py         # Zero-cloud end-to-end demo runner
 │       └── other_code/             # Supporting SQL queries and analyst scripts
-├── tests/
-│   ├── unit/                       # Project unit tests (model config, dummy tests)
-│   ├── integration/                # Agent integration tests
-│   └── eval/                       # agents-cli evaluation datasets and configs
 ├── agents-cli-manifest.yaml        # agents-cli configuration (agent_directory: adk_agent)
 ├── pyproject.toml                  # Python package configuration & dependencies
 ├── pytest.ini                      # Pytest runner configuration
@@ -179,8 +179,8 @@ LOCAL_MODE=true agents-cli playground
 
 ### 4. Run Automated Tests
 ```bash
-# Run all unit and demo test suites
-uv run pytest src/demo/tests/ tests/unit/
+# Run all unit tests
+uv run pytest src/demo/tests/unit/
 ```
 
 ---
@@ -225,7 +225,7 @@ After provisioning the infrastructure with Terraform (`terraform apply`), build 
 
 ```bash
 # Option A: One-command deployment script
-./src/demo/deploy_cloud.sh <PROJECT_ID> <REGION>
+./src/demo/scripts/deploy_cloud.sh <PROJECT_ID> <REGION>
 
 # Option B: Manual gcloud deployment
 IMAGE_TAG="${GOOGLE_CLOUD_LOCATION}-docker.pkg.dev/${GOOGLE_CLOUD_PROJECT}/cymbal-cyber/cymbal-cyber-agent:latest"
@@ -271,9 +271,9 @@ gcloud run jobs execute threat-detector \
 > - **Default Trigger Path ($0/mo continuous):** Cloud Scheduler triggers the `threat-detector` Cloud Run Job every 5 minutes via OAuth, evaluating 2-minute tumbling windows closed >60s ago via BigQuery MERGE and pushing detected alerts to the `cymbal_cyber_alerts` Pub/Sub topic without requiring slot reservations. With the 5-minute scheduler cadence and 60-second late-data allowance, alerts arrive ~5 to 7 minutes after event occurrence.
 > - **BigQuery Continuous Queries (`enable_continuous_query = true`):** Requires a 100-slot Enterprise Edition reservation. Slot reservations bill 24/7 at **~$0.06/slot-hour = ~$6.00/hour (~$4,320/month) whether or not a query is running**. Canceling the continuous query job saves no money; only disabling the reservation in Terraform (`enable_continuous_query = false && terraform apply`) stops slot billing. When enabled, submit the query via:
 >   ```bash
->   ./src/demo/data_pipeline/launch_continuous_query.sh <PROJECT_ID>
+>   ./src/demo/scripts/launch_continuous_query.sh <PROJECT_ID>
 >   ```
-> - **Dataflow Streaming Pipeline (`scripts/run_dataflow_demo.sh`):** An optional Apache Beam ETL ingestion pipeline from Pub/Sub into BigQuery event tables. Replaces direct Pub/Sub BigQuery subscriptions (do not run both concurrently to avoid duplicate events). Provisions continuous streaming worker VMs and throughput (**~$100–$300/month**). Gated off by default.
+> - **Dataflow Streaming Pipeline (`src/demo/scripts/run_dataflow_demo.sh`):** An optional Apache Beam ETL ingestion pipeline from Pub/Sub into BigQuery event tables. Replaces direct Pub/Sub BigQuery subscriptions (do not run both concurrently to avoid duplicate events). Provisions continuous streaming worker VMs and throughput (**~$100–$300/month**). Gated off by default.
 > - **Cloud Run & Vertex AI:** Billed on-demand per request execution duration and token usage.
 
 ### Automated Budget Alert

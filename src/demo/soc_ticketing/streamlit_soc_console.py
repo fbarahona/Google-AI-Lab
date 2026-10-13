@@ -169,7 +169,7 @@ st_autorefresh(interval=8 * 1000, key="soc_autorefresh")
 # Service initialization
 PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo")
 DATASET_ID = os.getenv("BIGQUERY_DATASET", "Cymbal_Cyber")
-SCREENSHOTS_DIR = "src/demo/user_screenshots"
+SCREENSHOTS_DIR = "local_demo_data/user_screenshots" if os.path.exists("local_demo_data/user_screenshots") else "src/demo/user_screenshots"
 
 @st.cache_resource
 def get_service() -> SocTicketingService:
@@ -429,7 +429,7 @@ elif st.session_state.active_nav_tab == "New Tickets":
                     agent_decision="PERCEIVED_THREAT",
                     agent_reason="APT attack: Mimikatz detected, North Korea C2 connection.",
                     structured_report="### Security Incident Report\n* **User:** u.lewis\n* **Severity:** CRITICAL",
-                    screenshot_url="src/demo/user_screenshots/u.lewis.png"
+                    screenshot_url=f"{SCREENSHOTS_DIR}/u.lewis.png"
                 )
                 service.create_and_dispatch_ticket(t_obj)
                 st.session_state.status_toast = f"Injected ticket {new_t_id}!"

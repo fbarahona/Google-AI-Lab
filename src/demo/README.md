@@ -121,7 +121,7 @@ Open `http://localhost:8501` to view the incident queue, inspect desktop screens
 
 ### 3. Run Automated Tests
 ```bash
-uv run pytest src/demo/tests/ tests/unit/
+uv run pytest src/demo/tests/unit/
 ```
 
 ---
@@ -170,6 +170,10 @@ python -m src.demo.data_generator.log_generator --mode threat --threat-type fals
   Continuous stream query running temporal joins and aggregating 2-minute tumbling windows into `cymbal_cyber_alerts`. Requires 100 Enterprise Edition reservation slots.
 - **GCS to BigQuery Batch Loader:** [`data_pipeline/gcs_to_bigquery_loader.py`](data_pipeline/gcs_to_bigquery_loader.py)
   Loads NDJSON log files from Cloud Storage into partitioned/clustered tables.
+- **Operational & Demo Scripts (`src/demo/scripts/`):**
+  - [`scripts/deploy_cloud.sh`](scripts/deploy_cloud.sh): Builds unified container image and deploys Cloud Run Service & Job.
+  - [`scripts/launch_continuous_query.sh`](scripts/launch_continuous_query.sh): Submits continuous query with Enterprise slots.
+  - [`scripts/run_dataflow_demo.sh`](scripts/run_dataflow_demo.sh): Submits optional Apache Beam Dataflow streaming pipeline.
 
 ---
 
@@ -285,7 +289,7 @@ While the local Python runner is free, deploying the live infrastructure via Ter
 - **Default Trigger Path ($0/mo continuous):** Cloud Scheduler triggers the `threat-detector` Cloud Run Job every 5 minutes via OAuth, evaluating 2-minute tumbling windows closed >60s ago via BigQuery MERGE and pushing detected alerts to the `cymbal_cyber_alerts` Pub/Sub topic without requiring slot reservations. With the 5-minute scheduler interval and 60-second late-data allowance, expect alert latency of ~5 to 7 minutes from initial event occurrence.
 - **BigQuery Continuous Queries (`enable_continuous_query = true`):** Requires a 100-slot Enterprise Edition reservation. Slot reservations bill continuously 24/7 at **~$0.06/slot-hour = ~$6.00/hour (~$4,320/month) whether or not a query is running**. Canceling the continuous query job saves no money; only disabling the reservation in Terraform (`enable_continuous_query = false && terraform apply`) stops slot charges. When enabled, launch the streaming query using:
   ```bash
-  ./data_pipeline/launch_continuous_query.sh <PROJECT_ID>
+  ./src/demo/scripts/launch_continuous_query.sh <PROJECT_ID>
   ```
 - **Dataflow Streaming (`enable_dataflow_streaming = true`):** Provisions streaming compute worker VMs and throughput (**~$100–$300/month**). Gated off by default.
 - **Cloud Run & Vertex AI:** Billed on-demand per request execution duration and token usage.
@@ -308,6 +312,6 @@ terraform destroy -var="project_id=<PROJECT_ID>"
 ### 7. Unit Tests & Verification
 Run the automated test suite with `uv`:
 ```bash
-uv run pytest src/demo/tests/ tests/unit/
+uv run pytest src/demo/tests/unit/
 ```
 Validates models, agent configurations, security DML guards, SQL parameterization, signed URL generation, threat generators, and ticketing operations.

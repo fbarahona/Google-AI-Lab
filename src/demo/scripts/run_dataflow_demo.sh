@@ -22,9 +22,13 @@ PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-${1:-}}"
 PROJECT_ID="$(echo -n "${PROJECT_ID}" | tr -d '[:space:]' | tr -d '"' | tr -d "'" | tr '[:upper:]' '[:lower:]')"
 if [[ -z "${PROJECT_ID}" ]]; then
   echo "❌ Error: GOOGLE_CLOUD_PROJECT environment variable is not set and no project ID argument provided."
-  echo "Usage: $0 [PROJECT_ID]"
+  echo "Usage: ./src/demo/scripts/run_dataflow_demo.sh [PROJECT_ID]"
   exit 1
 fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+
 REGION="${GOOGLE_CLOUD_LOCATION:-us-east1}"
 REGION="$(echo -n "${REGION}" | tr -d '[:space:]' | tr -d '"' | tr -d "'" | tr '[:upper:]' '[:lower:]')"
 DATASET_ID="${BIGQUERY_DATASET:-Cymbal_Cyber}"
@@ -41,7 +45,7 @@ echo "Staging GCS:   gs://${BUCKET_NAME}/dataflow_staging"
 echo "Notice:        Replaces direct Pub/Sub-to-BQ subscriptions for ETL demo"
 echo "=========================================================="
 
-python3 src/demo/data_pipeline/pubsub_to_bigquery_dataflow.py \
+python3 "${REPO_ROOT}/src/demo/data_pipeline/pubsub_to_bigquery_dataflow.py" \
   --project="${PROJECT_ID}" \
   --runner="DataflowRunner" \
   --region="${REGION}" \

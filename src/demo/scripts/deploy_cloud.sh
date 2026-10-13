@@ -17,9 +17,12 @@ export REGION="$(echo -n "${REGION}" | tr -d '[:space:]' | tr -d '"' | tr -d "'"
 
 if [ -z "${PROJECT_ID}" ]; then
   echo "Error: GOOGLE_CLOUD_PROJECT environment variable or argument is required."
-  echo "Usage: ./src/demo/deploy_cloud.sh <PROJECT_ID> [REGION]"
+  echo "Usage: ./src/demo/scripts/deploy_cloud.sh <PROJECT_ID> [REGION]"
   exit 1
 fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
 # Validation guard: Verify active billing is enabled for the target GCP project
 if command -v gcloud >/dev/null 2>&1; then
@@ -49,7 +52,7 @@ fi
 gcloud builds submit \
   --project="${PROJECT_ID}" \
   --tag="${IMAGE_TAG}" \
-  .
+  "${REPO_ROOT}"
 
 echo "================================================================="
 echo "Updating Cloud Run Service: cymbal-cyber-adk-agent"

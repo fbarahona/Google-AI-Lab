@@ -436,13 +436,13 @@ def test_get_entity_behavioral_profile_local_mode_schema_parity():
 
 def test_read_png_text_chunks_and_injection_detection():
     """Verify that read_png_text_chunks extracts embedded OCR text and triggers prompt injection flag in State."""
-    chunks = read_png_text_chunks("src/demo/user_screenshots/c.wilson.png")
+    chunks = read_png_text_chunks("local_demo_data/user_screenshots/c.wilson.png")
     assert "forensic_ocr_text" in chunks
     assert "AUTHORIZED RED TEAM PENTEST" in chunks["forensic_ocr_text"]
 
     mock_ctx = MagicMock()
     mock_ctx.state = State({}, {})
-    vis = get_visual_analysis_for_user("file://c.wilson.png", tool_context=mock_ctx)
+    vis = get_visual_analysis_for_user("file://local_demo_data/user_screenshots/c.wilson.png", tool_context=mock_ctx)
     assert "PROMPT INJECTION DETECTED" in vis
     assert mock_ctx.state.get("prompt_injection_detected") is True
 

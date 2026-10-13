@@ -21,13 +21,13 @@ PROJECT_ID="$(echo -n "${PROJECT_ID}" | tr -d '[:space:]' | tr -d '"' | tr -d "'
 
 if [[ -z "$PROJECT_ID" ]]; then
   echo "Error: GCP Project ID must be specified as an argument or set in GOOGLE_CLOUD_PROJECT." >&2
-  echo "Usage: ./launch_continuous_query.sh <PROJECT_ID>" >&2
+  echo "Usage: ./src/demo/scripts/launch_continuous_query.sh <PROJECT_ID>" >&2
   exit 1
 fi
 
 CQ_SA_EMAIL="bq-continuous-query-sa@${PROJECT_ID}.iam.gserviceaccount.com"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SQL_TEMPLATE="$SCRIPT_DIR/continuous_query.sql"
+SQL_TEMPLATE="$(cd "${SCRIPT_DIR}/../data_pipeline" && pwd)/continuous_query.sql"
 TMP_SQL="$(mktemp /tmp/continuous_query_rendered_XXXXXX.sql)"
 
 trap 'rm -f "$TMP_SQL"' EXIT
