@@ -161,6 +161,16 @@ resource "google_cloud_run_v2_service_iam_member" "agent_invoker" {
   member   = "serviceAccount:${google_service_account.invoker_sa.email}"
 }
 
+# Allow deployer identity to invoke the Cloud Run Agent Service (Web Playground & Swagger docs)
+resource "google_cloud_run_v2_service_iam_member" "agent_deployer_invoker" {
+  count    = var.deployer_member != "" ? 1 : 0
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.adk_agent_service.name
+  role     = "roles/run.invoker"
+  member   = var.deployer_member
+}
+
 # Allow Invoker SA to trigger the threat detector Cloud Run Job (Cloud Scheduler 5-minute trigger)
 resource "google_cloud_run_v2_job_iam_member" "scheduler_invokes_detector" {
   project  = var.project_id
@@ -178,6 +188,15 @@ resource "google_cloud_run_v2_service_iam_member" "soc_console_deployer_invoker"
   name     = google_cloud_run_v2_service.soc_console_service.name
   role     = "roles/run.invoker"
   member   = var.deployer_member
+}
+
+# Allow Invoker SA to invoke the SOC Console
+resource "google_cloud_run_v2_service_iam_member" "soc_console_invoker_sa" {
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.soc_console_service.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.invoker_sa.email}"
 }
 
 

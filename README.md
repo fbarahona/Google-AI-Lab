@@ -347,19 +347,27 @@ The `gcloud run services proxy` command tunnels traffic locally through your aut
 
 * **Interactive SOC Analyst Console (Streamlit):**
   ```bash
+  SOC_URL="$(gcloud run services describe cymbal-cyber-soc-console --project="<PROJECT_ID>" --region="<REGION>" --format="value(status.url)")"
+  TOKEN="$(gcloud auth print-identity-token --impersonate-service-account=pubsub-invoker-sa@<PROJECT_ID>.iam.gserviceaccount.com --audiences="${SOC_URL}" 2>/dev/null)"
+
   gcloud run services proxy cymbal-cyber-soc-console \
     --project="<PROJECT_ID>" \
     --region="<REGION>" \
-    --port=8501
+    --port=8501 \
+    --token="${TOKEN}"
   ```
   Open **`http://localhost:8501`** in your browser to view the incident queue, triage tickets, and examine forensic evidence.
 
 * **ADK Agent Web Playground & FastAPI Backend:**
   ```bash
+  AGENT_URL="$(gcloud run services describe cymbal-cyber-adk-agent --project="<PROJECT_ID>" --region="<REGION>" --format="value(status.url)")"
+  TOKEN="$(gcloud auth print-identity-token --impersonate-service-account=pubsub-invoker-sa@<PROJECT_ID>.iam.gserviceaccount.com --audiences="${AGENT_URL}" 2>/dev/null)"
+
   gcloud run services proxy cymbal-cyber-adk-agent \
     --project="<PROJECT_ID>" \
     --region="<REGION>" \
-    --port=8080
+    --port=8080 \
+    --token="${TOKEN}"
   ```
   Open **`http://localhost:8080`** for the interactive ADK agent chat playground, or **`http://localhost:8080/docs`** for interactive Swagger API documentation.
 
