@@ -339,6 +339,12 @@ Both Cloud Run services are deployed with IAM protection (`--no-allow-unauthenti
 #### Option 1: Proxied Access via `gcloud` (Recommended)
 The `gcloud run services proxy` command tunnels traffic locally through your authenticated `gcloud` identity, bypassing browser authentication headers and CORS issues:
 
+> [!TIP]
+> If your environment has `gcloud` installed via a package manager (`apt-get`), install the proxy component once before running:
+> ```bash
+> sudo apt-get update && sudo apt-get install -y google-cloud-cli-cloud-run-proxy
+> ```
+
 * **Interactive SOC Analyst Console (Streamlit):**
   ```bash
   gcloud run services proxy cymbal-cyber-soc-console \
