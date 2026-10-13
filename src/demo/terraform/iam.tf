@@ -308,7 +308,7 @@ resource "google_service_account" "detector_sa" {
   depends_on = [google_project_service.required]
 }
 
-resource "google_project_iam_member" "detector_job_user" {
+resource "google_project_iam_member" "detector_sa_bq_job_user" {
   project = var.project_id
   role    = "roles/bigquery.jobUser"
   member  = "serviceAccount:${google_service_account.detector_sa.email}"

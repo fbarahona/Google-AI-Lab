@@ -121,6 +121,9 @@ Open `http://localhost:8501` to view incident queues, inspect desktop screenshot
 ```bash
 # Run single detection cycle:
 python -m adk_agent.threat_detector --lookback 15 --min-score 100
+
+# Note: When testing live Pub/Sub telemetry, wait 60s for BigQuery Storage Write API buffer ingestion:
+# echo "Allowing 60s for BigQuery streaming buffer ingestion..." && sleep 60
 ```
 
 ---

@@ -245,7 +245,16 @@ gcloud run jobs update threat-detector \
   --region="${GOOGLE_CLOUD_LOCATION}" \
   --image="${IMAGE_TAG}"
 
-# 4. (Optional) Manually execute a detection pass (Cloud-Only, requires GCP credentials)
+# 4. Live Cloud Verification Workflow:
+# Step A: Publish synthetic threat scenario to Pub/Sub
+python -m src.demo.data_generator.log_generator --mode threat --threat-type malicious --user u.lewis --destination pubsub
+
+# Step B: Allow 60s for BigQuery Storage Write API buffer ingestion
+# (Freshly provisioned BigQuery subscriptions take 30-90s to commit records to streaming buffers)
+echo "Allowing 60s for BigQuery streaming buffer ingestion..."
+sleep 60
+
+# Step C: Execute a detection pass
 gcloud run jobs execute threat-detector \
   --project="${GOOGLE_CLOUD_PROJECT}" \
   --region="${GOOGLE_CLOUD_LOCATION}"

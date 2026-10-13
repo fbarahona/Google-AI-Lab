@@ -249,9 +249,9 @@ def main():
                         help="Target user ID for threat injection (e.g. u.lewis, g.harris, l.taylor).")
     parser.add_argument("--rate", type=int, default=50,
                         help="Target events per second for continuous streaming.")
-    parser.add_argument("--batch-size", type=int, default=100,
+    parser.add_argument("--batch-size", "--count", dest="batch_size", type=int, default=100,
                         help="Number of iterations or events to generate in batch mode.")
-    parser.add_argument("--destination", choices=["bigquery", "gcs", "pubsub", "local"], default="local",
+    parser.add_argument("--destination", "--sink", dest="destination", choices=["bigquery", "gcs", "pubsub", "local"], default="local",
                         help="Destination sink for generated logs.")
     parser.add_argument("--project-id", type=str, default=os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo"),
                         help="GCP Project ID.")
@@ -278,6 +278,8 @@ def main():
         total = sink.write_events(access_events, network_events)
         logger.info("Successfully injected %d %s events (%d access, %d network).",
                     total, args.threat_type.upper(), len(access_events), len(network_events))
+        if args.destination == "pubsub":
+            logger.info("Ingestion Notice: BigQuery managed subscriptions commit via Storage Write API. Allow ~60s for streaming buffer commits before invoking detection jobs.")
 
     elif args.mode == "continuous":
         logger.info("Starting continuous benign stream at ~%d events/sec. Press Ctrl+C to stop.", args.rate)

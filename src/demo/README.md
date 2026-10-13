@@ -146,8 +146,13 @@ python -m src.demo.data_generator.log_generator --mode continuous --rate 50 --de
 # Upload batch logs to Cloud Storage:
 python -m src.demo.data_generator.log_generator --mode benign --batch-size 250 --destination gcs --bucket cymbal-cyber-raw-logs_<PROJECT_ID>
 
-# Inject ad-hoc MALICIOUS threat scenario:
+# Inject ad-hoc MALICIOUS threat scenario directly to BigQuery:
 python -m src.demo.data_generator.log_generator --mode threat --threat-type malicious --user u.lewis --destination bigquery
+
+# Or publish to Pub/Sub (allow 60s for BigQuery Storage Write API buffer ingestion before detection):
+python -m src.demo.data_generator.log_generator --mode threat --threat-type malicious --user u.lewis --destination pubsub
+echo "Allowing 60s for BigQuery streaming buffer ingestion..." && sleep 60
+python -m adk_agent.threat_detector --lookback 15 --min-score 100
 
 # Inject ad-hoc FALSE POSITIVE threat scenario:
 python -m src.demo.data_generator.log_generator --mode threat --threat-type false_positive --user l.taylor --destination bigquery

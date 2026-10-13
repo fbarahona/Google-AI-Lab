@@ -503,11 +503,13 @@ async def handle_pubsub_trigger(
 
     # 2. Extract alert_id contract attribute or construct from payload
     alert_id = None
+    pubsub_msg_id = None
     if isinstance(raw_body, dict):
         msg_obj = raw_body.get("message")
         if isinstance(msg_obj, dict):
             attrs = msg_obj.get("attributes") or {}
             alert_id = attrs.get("alert_id")
+            pubsub_msg_id = msg_obj.get("messageId") or msg_obj.get("message_id")
     if not alert_id:
         alert_id = alert_data.get("alert_id")
     if not alert_id:
@@ -515,7 +517,7 @@ async def handle_pubsub_trigger(
         if window_end and user_id:
             alert_id = f"{user_id}|{window_end}"
 
-    message_id = alert_id or request.headers.get("ce-id") or request.headers.get("x-goog-pubsub-message-id") or f"{user_id}-{int(time.time())}"
+    message_id = alert_id or pubsub_msg_id or request.headers.get("ce-id") or request.headers.get("x-goog-pubsub-message-id") or f"{user_id}-{int(time.time())}"
 
     # 3. Fast-path in-memory and durable BigQuery alerts.status checks
     _cleanup_expired_messages()

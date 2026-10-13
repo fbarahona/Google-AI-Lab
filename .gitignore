@@ -221,4 +221,3 @@ output_logs/
 local_demo_data/logs/
 local_demo_data/escalations/*.json
 local_demo_data/escalations/history/*.json
-pytest.ini

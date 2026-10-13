@@ -68,6 +68,7 @@ resource "google_cloud_run_v2_job" "threat_detector" {
   depends_on = [
     google_project_service.required,
     google_service_account.detector_sa,
+    google_project_iam_member.detector_sa_bq_job_user,
     google_bigquery_table.alerts,
     google_pubsub_topic.alerts_topic
   ]
