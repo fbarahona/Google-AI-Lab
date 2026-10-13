@@ -30,6 +30,12 @@ if [ -z "${GEMINI_API_KEY:-}" ] && [ -f "${REPO_ROOT}/.env" ]; then
   GEMINI_API_KEY="$(grep -E '^GEMINI_API_KEY=' "${REPO_ROOT}/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)"
 fi
 
+if [ -z "${GEMINI_API_KEY:-}" ]; then
+  echo "WARNING: GEMINI_API_KEY is unset. The agent will rely on Vertex AI / Application Default Credentials."
+else
+  echo "GEMINI_API_KEY detected and will be injected into Cloud Run."
+fi
+
 # Validation guard: Verify active billing is enabled for the target GCP project
 if command -v gcloud >/dev/null 2>&1; then
   echo "Validating billing status for project: ${PROJECT_ID}..."

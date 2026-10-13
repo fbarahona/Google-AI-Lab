@@ -38,9 +38,12 @@ resource "google_cloud_run_v2_service" "adk_agent_service" {
         name  = "GOOGLE_CLOUD_PROJECT"
         value = var.project_id
       }
-      env {
-        name  = "GEMINI_API_KEY"
-        value = var.gemini_api_key
+      dynamic "env" {
+        for_each = var.gemini_api_key != "" ? [var.gemini_api_key] : []
+        content {
+          name  = "GEMINI_API_KEY"
+          value = env.value
+        }
       }
       env {
         name  = "LOCAL_MODE"
