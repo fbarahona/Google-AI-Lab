@@ -1,6 +1,7 @@
 """
 Unit tests for SOC Ticketing System models and operations.
 """
+import os
 import shutil
 from unittest.mock import MagicMock
 
@@ -75,7 +76,9 @@ def test_soc_ticketing_fetch_historic_and_verdict(tmp_path, monkeypatch):
     hist_dir = queue_dir / "history"
     hist_dir.mkdir(parents=True)
     monkeypatch.setenv("LOCAL_QUEUE_DIR", str(queue_dir))
-    shutil.copytree("./local_demo_data/escalations/history", str(hist_dir), dirs_exist_ok=True)
+    src_history = "./local_demo_data/escalations/history"
+    if os.path.exists(src_history):
+        shutil.copytree(src_history, str(hist_dir), dirs_exist_ok=True)
 
     service = SocTicketingService(project_id="test-project", dataset_id="Test_Dataset")
 
