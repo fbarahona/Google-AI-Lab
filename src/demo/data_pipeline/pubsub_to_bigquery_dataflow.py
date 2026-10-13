@@ -47,14 +47,16 @@ def build_pipeline_runner(
     project_id: str | None = None,
     input_subscription: str | None = None,
     dataset_id: str = "Cymbal_Cyber",
-    runner: str = "DirectRunner"
+    runner: str = "DirectRunner",
 ):
     """
     Configures and returns the Apache Beam pipeline definition.
     Compatible with DirectRunner (local development) and DataflowRunner (GCP managed).
     """
     project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo")
-    input_subscription = input_subscription or f"projects/{project_id}/subscriptions/raw_logs_to_bq_sub"
+    input_subscription = (
+        input_subscription or f"projects/{project_id}/subscriptions/raw_logs_to_bq_sub"
+    )
     try:
         import apache_beam as beam
         from apache_beam.options.pipeline_options import (
@@ -63,7 +65,9 @@ def build_pipeline_runner(
             StandardOptions,
         )
     except ImportError:
-        logger.warning("apache-beam is not installed in the local environment. Returning None.")
+        logger.warning(
+            "apache-beam is not installed in the local environment. Returning None."
+        )
         return None
 
     pipeline_options = PipelineOptions()
@@ -93,27 +97,29 @@ def build_pipeline_runner(
     messages = (
         p
         | "ReadFromPubSub" >> beam.io.ReadFromPubSub(subscription=input_subscription)
-        | "RouteEvents" >> beam.ParDo(RouteFn()).with_outputs(
-            RouteFn.OUTPUT_TAG_ACCESS,
-            RouteFn.OUTPUT_TAG_NETWORK
+        | "RouteEvents"
+        >> beam.ParDo(RouteFn()).with_outputs(
+            RouteFn.OUTPUT_TAG_ACCESS, RouteFn.OUTPUT_TAG_NETWORK
         )
     )
 
     (
         messages[RouteFn.OUTPUT_TAG_ACCESS]
-        | "WriteAccessToBQ" >> beam.io.WriteToBigQuery(
+        | "WriteAccessToBQ"
+        >> beam.io.WriteToBigQuery(
             table=access_table_spec,
             write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
-            create_disposition=beam.io.BigQueryDisposition.CREATE_NEVER
+            create_disposition=beam.io.BigQueryDisposition.CREATE_NEVER,
         )
     )
 
     (
         messages[RouteFn.OUTPUT_TAG_NETWORK]
-        | "WriteNetworkToBQ" >> beam.io.WriteToBigQuery(
+        | "WriteNetworkToBQ"
+        >> beam.io.WriteToBigQuery(
             table=network_table_spec,
             write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
-            create_disposition=beam.io.BigQueryDisposition.CREATE_NEVER
+            create_disposition=beam.io.BigQueryDisposition.CREATE_NEVER,
         )
     )
 
@@ -122,20 +128,26 @@ def build_pipeline_runner(
 
 if __name__ == "__main__":
     _default_proj = os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo")
-    parser = argparse.ArgumentParser(description="Pub/Sub to BigQuery Streaming Dataflow Job")
+    parser = argparse.ArgumentParser(
+        description="Pub/Sub to BigQuery Streaming Dataflow Job"
+    )
     parser.add_argument("--project-id", default=_default_proj)
     parser.add_argument("--dataset", default="Cymbal_Cyber")
-    parser.add_argument("--subscription", default=f"projects/{_default_proj}/subscriptions/raw_logs_to_bq_sub")
-    parser.add_argument("--runner", default="DirectRunner", choices=["DirectRunner", "DataflowRunner"])
+    parser.add_argument(
+        "--subscription",
+        default=f"projects/{_default_proj}/subscriptions/raw_logs_to_bq_sub",
+    )
+    parser.add_argument(
+        "--runner", default="DirectRunner", choices=["DirectRunner", "DataflowRunner"]
+    )
     args = parser.parse_args()
 
     pipeline = build_pipeline_runner(
         project_id=args.project_id,
         input_subscription=args.subscription,
         dataset_id=args.dataset,
-        runner=args.runner
+        runner=args.runner,
     )
     if pipeline:
         result = pipeline.run()
         result.wait_until_finish()
-

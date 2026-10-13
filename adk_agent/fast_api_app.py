@@ -51,6 +51,7 @@ def _should_enable_cloud_telemetry() -> bool:
         return False
     try:
         import google.auth
+
         google.auth.default()
         return True
     except Exception:
@@ -119,12 +120,16 @@ def extract_pubsub_payload(raw_body: Any) -> dict[str, Any]:
         try:
             raw_body = json.loads(raw_body.decode("utf-8"))
         except Exception as exc:
-            raise ValueError(f"Malformed request body: payload is not valid JSON ({exc})") from exc
+            raise ValueError(
+                f"Malformed request body: payload is not valid JSON ({exc})"
+            ) from exc
     elif isinstance(raw_body, str):
         try:
             raw_body = json.loads(raw_body)
         except Exception as exc:
-            raise ValueError(f"Malformed request body: payload is not valid JSON ({exc})") from exc
+            raise ValueError(
+                f"Malformed request body: payload is not valid JSON ({exc})"
+            ) from exc
 
     if not isinstance(raw_body, dict):
         raise ValueError("Malformed request body: root must be a JSON object")
@@ -140,9 +145,13 @@ def extract_pubsub_payload(raw_body: Any) -> dict[str, Any]:
                 decoded_text = decoded_bytes.decode("utf-8")
                 payload = json.loads(decoded_text)
             except Exception as exc:
-                raise ValueError(f"Malformed Pub/Sub message data: payload is not valid JSON ({exc})") from exc
+                raise ValueError(
+                    f"Malformed Pub/Sub message data: payload is not valid JSON ({exc})"
+                ) from exc
         if not isinstance(payload, dict):
-            raise ValueError("Malformed Pub/Sub message data: inner JSON must be an object")
+            raise ValueError(
+                "Malformed Pub/Sub message data: inner JSON must be an object"
+            )
         attrs = msg.get("attributes")
         if isinstance(attrs, dict):
             for k, v in attrs.items():
@@ -199,6 +208,7 @@ def get_alert_status_info(alert_id: str) -> dict[str, Any] | None:
         from google.cloud import bigquery
 
         from adk_agent.tools import DATASET_ID, PROJECT_ID, get_bq_client
+
         bq = get_bq_client()
         query = f"""
             SELECT status, updated_at
@@ -237,16 +247,25 @@ def update_alert_status(
         from google.cloud import bigquery
 
         from adk_agent.tools import DATASET_ID, PROJECT_ID, get_bq_client
+
         bq = get_bq_client()
 
         if alert_data:
-            user_id = alert_data.get("user_id") or (alert_id.split("|")[0] if "|" in alert_id else "unknown")
+            user_id = alert_data.get("user_id") or (
+                alert_id.split("|")[0] if "|" in alert_id else "unknown"
+            )
             engine = alert_data.get("engine") or "cq"
             device_id = alert_data.get("device_id") or "endpoint-unknown"
             source_ip = alert_data.get("source_ip") or "0.0.0.0"
             window_start = alert_data.get("window_start") or ""
-            window_end = alert_data.get("window_end") or (alert_id.split("|")[1] if "|" in alert_id else "")
-            threat_score = int(alert_data.get("total_2_min_threat_score") or alert_data.get("threat_score") or 0)
+            window_end = alert_data.get("window_end") or (
+                alert_id.split("|")[1] if "|" in alert_id else ""
+            )
+            threat_score = int(
+                alert_data.get("total_2_min_threat_score")
+                or alert_data.get("threat_score")
+                or 0
+            )
             high_priv = alert_data.get("high_privilege_request_count")
             malicious_cmd = alert_data.get("malicious_command_count")
             malicious_dns = alert_data.get("malicious_dns_count")
@@ -282,12 +301,22 @@ def update_alert_status(
                     bigquery.ScalarQueryParameter("user_id", "STRING", user_id),
                     bigquery.ScalarQueryParameter("device_id", "STRING", device_id),
                     bigquery.ScalarQueryParameter("source_ip", "STRING", source_ip),
-                    bigquery.ScalarQueryParameter("window_start", "STRING", window_start),
+                    bigquery.ScalarQueryParameter(
+                        "window_start", "STRING", window_start
+                    ),
                     bigquery.ScalarQueryParameter("window_end", "STRING", window_end),
-                    bigquery.ScalarQueryParameter("threat_score", "INT64", threat_score),
-                    bigquery.ScalarQueryParameter("high_priv_count", "INT64", high_priv),
-                    bigquery.ScalarQueryParameter("malicious_cmd_count", "INT64", malicious_cmd),
-                    bigquery.ScalarQueryParameter("malicious_dns_count", "INT64", malicious_dns),
+                    bigquery.ScalarQueryParameter(
+                        "threat_score", "INT64", threat_score
+                    ),
+                    bigquery.ScalarQueryParameter(
+                        "high_priv_count", "INT64", high_priv
+                    ),
+                    bigquery.ScalarQueryParameter(
+                        "malicious_cmd_count", "INT64", malicious_cmd
+                    ),
+                    bigquery.ScalarQueryParameter(
+                        "malicious_dns_count", "INT64", malicious_dns
+                    ),
                     bigquery.ScalarQueryParameter("payload", "STRING", payload_str),
                 ],
                 maximum_bytes_billed=100 * 1024 * 1024,
@@ -306,9 +335,13 @@ def update_alert_status(
                 maximum_bytes_billed=100 * 1024 * 1024,
             )
         bq.query(query, job_config=job_config).result()
-        logger.info("Updated alert_id '%s' status to '%s' in BigQuery.", alert_id, new_status)
+        logger.info(
+            "Updated alert_id '%s' status to '%s' in BigQuery.", alert_id, new_status
+        )
     except Exception as e:
-        logger.warning("Could not update alerts.status for alert_id %s: %s", alert_id, e)
+        logger.warning(
+            "Could not update alerts.status for alert_id %s: %s", alert_id, e
+        )
 
 
 async def _run_agent_investigation(
@@ -353,7 +386,9 @@ def verify_incoming_oidc_token(request: Request) -> dict[str, Any]:
     and Cloud Scheduler endpoints to guarantee caller identity authenticity.
     Bypassed in local simulation mode (LOCAL_MODE=true) or when authentication is disabled.
     """
-    if os.getenv("LOCAL_MODE", "false").lower() in ("true", "1") or os.getenv("DISABLE_AUTH", "false").lower() in ("true", "1"):
+    if os.getenv("LOCAL_MODE", "false").lower() in ("true", "1") or os.getenv(
+        "DISABLE_AUTH", "false"
+    ).lower() in ("true", "1"):
         return {"email": "local-dev@internal", "local": True}
 
     auth_header = request.headers.get("Authorization")
@@ -378,8 +413,12 @@ def verify_incoming_oidc_token(request: Request) -> dict[str, Any]:
                 root_uri = f"{parts[0]}//{parts[2]}"
                 candidate_audiences.append(root_uri)
             else:
-                candidate_audiences.append(f"{expected_audience.rstrip('/')}/apps/adk_agent/trigger/pubsub")
-                candidate_audiences.append(f"{expected_audience.rstrip('/')}/trigger/pubsub")
+                candidate_audiences.append(
+                    f"{expected_audience.rstrip('/')}/apps/adk_agent/trigger/pubsub"
+                )
+                candidate_audiences.append(
+                    f"{expected_audience.rstrip('/')}/trigger/pubsub"
+                )
 
             last_exc = None
             for aud in candidate_audiences:
@@ -396,7 +435,9 @@ def verify_incoming_oidc_token(request: Request) -> dict[str, Any]:
                 raise last_exc
         else:
             # Fallback: derive candidate audiences accounting for Cloud Run TLS termination / proxy headers
-            host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+            host = request.headers.get("x-forwarded-host") or request.headers.get(
+                "host"
+            )
             proto = request.headers.get("x-forwarded-proto", "https")
             candidate_audiences = []
             if host:
@@ -423,11 +464,15 @@ def verify_incoming_oidc_token(request: Request) -> dict[str, Any]:
                     last_exc = e
 
             if not claims:
-                raise last_exc or ValueError("OIDC token verification failed for all candidate audiences.")
+                raise last_exc or ValueError(
+                    "OIDC token verification failed for all candidate audiences."
+                )
 
         # Verify caller email is verified by Google
         if not claims.get("email_verified"):
-            logger.warning("Inbound OIDC JWT rejected: email_verified claim is not true.")
+            logger.warning(
+                "Inbound OIDC JWT rejected: email_verified claim is not true."
+            )
             raise HTTPException(
                 status_code=403,
                 detail="Invalid OIDC bearer token: caller email is not verified.",
@@ -492,14 +537,18 @@ async def handle_pubsub_trigger(
         ) from err
     user_id = alert_data.get("user_id") or "pubsub-automator"
     session_id = f"pubsub-{user_id}-{int(time.time())}"
-    prompt_text = f"Investigate incoming continuous security alert: {json.dumps(alert_data)}"
+    prompt_text = (
+        f"Investigate incoming continuous security alert: {json.dumps(alert_data)}"
+    )
 
     # 1. Runner Readiness: Check first! If unready, return 503 so Pub/Sub retries without marking dedup
     runner: Runner = getattr(app.state, "runner", None)
     app_name: str = getattr(app.state, "agent_app_name", "adk_agent")
 
     if not runner:
-        logger.warning("Runner not yet initialized in app.state; returning 503 to trigger Pub/Sub retry.")
+        logger.warning(
+            "Runner not yet initialized in app.state; returning 503 to trigger Pub/Sub retry."
+        )
         return JSONResponse(
             status_code=503,
             content={
@@ -521,17 +570,30 @@ async def handle_pubsub_trigger(
     if not alert_id:
         alert_id = alert_data.get("alert_id")
     if not alert_id:
-        window_end = alert_data.get("window_end") or alert_data.get("transaction_window_end") or ""
+        window_end = (
+            alert_data.get("window_end")
+            or alert_data.get("transaction_window_end")
+            or ""
+        )
         if window_end and user_id:
             alert_id = f"{user_id}|{window_end}"
 
-    message_id = alert_id or pubsub_msg_id or request.headers.get("ce-id") or request.headers.get("x-goog-pubsub-message-id") or f"{user_id}-{int(time.time())}"
+    message_id = (
+        alert_id
+        or pubsub_msg_id
+        or request.headers.get("ce-id")
+        or request.headers.get("x-goog-pubsub-message-id")
+        or f"{user_id}-{int(time.time())}"
+    )
 
     # 3. Fast-path in-memory and durable BigQuery alerts.status checks
     _cleanup_expired_messages()
 
     if message_id in _COMPLETED_MESSAGES:
-        logger.info("Duplicate Pub/Sub message already completed in-memory (%s); returning 200 DUPLICATE_ACK.", message_id)
+        logger.info(
+            "Duplicate Pub/Sub message already completed in-memory (%s); returning 200 DUPLICATE_ACK.",
+            message_id,
+        )
         return JSONResponse(
             status_code=200,
             content={
@@ -550,7 +612,10 @@ async def handle_pubsub_trigger(
 
             # If already DONE: skip and ACK immediately
             if current_status == "DONE":
-                logger.info("Alert '%s' is marked DONE in BigQuery alerts table; returning 200 DUPLICATE_ACK.", alert_id)
+                logger.info(
+                    "Alert '%s' is marked DONE in BigQuery alerts table; returning 200 DUPLICATE_ACK.",
+                    alert_id,
+                )
                 _record_completed_message(message_id)
                 return JSONResponse(
                     status_code=200,
@@ -576,7 +641,10 @@ async def handle_pubsub_trigger(
                         pass
 
                 if not is_stale:
-                    logger.warning("Alert '%s' currently INVESTIGATING in BigQuery (< 10 min ago); returning 409 to trigger Pub/Sub retry.", alert_id)
+                    logger.warning(
+                        "Alert '%s' currently INVESTIGATING in BigQuery (< 10 min ago); returning 409 to trigger Pub/Sub retry.",
+                        alert_id,
+                    )
                     return JSONResponse(
                         status_code=409,
                         content={
@@ -586,10 +654,16 @@ async def handle_pubsub_trigger(
                         },
                     )
                 else:
-                    logger.warning("Alert '%s' was INVESTIGATING but timed out (> 10 min); re-attempting.", alert_id)
+                    logger.warning(
+                        "Alert '%s' was INVESTIGATING but timed out (> 10 min); re-attempting.",
+                        alert_id,
+                    )
 
     if message_id in _IN_PROGRESS_MESSAGES:
-        logger.warning("Pub/Sub message currently in-progress in-memory (%s); returning 409.", message_id)
+        logger.warning(
+            "Pub/Sub message currently in-progress in-memory (%s); returning 409.",
+            message_id,
+        )
         return JSONResponse(
             status_code=409,
             content={
@@ -602,7 +676,9 @@ async def handle_pubsub_trigger(
     # Transition status to INVESTIGATING
     _record_in_progress_message(message_id)
     if alert_id:
-        await asyncio.to_thread(update_alert_status, alert_id, "INVESTIGATING", alert_data)
+        await asyncio.to_thread(
+            update_alert_status, alert_id, "INVESTIGATING", alert_data
+        )
 
     # 4. Synchronous Execution by Default (with guaranteed state cleanup in finally)
     try:
@@ -629,14 +705,21 @@ async def handle_pubsub_trigger(
             },
         )
     except Exception as exc:
-        logger.error("Pub/Sub agent investigation failed for session %s: %s", session_id, exc)
+        logger.error(
+            "Pub/Sub agent investigation failed for session %s: %s", session_id, exc
+        )
         # On failure: reset status back to RETRY_PENDING so Pub/Sub retries are not rejected with 409
         # while preventing the scheduled threat detector from republishing the alert prematurely.
         if alert_id:
             try:
-                await asyncio.to_thread(update_alert_status, alert_id, "RETRY_PENDING", alert_data)
+                await asyncio.to_thread(
+                    update_alert_status, alert_id, "RETRY_PENDING", alert_data
+                )
             except Exception as reset_err:
-                logger.warning("Could not reset alert status to RETRY_PENDING on failure: %s", reset_err)
+                logger.warning(
+                    "Could not reset alert status to RETRY_PENDING on failure: %s",
+                    reset_err,
+                )
         raise HTTPException(
             status_code=500,
             detail="Internal server error during alert investigation.",

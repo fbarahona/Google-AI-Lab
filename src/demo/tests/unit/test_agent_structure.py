@@ -1,6 +1,7 @@
 """
 Unit tests for ADK Multi-Agent Architecture and Configurations.
 """
+
 from adk_agent.agent import (
     bq_investigation_agent,
     google_search_agent,
@@ -13,7 +14,10 @@ from adk_agent.agent import (
 def test_google_search_agent_specification():
     """Validates the exact required name, description, and tools for google_search_agent."""
     assert google_search_agent.name == "google_search_agent"
-    assert google_search_agent.description == "Agent that researches IP addresses from security alerts."
+    assert (
+        google_search_agent.description
+        == "Agent that researches IP addresses from security alerts."
+    )
     tool_names = [getattr(t, "name", str(t)) for t in google_search_agent.tools]
     assert any("google_search" in tn for tn in tool_names)
 
@@ -22,7 +26,10 @@ def test_bq_investigation_agent_specification():
     """Validates the exact required name, description, and tools for bq_investigation_agent."""
     assert bq_investigation_agent.name == "bq_investigation_agent"
     assert "BigQuery" in bq_investigation_agent.description
-    tool_names = [getattr(t, "__name__", getattr(t, "name", str(t))) for t in bq_investigation_agent.tools]
+    tool_names = [
+        getattr(t, "__name__", getattr(t, "name", str(t)))
+        for t in bq_investigation_agent.tools
+    ]
     assert any("get_entity_behavioral_profile" in tn for tn in tool_names)
     assert not any("execute_sql" in tn for tn in tool_names)
     assert len(bq_investigation_agent.tools) == 1

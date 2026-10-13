@@ -24,12 +24,16 @@ from typing import Any
 from google.cloud import bigquery, pubsub_v1
 
 logger = logging.getLogger("ThreatDetectorJob")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
 
 PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("PROJECT_ID", "local-demo")
 DATASET_ID = os.getenv("BIGQUERY_DATASET", "Cymbal_Cyber")
 ALERTS_TOPIC = os.getenv("ALERTS_TOPIC", "cymbal_cyber_alerts")
-DEFAULT_MAX_BYTES_BILLED = int(os.getenv("BQ_MAX_BYTES_BILLED", "524288000"))  # 500 MB scan ceiling
+DEFAULT_MAX_BYTES_BILLED = int(
+    os.getenv("BQ_MAX_BYTES_BILLED", "524288000")
+)  # 500 MB scan ceiling
 
 
 def format_utc_timestamp(dt: Any) -> str:
@@ -60,30 +64,49 @@ class ThreatDetector:
         creds = None
         try:
             from src.demo.soc_ticketing.ticketing_service import get_gcp_credentials
+
             creds = get_gcp_credentials()
         except Exception:
             pass
 
-        self.bq_client = bigquery.Client(project=project_id, credentials=creds) if creds else bigquery.Client(project=project_id)
-        self.publisher = pubsub_v1.PublisherClient(credentials=creds) if creds else pubsub_v1.PublisherClient()
+        self.bq_client = (
+            bigquery.Client(project=project_id, credentials=creds)
+            if creds
+            else bigquery.Client(project=project_id)
+        )
+        self.publisher = (
+            pubsub_v1.PublisherClient(credentials=creds)
+            if creds
+            else pubsub_v1.PublisherClient()
+        )
         self.topic_path = self.publisher.topic_path(project_id, topic_id)
 
-    def run_detection_cycle(self, lookback_minutes: int = 15, min_score: int = 100) -> int:
+    def run_detection_cycle(
+        self, lookback_minutes: int = 15, min_score: int = 100
+    ) -> int:
         """
         Executes an idempotent micro-batch detection pass:
         1. MERGEs scored closed windows into `alerts`.
         2. Publishes newly created alerts to Pub/Sub.
         3. Processes DLQ failures and marks DEAD_LETTERED.
         """
-        logger.info("Starting detection cycle for %s.%s (lookback: %d min, min_score: %d)...",
-                    self.project_id, self.dataset_id, lookback_minutes, min_score)
+        logger.info(
+            "Starting detection cycle for %s.%s (lookback: %d min, min_score: %d)...",
+            self.project_id,
+            self.dataset_id,
+            lookback_minutes,
+            min_score,
+        )
 
         new_alerts = self._merge_and_fetch_new_alerts(lookback_minutes, min_score)
         published_count = self._publish_alerts(new_alerts)
 
         dlq_count = self._handle_dead_lettered_alerts()
-        logger.info("Detection cycle complete: %d new alerts published, %d DLQ alerts handled.",
-                    published_count, dlq_count)
+        logger.info(
+            "Detection cycle complete: %d new alerts published, %d DLQ alerts handled.",
+            published_count,
+            dlq_count,
+        )
         return published_count
 
     def _merge_and_fetch_new_alerts(
@@ -290,7 +313,9 @@ class ThreatDetector:
           AND DATE(window_end) >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
         ORDER BY window_start ASC;
         """
-        fetch_config = bigquery.QueryJobConfig(maximum_bytes_billed=self.max_bytes_billed)
+        fetch_config = bigquery.QueryJobConfig(
+            maximum_bytes_billed=self.max_bytes_billed
+        )
         try:
             query_job = self.bq_client.query(fetch_query, job_config=fetch_config)
             return [dict(row.items()) for row in query_job.result()]
@@ -298,7 +323,9 @@ class ThreatDetector:
             logger.error("Error fetching newly created alerts: %s", e)
             return []
 
-    def _update_alert_status(self, alert_id: str, new_status: str, expected_current_status: str | None = None):
+    def _update_alert_status(
+        self, alert_id: str, new_status: str, expected_current_status: str | None = None
+    ):
         """Transitions alert status in BigQuery using parameterized query."""
         where_clause = "WHERE alert_id = @alert_id"
         query_params = [
@@ -308,7 +335,9 @@ class ThreatDetector:
         if expected_current_status:
             where_clause += " AND status = @expected_current_status"
             query_params.append(
-                bigquery.ScalarQueryParameter("expected_current_status", "STRING", expected_current_status)
+                bigquery.ScalarQueryParameter(
+                    "expected_current_status", "STRING", expected_current_status
+                )
             )
 
         update_query = f"""
@@ -324,7 +353,12 @@ class ThreatDetector:
             self.bq_client.query(update_query, job_config=job_config).result()
             logger.info("Updated alert '%s' status to %s.", alert_id, new_status)
         except Exception as e:
-            logger.error("Failed to update status for alert %s to %s: %s", alert_id, new_status, e)
+            logger.error(
+                "Failed to update status for alert %s to %s: %s",
+                alert_id,
+                new_status,
+                e,
+            )
 
     def _publish_alerts(self, alerts: list[dict[str, Any]]) -> int:
         """
@@ -346,7 +380,9 @@ class ThreatDetector:
                     "window_start": format_utc_timestamp(alert["window_start"]),
                     "window_end": format_utc_timestamp(alert["window_end"]),
                     "total_2_min_threat_score": alert["total_2_min_threat_score"],
-                    "high_privilege_request_count": alert.get("high_privilege_request_count", 0),
+                    "high_privilege_request_count": alert.get(
+                        "high_privilege_request_count", 0
+                    ),
                     "malicious_command_count": alert.get("malicious_command_count", 0),
                     "malicious_dns_count": alert.get("malicious_dns_count", 0),
                     "detected_at": format_utc_timestamp(alert["detected_at"]),
@@ -359,12 +395,14 @@ class ThreatDetector:
                 message_data,
                 alert_id=alert_id,
                 engine=alert.get("engine", "scheduled"),
-                schema_version="1"
+                schema_version="1",
             )
             future.result(timeout=10)
             logger.info("Published alert '%s' to %s", alert_id, self.topic_path)
             # Mark as PUBLISHED only if status is still NEW (prevents overwriting INVESTIGATING if webhook processed quickly)
-            self._update_alert_status(alert_id, "PUBLISHED", expected_current_status="NEW")
+            self._update_alert_status(
+                alert_id, "PUBLISHED", expected_current_status="NEW"
+            )
             count += 1
         return count
 
@@ -390,12 +428,17 @@ class ThreatDetector:
         WHERE a.status != 'DEAD_LETTERED'
         LIMIT 20;
         """
-        dlq_job_config = bigquery.QueryJobConfig(maximum_bytes_billed=self.max_bytes_billed)
+        dlq_job_config = bigquery.QueryJobConfig(
+            maximum_bytes_billed=self.max_bytes_billed
+        )
         try:
             query_job = self.bq_client.query(dlq_query, job_config=dlq_job_config)
             dead_letters = [dict(row.items()) for row in query_job.result()]
         except Exception as e:
-            logger.warning("DLQ inspection query failed (table may be empty or uncreated yet): %s", e)
+            logger.warning(
+                "DLQ inspection query failed (table may be empty or uncreated yet): %s",
+                e,
+            )
             return 0
 
         handled = 0
@@ -404,7 +447,9 @@ class ThreatDetector:
             if not alert_id:
                 continue
 
-            target_user = dl.get("user_id") or (alert_id.split("|")[0] if "|" in alert_id else "unknown_user")
+            target_user = dl.get("user_id") or (
+                alert_id.split("|")[0] if "|" in alert_id else "unknown_user"
+            )
             target_device = dl.get("device_id") or "unknown_device"
             target_ip = dl.get("source_ip") or "0.0.0.0"
             threat_score = int(dl.get("total_2_min_threat_score") or 2000)
@@ -448,18 +493,32 @@ class ThreatDetector:
                     bigquery.ScalarQueryParameter("user_id", "STRING", target_user),
                     bigquery.ScalarQueryParameter("device_id", "STRING", target_device),
                     bigquery.ScalarQueryParameter("source_ip", "STRING", target_ip),
-                    bigquery.ScalarQueryParameter("threat_score", "INT64", threat_score),
-                    bigquery.ArrayQueryParameter("mitre_tactics", "STRING", ["Execution", "Defense Evasion"]),
-                    bigquery.ArrayQueryParameter("iocs", "STRING", ["DLQ Failure", alert_id]),
+                    bigquery.ScalarQueryParameter(
+                        "threat_score", "INT64", threat_score
+                    ),
+                    bigquery.ArrayQueryParameter(
+                        "mitre_tactics", "STRING", ["Execution", "Defense Evasion"]
+                    ),
+                    bigquery.ArrayQueryParameter(
+                        "iocs", "STRING", ["DLQ Failure", alert_id]
+                    ),
                     bigquery.ScalarQueryParameter("report", "STRING", report_text),
                 ],
                 maximum_bytes_billed=self.max_bytes_billed,
             )
             try:
                 self.bq_client.query(merge_ticket_sql, job_config=insert_cfg).result()
-                logger.warning("Auto-escalated DLQ alert '%s' to SOC tickets as '%s'", alert_id, ticket_id)
+                logger.warning(
+                    "Auto-escalated DLQ alert '%s' to SOC tickets as '%s'",
+                    alert_id,
+                    ticket_id,
+                )
             except Exception as e:
-                logger.error("Failed to insert auto-escalation ticket for %s: %s; will retry next cycle", alert_id, e)
+                logger.error(
+                    "Failed to insert auto-escalation ticket for %s: %s; will retry next cycle",
+                    alert_id,
+                    e,
+                )
                 continue
 
             # 2. Update alerts table status to DEAD_LETTERED only after ticket insert succeeded
@@ -469,14 +528,20 @@ class ThreatDetector:
             WHERE alert_id = @alert_id;
             """
             update_cfg = bigquery.QueryJobConfig(
-                query_parameters=[bigquery.ScalarQueryParameter("alert_id", "STRING", alert_id)],
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("alert_id", "STRING", alert_id)
+                ],
                 maximum_bytes_billed=self.max_bytes_billed,
             )
             try:
                 self.bq_client.query(update_query, job_config=update_cfg).result()
                 handled += 1
             except Exception as e:
-                logger.error("Failed to update status for DEAD_LETTERED alert %s: %s", alert_id, e)
+                logger.error(
+                    "Failed to update status for DEAD_LETTERED alert %s: %s",
+                    alert_id,
+                    e,
+                )
 
         # Log count of unmatched orphaned dead-letter records (e.g. malformed payloads)
         self._log_unmatched_dead_letters()
@@ -508,7 +573,8 @@ class ThreatDetector:
             if unmatched_count > 0:
                 logger.warning(
                     "Detected %d unmatched orphaned message(s) in %s.alerts_dead_letter (last 24h) with no matching alert in alerts table.",
-                    unmatched_count, self.dataset_id,
+                    unmatched_count,
+                    self.dataset_id,
                 )
             return int(unmatched_count)
         except Exception as e:
@@ -517,15 +583,28 @@ class ThreatDetector:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Scheduled Micro-Batch Threat Detector")
-    parser.add_argument("--lookback", type=int, default=15, help="Lookback window in minutes (default: 15)")
-    parser.add_argument("--min-score", type=int, default=100, help="Minimum threat score threshold (default: 100)")
+    parser = argparse.ArgumentParser(
+        description="Scheduled Micro-Batch Threat Detector"
+    )
+    parser.add_argument(
+        "--lookback",
+        type=int,
+        default=15,
+        help="Lookback window in minutes (default: 15)",
+    )
+    parser.add_argument(
+        "--min-score",
+        type=int,
+        default=100,
+        help="Minimum threat score threshold (default: 100)",
+    )
     args = parser.parse_args()
 
     detector = ThreatDetector()
-    detector.run_detection_cycle(lookback_minutes=args.lookback, min_score=args.min_score)
+    detector.run_detection_cycle(
+        lookback_minutes=args.lookback, min_score=args.min_score
+    )
 
 
 if __name__ == "__main__":
     main()
-

@@ -31,6 +31,7 @@ try:
     from google.adk.plugins.bigquery_agent_analytics_plugin import (
         BigQueryAgentAnalyticsPlugin,
     )
+
     HAS_ANALYTICS = True
 except Exception:
     BigQueryAgentAnalyticsPlugin = None
@@ -86,29 +87,38 @@ bq_analytics_plugin = None
 if HAS_ANALYTICS and BigQueryAgentAnalyticsPlugin is not None:
     try:
         bq_analytics_plugin = BigQueryAgentAnalyticsPlugin(
-            project_id=PROJECT_ID,
-            dataset_id=DATASET_ID,
-            table_id="agent_events"
+            project_id=PROJECT_ID, dataset_id=DATASET_ID, table_id="agent_events"
         )
     except Exception as e:
         log_agent_event(f"BigQuery analytics plugin initialization note: {e}")
 
+
 # --- Custom Agent Classes for ADK Analytics Plugin Compatibility ---
 class OrchestratorAgent(SequentialAgent):
     """Sequential orchestrator with explicit instruction attribute for analytics logging."""
-    instruction: str = "Orchestrate security workflow between investigation agents and SOC ticketing."
+
+    instruction: str = (
+        "Orchestrate security workflow between investigation agents and SOC ticketing."
+    )
 
 
 class ParallelOrchestratorAgent(ParallelAgent):
     """Parallel orchestrator with explicit instruction attribute for analytics logging."""
-    instruction: str = "Run multi-source forensic investigations simultaneously in parallel."
+
+    instruction: str = (
+        "Run multi-source forensic investigations simultaneously in parallel."
+    )
 
 
 # --- Callbacks ---
-def forbidden_dml_check(tool: BaseTool, args: dict[str, Any], tool_context: ToolContext) -> dict | None:
+def forbidden_dml_check(
+    tool: BaseTool, args: dict[str, Any], tool_context: ToolContext
+) -> dict | None:
     """Inspects SQL queries prior to execution to prevent destructive DML operations, INFORMATION_SCHEMA access, and cross-dataset references."""
     safe_args_str = json.dumps(args, default=str)
-    log_agent_event(f"Tool '{tool.name}' called with arguments: {safe_args_str[:120]}...")
+    log_agent_event(
+        f"Tool '{tool.name}' called with arguments: {safe_args_str[:120]}..."
+    )
 
     if tool.name == "execute_sql":
         sql_query = args.get("query", "")
@@ -118,13 +128,17 @@ def forbidden_dml_check(tool: BaseTool, args: dict[str, Any], tool_context: Tool
             except ImportError:
                 from tools import validate_safe_sql_query
             try:
-                validate_safe_sql_query(sql_query, allow_metadata=False, allowed_dataset=DATASET_ID)
+                validate_safe_sql_query(
+                    sql_query, allow_metadata=False, allowed_dataset=DATASET_ID
+                )
             except ValueError as e:
                 return {"result": f"Tool execution was blocked: {e}"}
     return None
 
 
-def security_gate_callback(tool: BaseTool, args: dict[str, Any], tool_context: ToolContext) -> dict | None:
+def security_gate_callback(
+    tool: BaseTool, args: dict[str, Any], tool_context: ToolContext
+) -> dict | None:
     """
     Deterministic security gate callback on soc_ticketing_agent.
     Enforces that the LLM cannot execute log_false_positive if:
@@ -136,17 +150,21 @@ def security_gate_callback(tool: BaseTool, args: dict[str, Any], tool_context: T
         state = getattr(tool_context, "state", None)
         if state is not None:
             if state.get("prompt_injection_detected"):
-                log_agent_event("SECURITY GATE TRIGGERED: Blocked log_false_positive due to visual prompt injection.")
+                log_agent_event(
+                    "SECURITY GATE TRIGGERED: Blocked log_false_positive due to visual prompt injection."
+                )
                 return {
                     "error": "SECURITY_GATE_VIOLATION",
                     "status": "BLOCKED",
                     "reason": (
                         "Security Gate Violation: Cannot classify alert as FALSE POSITIVE because prompt injection "
                         "was detected in visual evidence. You MUST invoke escalate_to_human immediately."
-                    )
+                    ),
                 }
             if state.get("malicious_indicators"):
-                log_agent_event("SECURITY GATE TRIGGERED: Blocked log_false_positive due to malicious telemetry indicators.")
+                log_agent_event(
+                    "SECURITY GATE TRIGGERED: Blocked log_false_positive due to malicious telemetry indicators."
+                )
                 return {
                     "error": "SECURITY_GATE_VIOLATION",
                     "status": "BLOCKED",
@@ -154,10 +172,12 @@ def security_gate_callback(tool: BaseTool, args: dict[str, Any], tool_context: T
                         "Security Gate Violation: Cannot classify alert as FALSE POSITIVE because anomalous behavioral "
                         "indicators (malicious commands, login spray, or risky files) were confirmed in telemetry. "
                         "You MUST dispatch an incident ticket or escalate to a human analyst."
-                    )
+                    ),
                 }
             if state.get("evidence_unavailable"):
-                log_agent_event("SECURITY GATE TRIGGERED: Blocked log_false_positive due to missing/failed forensic evidence.")
+                log_agent_event(
+                    "SECURITY GATE TRIGGERED: Blocked log_false_positive due to missing/failed forensic evidence."
+                )
                 return {
                     "error": "SECURITY_GATE_VIOLATION",
                     "status": "BLOCKED",
@@ -165,20 +185,27 @@ def security_gate_callback(tool: BaseTool, args: dict[str, Any], tool_context: T
                         "Security Gate Violation: Cannot classify alert as FALSE POSITIVE because critical forensic "
                         "evidence (visual screenshot or BigQuery telemetry) was unavailable. "
                         "You MUST invoke escalate_to_human for manual analyst adjudication."
-                    )
+                    ),
                 }
     return None
 
 
 def before_sub_agent_starts(callback_context: CallbackContext):
     """Logs the activation of any agent."""
-    log_agent_event(f"Agent triggered: {callback_context.agent_name}", callback_context.agent_name)
+    log_agent_event(
+        f"Agent triggered: {callback_context.agent_name}", callback_context.agent_name
+    )
 
 
 def log_agent_completion(callback_context: CallbackContext):
     """Logs completion status of sub-agents."""
-    output = getattr(callback_context, "output", None) or getattr(callback_context, "result", None)
-    log_agent_event(f"Completed execution. Output summary: {str(output)[:150]}...", callback_context.agent_name)
+    output = getattr(callback_context, "output", None) or getattr(
+        callback_context, "result", None
+    )
+    log_agent_event(
+        f"Completed execution. Output summary: {str(output)[:150]}...",
+        callback_context.agent_name,
+    )
 
 
 def before_orchestrator_starts(callback_context: CallbackContext):
@@ -210,7 +237,11 @@ def before_orchestrator_starts(callback_context: CallbackContext):
         user_content = getattr(callback_context, "user_content", None)
         raw_text = ""
         if user_content:
-            parts = getattr(user_content, "parts", []) if hasattr(user_content, "parts") else (user_content if isinstance(user_content, list) else [])
+            parts = (
+                getattr(user_content, "parts", [])
+                if hasattr(user_content, "parts")
+                else (user_content if isinstance(user_content, list) else [])
+            )
             for p in parts:
                 p_text = getattr(p, "text", "") if hasattr(p, "text") else str(p)
                 if p_text:
@@ -233,7 +264,9 @@ def before_orchestrator_starts(callback_context: CallbackContext):
                         elif "threat_score" in data:
                             state["threat_score"] = data["threat_score"]
                         if state.get("user_id"):
-                            state["ticket_id"] = f"SOC-TICKET-{state['user_id']}-{int(time.time())}"
+                            state["ticket_id"] = (
+                                f"SOC-TICKET-{state['user_id']}-{int(time.time())}"
+                            )
             except Exception:
                 pass
 
@@ -257,7 +290,9 @@ def default_deny_soc_callback(callback_context: CallbackContext):
     )
 
     if not ticket_resolved:
-        log_agent_event("DEFAULT-DENY ENFORCEMENT: Model finished without invoking a resolution tool. Executing deterministic human escalation.")
+        log_agent_event(
+            "DEFAULT-DENY ENFORCEMENT: Model finished without invoking a resolution tool. Executing deterministic human escalation."
+        )
         try:
             from .tools import SocTicket, get_soc_service
         except (ImportError, ValueError):
@@ -268,7 +303,8 @@ def default_deny_soc_callback(callback_context: CallbackContext):
         ticket_id = f"SOC-TICKET-AUTO-ESCALATED-{user_id}-{int(time.time())}"
         ticket = SocTicket(
             ticket_id=ticket_id,
-            transaction_window_end=state.get("window_end") or state.get("transaction_window_end"),
+            transaction_window_end=state.get("window_end")
+            or state.get("transaction_window_end"),
             user_id=user_id,
             device_id=state.get("device_id") or "unknown_device",
             source_ip=state.get("source_ip") or "unknown_ip",
@@ -277,7 +313,7 @@ def default_deny_soc_callback(callback_context: CallbackContext):
             status="ESCALATED",
             agent_decision="AUTO_ESCALATED_DEFAULT_DENY",
             agent_reason="Deterministic Default-Deny: Model terminated turn without resolving alert through a permitted tool action.",
-            structured_report="Auto-escalated by security platform default-deny guardrail."
+            structured_report="Auto-escalated by security platform default-deny guardrail.",
         )
         soc_service.create_and_dispatch_ticket(ticket)
         state["escalation_dispatched"] = True
@@ -311,7 +347,7 @@ google_search_agent = Agent(
     output_key="google_search_results",
     before_agent_callback=before_sub_agent_starts,
     after_agent_callback=log_agent_completion,
-    tools=[google_search]
+    tools=[google_search],
 )
 
 
@@ -340,7 +376,7 @@ bq_investigation_agent = Agent(
     output_key="bigquery_investigation_results",
     tools=[get_entity_behavioral_profile],
     before_agent_callback=before_sub_agent_starts,
-    after_agent_callback=log_agent_completion
+    after_agent_callback=log_agent_completion,
 )
 
 
@@ -375,7 +411,7 @@ visual_analysis_agent = Agent(
     output_key="visual_analysis_results",
     tools=[get_visual_analysis_for_user, get_gcs_uri_for_user, generate_signed_url],
     before_agent_callback=before_sub_agent_starts,
-    after_agent_callback=log_agent_completion
+    after_agent_callback=log_agent_completion,
 )
 
 
@@ -425,11 +461,11 @@ soc_ticketing_agent = Agent(
         log_false_positive,
         create_rich_ticket_id,
         generate_signed_url,
-        escalate_to_human
+        escalate_to_human,
     ],
     before_tool_callback=security_gate_callback,
     before_agent_callback=before_sub_agent_starts,
-    after_agent_callback=default_deny_soc_callback
+    after_agent_callback=default_deny_soc_callback,
 )
 
 
@@ -442,7 +478,7 @@ investigation_team = ParallelOrchestratorAgent(
     name="InvestigationTeam",
     sub_agents=[google_search_agent, bq_investigation_agent, visual_analysis_agent],
     description="Executes Google Search OSINT, BigQuery log analysis, and visual evidence investigation simultaneously in parallel.",
-    instruction="Execute multi-source investigation agents simultaneously."
+    instruction="Execute multi-source investigation agents simultaneously.",
 )
 
 # Phase 2: Complete End-to-End Orchestrator
@@ -451,7 +487,7 @@ orchestrator_agent = OrchestratorAgent(
     sub_agents=[investigation_team, soc_ticketing_agent],
     description="Orchestrates full security investigation workflow and dispatches tickets to the SOC ticketing system.",
     instruction="Coordinate investigation team and pass final incident to SOC ticketing system.",
-    before_agent_callback=before_orchestrator_starts
+    before_agent_callback=before_orchestrator_starts,
 )
 
 # Backward Compatibility Aliases
@@ -461,9 +497,4 @@ investigation_agent = investigation_team
 
 # --- App Definition ---
 app_plugins: list[BasePlugin] = [bq_analytics_plugin] if bq_analytics_plugin else []
-app = App(
-    name="CymbalCyberSecurityAgent",
-    root_agent=root_agent,
-    plugins=app_plugins
-)
-
+app = App(name="CymbalCyberSecurityAgent", root_agent=root_agent, plugins=app_plugins)

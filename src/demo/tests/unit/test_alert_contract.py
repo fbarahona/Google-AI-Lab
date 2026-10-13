@@ -32,7 +32,7 @@ def test_detection_alert_contract_schema():
         high_privilege_request_count=3,
         malicious_command_count=2,
         malicious_dns_count=5,
-        detected_at="2026-10-11T21:05:12Z"
+        detected_at="2026-10-11T21:05:12Z",
     )
 
     assert alert.alert_id == "u.lewis|2026-10-11T21:04:00Z"
@@ -60,7 +60,7 @@ def test_soc_ticket_alert_id_linkage():
         category="Malware",
         agent_decision="GENUINE_THREAT",
         agent_reason="North Korean C2 communication and Mimikatz execution.",
-        structured_report="### Report Content"
+        structured_report="### Report Content",
     )
 
     assert ticket.alert_id == "u.lewis|2026-10-11T21:04:00Z"
@@ -75,9 +75,9 @@ def test_extract_pubsub_payload_with_attributes():
             "attributes": {
                 "alert_id": "u.lewis|2026-10-11T21:04:00Z",
                 "engine": "scheduled",
-                "schema_version": "1"
+                "schema_version": "1",
             },
-            "messageId": "msg-9999"
+            "messageId": "msg-9999",
         }
     }
     extracted = extract_pubsub_payload(raw_push)
@@ -98,12 +98,7 @@ def test_extract_pubsub_payload_rejects_non_json_binary_base64():
     """Verifies that extract_pubsub_payload raises ValueError when data is valid base64 but contains non-JSON binary bytes."""
     corrupt_binary = b"\x00\x01\x02\xff\xfe\x00\xaa\xbb\xcccorrupt-bytes"
     b64_data = base64.b64encode(corrupt_binary).decode("utf-8")
-    raw_push = {
-        "message": {
-            "data": b64_data,
-            "messageId": "msg-corrupt-123"
-        }
-    }
+    raw_push = {"message": {"data": b64_data, "messageId": "msg-corrupt-123"}}
     with pytest.raises(ValueError, match="payload is not valid JSON"):
         extract_pubsub_payload(raw_push)
 
@@ -117,12 +112,7 @@ def test_webhook_rejects_non_json_binary_base64_payload(monkeypatch):
     client = TestClient(app)
     corrupt_binary = b"\x00\x01\x02\xff\xfe\x00\xaa\xbb\xcccorrupt-bytes"
     b64_data = base64.b64encode(corrupt_binary).decode("utf-8")
-    payload = {
-        "message": {
-            "data": b64_data,
-            "messageId": "msg-corrupt-binary-456"
-        }
-    }
+    payload = {"message": {"data": b64_data, "messageId": "msg-corrupt-binary-456"}}
     response = client.post("/apps/adk_agent/trigger/pubsub", json=payload)
     assert response.status_code == 400
     assert response.json().get("detail") == "Malformed Pub/Sub payload"

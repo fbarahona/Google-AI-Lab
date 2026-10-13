@@ -1,6 +1,7 @@
 """
 Unit tests for ADK Agent tools, safety callbacks, SQL parameterization, and signed URL generation.
 """
+
 import os
 import time
 from unittest.mock import MagicMock, patch
@@ -48,7 +49,10 @@ def test_get_entity_behavioral_profile_cloud_mode_success(mock_get_bq):
     """Verify that in cloud mode, query results are properly converted to metrics dict."""
     mock_bq = MagicMock()
     mock_row = MagicMock()
-    mock_row.items.return_value = [("total_access_events_24h", 50), ("total_login_failures_24h", 12)]
+    mock_row.items.return_value = [
+        ("total_access_events_24h", 50),
+        ("total_login_failures_24h", 12),
+    ]
     mock_job = MagicMock()
     mock_job.result.return_value = [mock_row]
     mock_bq.query.return_value = mock_job
@@ -171,20 +175,34 @@ def test_forbidden_dml_check():
     mock_context = MagicMock()
 
     # Block DELETE
-    result = forbidden_dml_check(mock_tool, {"query": "DELETE FROM Cymbal_Cyber.network_events WHERE 1=1"}, mock_context)
+    result = forbidden_dml_check(
+        mock_tool,
+        {"query": "DELETE FROM Cymbal_Cyber.network_events WHERE 1=1"},
+        mock_context,
+    )
     assert result is not None
     assert "blocked" in result["result"].lower()
 
     # Block DROP
-    result_drop = forbidden_dml_check(mock_tool, {"query": "DROP TABLE Cymbal_Cyber.network_events"}, mock_context)
+    result_drop = forbidden_dml_check(
+        mock_tool, {"query": "DROP TABLE Cymbal_Cyber.network_events"}, mock_context
+    )
     assert result_drop is not None
 
     # Block INSERT
-    result_insert = forbidden_dml_check(mock_tool, {"query": "INSERT INTO Cymbal_Cyber.soc_tickets VALUES (1)"}, mock_context)
+    result_insert = forbidden_dml_check(
+        mock_tool,
+        {"query": "INSERT INTO Cymbal_Cyber.soc_tickets VALUES (1)"},
+        mock_context,
+    )
     assert result_insert is not None
 
     # Allow SELECT
-    result_select = forbidden_dml_check(mock_tool, {"query": "SELECT * FROM Cymbal_Cyber.network_events LIMIT 10"}, mock_context)
+    result_select = forbidden_dml_check(
+        mock_tool,
+        {"query": "SELECT * FROM Cymbal_Cyber.network_events LIMIT 10"},
+        mock_context,
+    )
     assert result_select is None
 
 
@@ -203,14 +221,18 @@ def test_generate_signed_url_invalid_uri():
 
 @patch("adk_agent.tools.storage.Client")
 @patch("adk_agent.tools.google.auth.default")
-def test_generate_signed_url_failure_returns_explicit_error(mock_auth_default, mock_storage_client_cls):
+def test_generate_signed_url_failure_returns_explicit_error(
+    mock_auth_default, mock_storage_client_cls
+):
     """Verify that a signing failure produces an explicit error, never a misleading success URL."""
     mock_auth_default.side_effect = Exception("Credentials unavailable in environment")
 
     # When credential retrieval fails and storage client raises error during signing
     mock_client = MagicMock()
     mock_blob = MagicMock()
-    mock_blob.generate_signed_url.side_effect = Exception("IAM permission denied: ServiceAccountTokenCreator missing")
+    mock_blob.generate_signed_url.side_effect = Exception(
+        "IAM permission denied: ServiceAccountTokenCreator missing"
+    )
     mock_client.bucket.return_value.blob.return_value = mock_blob
     mock_storage_client_cls.return_value = mock_client
 
@@ -349,16 +371,19 @@ def test_before_orchestrator_starts_resets_flags_and_seeds_state():
     """Verify that before_orchestrator_starts resets invocation flags, clears prior identities, and seeds new state."""
     callback_ctx = MagicMock()
     # Leftover flags and old alert identity from a prior invocation in the same session
-    state_obj = State({
-        "user_id": "prior_user_from_alert_1",
-        "device_id": "ws-old-01",
-        "source_ip": "1.1.1.1",
-        "threat_score": 9999,
-        "prompt_injection_detected": True,
-        "ticket_dispatched": True,
-        "malicious_indicators": True,
-        "false_positive_logged": True
-    }, {})
+    state_obj = State(
+        {
+            "user_id": "prior_user_from_alert_1",
+            "device_id": "ws-old-01",
+            "source_ip": "1.1.1.1",
+            "threat_score": 9999,
+            "prompt_injection_detected": True,
+            "ticket_dispatched": True,
+            "malicious_indicators": True,
+            "false_positive_logged": True,
+        },
+        {},
+    )
     callback_ctx.state = state_obj
     part = MagicMock()
     part.text = 'Investigate alert: {"user_id": "c.wilson", "device_id": "ws-dev-10", "source_ip": "194.26.135.68", "total_2_min_threat_score": 1850}'
@@ -411,7 +436,9 @@ def test_default_deny_callback_permits_clean_false_positive():
 @patch("adk_agent.tools.get_bq_client")
 def test_get_entity_behavioral_profile_cloud_mode_fails_closed(mock_get_bq):
     """Verify that in cloud mode (LOCAL_MODE=false), BigQuery failure returns ERROR and sets evidence_unavailable only."""
-    mock_get_bq.side_effect = Exception("BigQuery 403 Forbidden: Missing roles/bigquery.user")
+    mock_get_bq.side_effect = Exception(
+        "BigQuery 403 Forbidden: Missing roles/bigquery.user"
+    )
     mock_ctx = MagicMock()
     mock_ctx.state = State({}, {})
 
@@ -429,7 +456,9 @@ def test_get_entity_behavioral_profile_local_mode_schema_parity():
     with patch.dict("os.environ", {"LOCAL_MODE": "true"}):
         mock_ctx = MagicMock()
         mock_ctx.state = State({}, {})
-        profile = get_entity_behavioral_profile("user", "u.lewis", tool_context=mock_ctx)
+        profile = get_entity_behavioral_profile(
+            "user", "u.lewis", tool_context=mock_ctx
+        )
         assert "total_access_events_24h" in profile
         assert "risk_profile" not in profile  # Exact parity with BigQuery query columns
 
@@ -442,7 +471,9 @@ def test_read_png_text_chunks_and_injection_detection():
 
     mock_ctx = MagicMock()
     mock_ctx.state = State({}, {})
-    vis = get_visual_analysis_for_user("file://local_demo_data/user_screenshots/c.wilson.png", tool_context=mock_ctx)
+    vis = get_visual_analysis_for_user(
+        "file://local_demo_data/user_screenshots/c.wilson.png", tool_context=mock_ctx
+    )
     assert "PROMPT INJECTION DETECTED" in vis
     assert mock_ctx.state.get("prompt_injection_detected") is True
 
@@ -458,7 +489,13 @@ def test_escalate_to_human_non_blocking():
         payload = '{"user_id": "u.lewis", "total_2_min_threat_score": 1500}'
         mock_ctx = MagicMock()
         mock_ctx.state = State({}, {})
-        res = escalate_to_human(test_ticket_id, payload, "Escalating for review", "Report text", tool_context=mock_ctx)
+        res = escalate_to_human(
+            test_ticket_id,
+            payload,
+            "Escalating for review",
+            "Report text",
+            tool_context=mock_ctx,
+        )
         elapsed = time.time() - start
 
         assert elapsed < 0.2  # Runs in under a second (never blocks for 180s)

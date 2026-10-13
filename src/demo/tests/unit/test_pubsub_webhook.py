@@ -25,16 +25,16 @@ def test_extract_pubsub_payload_wrapped_base64():
     raw_alert = {
         "user_id": "u.lewis",
         "total_2_min_threat_score": 1850,
-        "source_ip": "175.45.178.110"
+        "source_ip": "175.45.178.110",
     }
     b64_data = base64.b64encode(json.dumps(raw_alert).encode("utf-8")).decode("utf-8")
     wrapped_message = {
         "message": {
             "data": b64_data,
             "messageId": "9876543210",
-            "publishTime": "2026-10-11T18:00:00Z"
+            "publishTime": "2026-10-11T18:00:00Z",
         },
-        "subscription": "projects/test-proj/subscriptions/adk_agent_trigger"
+        "subscription": "projects/test-proj/subscriptions/adk_agent_trigger",
     }
 
     unwrapped = extract_pubsub_payload(wrapped_message)
@@ -48,7 +48,7 @@ def test_extract_pubsub_payload_unwrapped_direct():
     direct_alert = {
         "user_id": "l.taylor",
         "total_2_min_threat_score": 120,
-        "source_ip": "10.0.4.15"
+        "source_ip": "10.0.4.15",
     }
     unwrapped = extract_pubsub_payload(direct_alert)
     assert unwrapped["user_id"] == "l.taylor"
@@ -70,7 +70,7 @@ def test_pubsub_push_endpoint_returns_503_and_allows_retry_when_runner_uninitial
     payload = {
         "message": {
             "data": base64.b64encode(b'{"user_id": "u.lewis"}').decode("utf-8"),
-            "messageId": msg_id
+            "messageId": msg_id,
         }
     }
 
@@ -112,7 +112,7 @@ def test_pubsub_push_endpoint_deduplication_after_success():
     payload = {
         "message": {
             "data": base64.b64encode(b'{"user_id": "l.taylor"}').decode("utf-8"),
-            "messageId": msg_id
+            "messageId": msg_id,
         }
     }
 
@@ -151,7 +151,7 @@ def test_pubsub_push_endpoint_failure_allows_retry():
     payload = {
         "message": {
             "data": base64.b64encode(b'{"user_id": "u.lewis"}').decode("utf-8"),
-            "messageId": msg_id
+            "messageId": msg_id,
         }
     }
 
@@ -194,7 +194,7 @@ def test_pubsub_push_endpoint_with_mock_runner():
     payload = {
         "message": {
             "data": b64_data,
-            "messageId": f"msg-fresh-mock-{raw_alert['user_id']}"
+            "messageId": f"msg-fresh-mock-{raw_alert['user_id']}",
         }
     }
 

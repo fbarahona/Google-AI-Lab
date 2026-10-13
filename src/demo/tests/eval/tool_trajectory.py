@@ -80,7 +80,11 @@ def is_response_blocked(fr: Any) -> bool:
             if str(inner.get("error", "")).upper() == "SECURITY_GATE_VIOLATION":
                 return True
         elif isinstance(inner, str):
-            if '"status": "BLOCKED"' in inner or "'status': 'BLOCKED'" in inner or '"status":"BLOCKED"' in inner:
+            if (
+                '"status": "BLOCKED"' in inner
+                or "'status': 'BLOCKED'" in inner
+                or '"status":"BLOCKED"' in inner
+            ):
                 return True
             if "SECURITY_GATE_VIOLATION" in inner:
                 return True
@@ -89,9 +93,16 @@ def is_response_blocked(fr: Any) -> bool:
     resp_str = str(resp or "")
     fr_str = str(fr or "")
     for s in (resp_str, fr_str):
-        if '"status": "BLOCKED"' in s or "'status': 'BLOCKED'" in s or '"status":"BLOCKED"' in s:
+        if (
+            '"status": "BLOCKED"' in s
+            or "'status': 'BLOCKED'" in s
+            or '"status":"BLOCKED"' in s
+        ):
             return True
-        if '"error": "SECURITY_GATE_VIOLATION"' in s or "'error': 'SECURITY_GATE_VIOLATION'" in s:
+        if (
+            '"error": "SECURITY_GATE_VIOLATION"' in s
+            or "'error': 'SECURITY_GATE_VIOLATION'" in s
+        ):
             return True
         if "SECURITY_GATE_VIOLATION" in s and "BLOCKED" in s:
             return True
@@ -100,9 +111,7 @@ def is_response_blocked(fr: Any) -> bool:
 
 
 def extract_session_state(
-    instance: dict[str, Any],
-    agent_data: dict[str, Any],
-    turns: list[Any]
+    instance: dict[str, Any], agent_data: dict[str, Any], turns: list[Any]
 ) -> dict[str, Any]:
     """
     Aggregates session state from all available trace locations:
@@ -121,23 +130,43 @@ def extract_session_state(
                     state.update(val)
 
     for turn in turns:
-        t_state = turn.get("state") if isinstance(turn, dict) else getattr(turn, "state", None)
+        t_state = (
+            turn.get("state")
+            if isinstance(turn, dict)
+            else getattr(turn, "state", None)
+        )
         if isinstance(t_state, dict):
             state.update(t_state)
 
-        events = turn.get("events", []) if isinstance(turn, dict) else getattr(turn, "events", [])
+        events = (
+            turn.get("events", [])
+            if isinstance(turn, dict)
+            else getattr(turn, "events", [])
+        )
         for event in events:
             # Check state_delta directly on event
-            delta = event.get("state_delta") if isinstance(event, dict) else getattr(event, "state_delta", None)
+            delta = (
+                event.get("state_delta")
+                if isinstance(event, dict)
+                else getattr(event, "state_delta", None)
+            )
             if not delta:
-                actions = event.get("actions") if isinstance(event, dict) else getattr(event, "actions", None)
+                actions = (
+                    event.get("actions")
+                    if isinstance(event, dict)
+                    else getattr(event, "actions", None)
+                )
                 if isinstance(actions, dict):
                     delta = actions.get("stateDelta") or actions.get("state_delta")
                 elif actions is not None:
                     delta = (
                         getattr(actions, "stateDelta", None)
                         or getattr(actions, "state_delta", None)
-                        or (actions.get("stateDelta") if isinstance(actions, dict) else None)
+                        or (
+                            actions.get("stateDelta")
+                            if isinstance(actions, dict)
+                            else None
+                        )
                     )
             if isinstance(delta, dict):
                 state.update(delta)
@@ -146,9 +175,7 @@ def extract_session_state(
 
 
 def extract_ticket_escalation(
-    instance: dict[str, Any],
-    agent_data: dict[str, Any],
-    user_id: str | None
+    instance: dict[str, Any], agent_data: dict[str, Any], user_id: str | None
 ) -> tuple[bool, bool]:
     """
     Inspects ticket data exposed in the eval output or in the local ticket queue / store.
@@ -173,14 +200,20 @@ def extract_ticket_escalation(
                     ticket_found = True
                     decision = str(t.get("agent_decision", "")).upper()
                     status = str(t.get("status", "")).upper()
-                    if status in ("ESCALATED", "OPEN") or "ESCALATED" in decision or "THREAT" in decision:
+                    if (
+                        status in ("ESCALATED", "OPEN")
+                        or "ESCALATED" in decision
+                        or "THREAT" in decision
+                    ):
                         ticket_is_escalated = True
 
     # 2. Local ticketing queue files (e.g. human_escalation_information_*.json)
     if not ticket_is_escalated and user_id:
         try:
             queue_dir = os.getenv("LOCAL_QUEUE_DIR", "./local_demo_data/escalations")
-            pattern = os.path.join(queue_dir, f"human_escalation_information_*{user_id}*.json")
+            pattern = os.path.join(
+                queue_dir, f"human_escalation_information_*{user_id}*.json"
+            )
             for fpath in glob.glob(pattern):
                 try:
                     with open(fpath, encoding="utf-8") as f:
@@ -189,7 +222,11 @@ def extract_ticket_escalation(
                             ticket_found = True
                             decision = str(tdata.get("agent_decision", "")).upper()
                             status = str(tdata.get("status", "")).upper()
-                            if status in ("ESCALATED", "OPEN") or "ESCALATED" in decision or "THREAT" in decision:
+                            if (
+                                status in ("ESCALATED", "OPEN")
+                                or "ESCALATED" in decision
+                                or "THREAT" in decision
+                            ):
                                 ticket_is_escalated = True
                                 break
                 except Exception:
@@ -205,7 +242,11 @@ def evaluate(instance: dict[str, Any]) -> dict[str, Any]:
     Evaluates tool trajectory validity, security gate enforcement, and default-deny rescues.
     """
     agent_data = instance.get("agent_data") or {}
-    turns = agent_data.get("turns", []) if isinstance(agent_data, dict) else getattr(agent_data, "turns", [])
+    turns = (
+        agent_data.get("turns", [])
+        if isinstance(agent_data, dict)
+        else getattr(agent_data, "turns", [])
+    )
 
     tools_called: set[str] = set()
     tools_blocked: set[str] = set()
@@ -218,7 +259,11 @@ def evaluate(instance: dict[str, Any]) -> dict[str, Any]:
         parts = prompt.get("parts", [])
         if isinstance(parts, list):
             for p in parts:
-                prompt_text += p.get("text", "") if isinstance(p, dict) else (getattr(p, "text", "") or str(p))
+                prompt_text += (
+                    p.get("text", "")
+                    if isinstance(p, dict)
+                    else (getattr(p, "text", "") or str(p))
+                )
     elif isinstance(prompt, str):
         prompt_text = prompt
 
@@ -240,20 +285,48 @@ def evaluate(instance: dict[str, Any]) -> dict[str, Any]:
 
     # Parse turns and events
     for turn in turns:
-        events = turn.get("events", []) if isinstance(turn, dict) else getattr(turn, "events", [])
+        events = (
+            turn.get("events", [])
+            if isinstance(turn, dict)
+            else getattr(turn, "events", [])
+        )
         for event in events:
-            content = event.get("content", {}) if isinstance(event, dict) else getattr(event, "content", {})
-            parts = content.get("parts", []) if isinstance(content, dict) else getattr(content, "parts", [])
+            content = (
+                event.get("content", {})
+                if isinstance(event, dict)
+                else getattr(event, "content", {})
+            )
+            parts = (
+                content.get("parts", [])
+                if isinstance(content, dict)
+                else getattr(content, "parts", [])
+            )
             for p in parts:
-                fc = p.get("function_call") if isinstance(p, dict) else getattr(p, "function_call", None)
+                fc = (
+                    p.get("function_call")
+                    if isinstance(p, dict)
+                    else getattr(p, "function_call", None)
+                )
                 if fc:
-                    fname = fc.get("name") if isinstance(fc, dict) else getattr(fc, "name", None)
+                    fname = (
+                        fc.get("name")
+                        if isinstance(fc, dict)
+                        else getattr(fc, "name", None)
+                    )
                     if fname:
                         tools_called.add(str(fname))
 
-                fr = p.get("function_response") if isinstance(p, dict) else getattr(p, "function_response", None)
+                fr = (
+                    p.get("function_response")
+                    if isinstance(p, dict)
+                    else getattr(p, "function_response", None)
+                )
                 if fr:
-                    rname = fr.get("name") if isinstance(fr, dict) else getattr(fr, "name", None)
+                    rname = (
+                        fr.get("name")
+                        if isinstance(fr, dict)
+                        else getattr(fr, "name", None)
+                    )
                     if rname:
                         rname_str = str(rname)
                         tools_called.add(rname_str)
@@ -265,7 +338,11 @@ def evaluate(instance: dict[str, Any]) -> dict[str, Any]:
         # Format 2: direct tool_calls list
         if isinstance(turn, dict) and "tool_calls" in turn:
             for call in turn["tool_calls"]:
-                cname = call.get("name") if isinstance(call, dict) else getattr(call, "name", None)
+                cname = (
+                    call.get("name")
+                    if isinstance(call, dict)
+                    else getattr(call, "name", None)
+                )
                 if cname:
                     tools_called.add(str(cname))
 
@@ -273,7 +350,9 @@ def evaluate(instance: dict[str, Any]) -> dict[str, Any]:
     session_state = extract_session_state(instance, agent_data, turns)
 
     # Check ticket table / local queue for escalation
-    ticket_found, ticket_is_escalated = extract_ticket_escalation(instance, agent_data, user_id)
+    ticket_found, ticket_is_escalated = extract_ticket_escalation(
+        instance, agent_data, user_id
+    )
 
     # State indicators
     state_escalated = bool(
@@ -284,8 +363,14 @@ def evaluate(instance: dict[str, Any]) -> dict[str, Any]:
 
     # Tool indicators
     tool_escalated = bool(
-        ("escalate_to_human" in tools_called and "escalate_to_human" not in tools_blocked)
-        or ("dispatch_to_soc_ticketing_system" in tools_called and "dispatch_to_soc_ticketing_system" not in tools_blocked)
+        (
+            "escalate_to_human" in tools_called
+            and "escalate_to_human" not in tools_blocked
+        )
+        or (
+            "dispatch_to_soc_ticketing_system" in tools_called
+            and "dispatch_to_soc_ticketing_system" not in tools_blocked
+        )
     )
     fp_called = "log_false_positive" in tools_called
     fp_blocked = "log_false_positive" in tools_blocked

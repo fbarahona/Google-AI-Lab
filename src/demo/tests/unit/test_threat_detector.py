@@ -13,8 +13,10 @@ from adk_agent.threat_detector import ThreatDetector
 
 @pytest.fixture
 def mock_clients():
-    with patch("adk_agent.threat_detector.bigquery.Client") as mock_bq_cls, \
-         patch("adk_agent.threat_detector.pubsub_v1.PublisherClient") as mock_pub_cls:
+    with (
+        patch("adk_agent.threat_detector.bigquery.Client") as mock_bq_cls,
+        patch("adk_agent.threat_detector.pubsub_v1.PublisherClient") as mock_pub_cls,
+    ):
         mock_bq = MagicMock()
         mock_pub = MagicMock()
         mock_bq_cls.return_value = mock_bq
@@ -25,7 +27,9 @@ def mock_clients():
 def test_threat_detector_import_and_init(mock_clients):
     """Verify ThreatDetector imports cleanly and initializes clients."""
     _mock_bq, _mock_pub = mock_clients
-    detector = ThreatDetector(project_id="test-proj", dataset_id="Test_Dataset", topic_id="test_alerts")
+    detector = ThreatDetector(
+        project_id="test-proj", dataset_id="Test_Dataset", topic_id="test_alerts"
+    )
     assert detector.project_id == "test-proj"
     assert detector.dataset_id == "Test_Dataset"
     assert detector.topic_id == "test_alerts"
@@ -91,7 +95,13 @@ def test_threat_detector_publishes_new_alert(mock_clients):
     unmatched_dlq_job = MagicMock()
     unmatched_dlq_job.result.return_value = [{"unmatched_count": 0}]
 
-    mock_bq.query.side_effect = [merge_job, fetch_job, update_job, dlq_job, unmatched_dlq_job]
+    mock_bq.query.side_effect = [
+        merge_job,
+        fetch_job,
+        update_job,
+        dlq_job,
+        unmatched_dlq_job,
+    ]
 
     mock_future = MagicMock()
     mock_future.result.return_value = "msg-123"
@@ -114,7 +124,12 @@ def test_threat_detector_publishes_new_alert(mock_clients):
     assert "INTERVAL 60 SECOND" in merge_sql
     assert "ActiveNetworkEvents" in merge_sql
     assert "ActiveSessions" in merge_sql
-    assert merge_sql.count("DATE(event_timestamp) >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)") >= 2
+    assert (
+        merge_sql.count(
+            "DATE(event_timestamp) >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)"
+        )
+        >= 2
+    )
 
 
 def test_threat_detector_logs_unmatched_dead_letters(mock_clients):
@@ -138,7 +153,10 @@ def test_threat_detector_logs_unmatched_dead_letters(mock_clients):
     detector = ThreatDetector(project_id="test-proj", dataset_id="Test_Dataset")
     with patch("adk_agent.threat_detector.logger.warning") as mock_warn:
         detector.run_detection_cycle(lookback_minutes=15, min_score=100)
-        assert any("unmatched orphaned message" in str(call) for call in mock_warn.call_args_list)
+        assert any(
+            "unmatched orphaned message" in str(call)
+            for call in mock_warn.call_args_list
+        )
 
     # Verify unmatched query includes 1-day partition and time filter
     unmatched_call_args = mock_bq.query.call_args_list[3]
@@ -171,7 +189,9 @@ def test_threat_detector_merge_retry_on_concurrent_update_conflict(mock_clients)
     detected_at_str = mock_detected_at.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     # Attempt 1: raises 400 Concurrent update conflict
-    conflict_error = Exception("400 Concurrent update conflict with another transaction")
+    conflict_error = Exception(
+        "400 Concurrent update conflict with another transaction"
+    )
 
     # Attempt 2: succeeds
     merge_job = MagicMock()
@@ -201,13 +221,25 @@ def test_threat_detector_merge_retry_on_concurrent_update_conflict(mock_clients)
     unmatched_dlq_job = MagicMock()
     unmatched_dlq_job.result.return_value = [{"unmatched_count": 0}]
 
-    mock_bq.query.side_effect = [conflict_error, merge_job, fetch_job, update_job, dlq_job, unmatched_dlq_job]
+    mock_bq.query.side_effect = [
+        conflict_error,
+        merge_job,
+        fetch_job,
+        update_job,
+        dlq_job,
+        unmatched_dlq_job,
+    ]
 
     mock_future = MagicMock()
     mock_future.result.return_value = "msg-123"
     mock_pub.publish.return_value = mock_future
 
-    detector = ThreatDetector(project_id="test-proj", dataset_id="Test_Dataset", max_merge_attempts=2, merge_retry_delay=3.0)
+    detector = ThreatDetector(
+        project_id="test-proj",
+        dataset_id="Test_Dataset",
+        max_merge_attempts=2,
+        merge_retry_delay=3.0,
+    )
 
     with patch("adk_agent.threat_detector.time.sleep") as mock_sleep:
         published = detector.run_detection_cycle(lookback_minutes=15, min_score=100)
@@ -220,13 +252,22 @@ def test_threat_detector_merge_exhausts_retries_on_persistent_conflict(mock_clie
     """Verify MERGE query fails gracefully after exhausting 2 attempts on persistent collision."""
     mock_bq, _mock_pub = mock_clients
 
-    conflict_error = Exception("400 Concurrent update conflict with another transaction")
+    conflict_error = Exception(
+        "400 Concurrent update conflict with another transaction"
+    )
     mock_bq.query.side_effect = [conflict_error, conflict_error]
 
-    detector = ThreatDetector(project_id="test-proj", dataset_id="Test_Dataset", max_merge_attempts=2, merge_retry_delay=3.0)
+    detector = ThreatDetector(
+        project_id="test-proj",
+        dataset_id="Test_Dataset",
+        max_merge_attempts=2,
+        merge_retry_delay=3.0,
+    )
 
     with patch("adk_agent.threat_detector.time.sleep") as mock_sleep:
-        new_alerts = detector._merge_and_fetch_new_alerts(lookback_minutes=15, min_score=100)
+        new_alerts = detector._merge_and_fetch_new_alerts(
+            lookback_minutes=15, min_score=100
+        )
         assert new_alerts == []
         assert mock_sleep.call_count == 1
         assert mock_sleep.call_args[0][0] == 3.0
@@ -238,21 +279,34 @@ def test_threat_detector_run_cycle_handles_merge_failure(mock_clients):
     """Verify run_detection_cycle handles MERGE failure gracefully and proceeds to DLQ handling."""
     mock_bq, _mock_pub = mock_clients
 
-    conflict_error = Exception("400 Concurrent update conflict with another transaction")
+    conflict_error = Exception(
+        "400 Concurrent update conflict with another transaction"
+    )
     dlq_job = MagicMock()
     dlq_job.result.return_value = []
     unmatched_dlq_job = MagicMock()
     unmatched_dlq_job.result.return_value = [{"unmatched_count": 0}]
 
-    mock_bq.query.side_effect = [conflict_error, conflict_error, dlq_job, unmatched_dlq_job]
+    mock_bq.query.side_effect = [
+        conflict_error,
+        conflict_error,
+        dlq_job,
+        unmatched_dlq_job,
+    ]
 
-    detector = ThreatDetector(project_id="test-proj", dataset_id="Test_Dataset", max_merge_attempts=2, merge_retry_delay=3.0)
+    detector = ThreatDetector(
+        project_id="test-proj",
+        dataset_id="Test_Dataset",
+        max_merge_attempts=2,
+        merge_retry_delay=3.0,
+    )
 
     with patch("adk_agent.threat_detector.time.sleep"):
         published = detector.run_detection_cycle(lookback_minutes=15, min_score=100)
         assert published == 0
         merge_calls = [
-            call for call in mock_bq.query.call_args_list
+            call
+            for call in mock_bq.query.call_args_list
             if "MERGE" in call[0][0] and "alerts` T" in call[0][0]
         ]
         assert len(merge_calls) == 2
@@ -285,7 +339,9 @@ def test_merge_query_parameterization_and_utc_formatting(mock_clients):
 
     detector = ThreatDetector(project_id="test-proj", dataset_id="Test_Dataset")
     fixed_cutoff = datetime(2026, 10, 12, 6, 0, 0, tzinfo=UTC)
-    detector._merge_and_fetch_new_alerts(lookback_minutes=15, min_score=150, cutoff_time=fixed_cutoff)
+    detector._merge_and_fetch_new_alerts(
+        lookback_minutes=15, min_score=150, cutoff_time=fixed_cutoff
+    )
 
     # 1. Inspect MERGE query call
     merge_call = mock_bq.query.call_args_list[0]
@@ -303,4 +359,3 @@ def test_merge_query_parameterization_and_utc_formatting(mock_clients):
     assert params["start_time"].value == fixed_cutoff
     assert "min_score" in params
     assert params["min_score"].value == 150
-

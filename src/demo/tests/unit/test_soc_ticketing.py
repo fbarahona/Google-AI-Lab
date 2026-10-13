@@ -1,6 +1,7 @@
 """
 Unit tests for SOC Ticketing System models and operations.
 """
+
 import os
 import shutil
 from unittest.mock import MagicMock
@@ -24,7 +25,7 @@ def test_soc_ticket_validation():
         agent_reason="High volume of suspicious PowerShell and external IP connections.",
         mitre_tactics=["Command and Control", "Execution"],
         indicators_of_compromise=["175.45.177.32", "c2-server-1.xyz"],
-        structured_report="### Security Incident Report\nConfirmed threat."
+        structured_report="### Security Incident Report\nConfirmed threat.",
     )
     assert ticket.ticket_id == "SOC-TICKET-u.lewis-1718000000"
     assert ticket.severity == "CRITICAL"
@@ -59,7 +60,7 @@ def test_soc_ticketing_service_dispatch(tmp_path, monkeypatch):
         status="ESCALATED",
         agent_decision="PERCEIVED_THREAT",
         agent_reason="Detected malicious commands.",
-        structured_report="Report content."
+        structured_report="Report content.",
     )
 
     result = service.create_and_dispatch_ticket(ticket)
@@ -100,13 +101,18 @@ def test_soc_ticketing_fetch_historic_and_verdict(tmp_path, monkeypatch):
         status="ESCALATED",
         agent_decision="PERCEIVED_THREAT",
         agent_reason="Escalated for test",
-        structured_report="Test report"
+        structured_report="Test report",
     )
     service.create_and_dispatch_ticket(ticket)
 
-    success = service.record_human_verdict(test_id, "False Positive", "Test resolution notes")
+    success = service.record_human_verdict(
+        test_id, "False Positive", "Test resolution notes"
+    )
     assert success is True
 
     # Check updated in history
     updated_hist = service.fetch_historic_tickets()
-    assert any(t.get("ticket_id") == test_id and t.get("human_decision") == "False Positive" for t in updated_hist)
+    assert any(
+        t.get("ticket_id") == test_id and t.get("human_decision") == "False Positive"
+        for t in updated_hist
+    )

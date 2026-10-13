@@ -22,6 +22,7 @@ from adk_agent.tools import (
 # 1. SQL DESTRUCTIVE TOKEN GUARDRAIL TESTS
 # ==============================================================================
 
+
 def test_validate_safe_sql_query_permits_read_only_sql():
     """Verify that read-only SELECT queries pass validation."""
     safe_query = "SELECT user_id, event_timestamp FROM `proj.dataset.user_access_events` WHERE user_id = @user_id;"
@@ -29,7 +30,20 @@ def test_validate_safe_sql_query_permits_read_only_sql():
     validate_safe_sql_query(safe_query)
 
 
-@pytest.mark.parametrize("token", ["DROP", "ALTER", "DELETE", "UPDATE", "INSERT", "TRUNCATE", "GRANT", "REVOKE", "MERGE"])
+@pytest.mark.parametrize(
+    "token",
+    [
+        "DROP",
+        "ALTER",
+        "DELETE",
+        "UPDATE",
+        "INSERT",
+        "TRUNCATE",
+        "GRANT",
+        "REVOKE",
+        "MERGE",
+    ],
+)
 def test_validate_safe_sql_query_blocks_destructive_tokens(token):
     """Verify that every destructive SQL keyword is intercepted and rejected."""
     malicious_query = f"{token} TABLE `proj.dataset.soc_tickets`;"
@@ -47,12 +61,18 @@ def test_validate_safe_sql_query_blocks_embedded_destructive_tokens():
 def test_validate_safe_sql_query_blocks_information_schema():
     """Verify that queries referencing INFORMATION_SCHEMA are blocked unless allow_metadata=True."""
     metadata_query = "SELECT * FROM `region-us.INFORMATION_SCHEMA.TABLES`;"
-    with pytest.raises(ValueError, match=re.escape("Access to INFORMATION_SCHEMA is restricted.")):
+    with pytest.raises(
+        ValueError, match=re.escape("Access to INFORMATION_SCHEMA is restricted.")
+    ):
         validate_safe_sql_query(metadata_query)
 
     # Test case-insensitivity
-    with pytest.raises(ValueError, match=re.escape("Access to INFORMATION_SCHEMA is restricted.")):
-        validate_safe_sql_query("SELECT table_name FROM my_dataset.information_schema.columns")
+    with pytest.raises(
+        ValueError, match=re.escape("Access to INFORMATION_SCHEMA is restricted.")
+    ):
+        validate_safe_sql_query(
+            "SELECT table_name FROM my_dataset.information_schema.columns"
+        )
 
 
 def test_validate_safe_sql_query_permits_information_schema_when_authorized():
@@ -82,7 +102,9 @@ def test_execute_sql_security_gate_and_interpolation(monkeypatch):
     monkeypatch.setenv("LOCAL_MODE", "true")
 
     # INFORMATION_SCHEMA blocked
-    with pytest.raises(ValueError, match=re.escape("Access to INFORMATION_SCHEMA is restricted.")):
+    with pytest.raises(
+        ValueError, match=re.escape("Access to INFORMATION_SCHEMA is restricted.")
+    ):
         execute_sql("SELECT * FROM INFORMATION_SCHEMA.TABLES;")
 
     # Cross-dataset blocked
@@ -106,17 +128,23 @@ def test_forbidden_dml_check_blocks_destructive_and_metadata_queries():
     mock_context = MagicMock()
 
     # Destructive blocked
-    res_drop = forbidden_dml_check(mock_tool, {"query": "DROP TABLE soc_tickets;"}, mock_context)
+    res_drop = forbidden_dml_check(
+        mock_tool, {"query": "DROP TABLE soc_tickets;"}, mock_context
+    )
     assert res_drop is not None
     assert "Tool execution was blocked" in res_drop["result"]
 
     # INFORMATION_SCHEMA blocked
-    res_meta = forbidden_dml_check(mock_tool, {"query": "SELECT * FROM INFORMATION_SCHEMA.TABLES;"}, mock_context)
+    res_meta = forbidden_dml_check(
+        mock_tool, {"query": "SELECT * FROM INFORMATION_SCHEMA.TABLES;"}, mock_context
+    )
     assert res_meta is not None
     assert "Access to INFORMATION_SCHEMA is restricted" in res_meta["result"]
 
     # Cross-dataset blocked
-    res_cross = forbidden_dml_check(mock_tool, {"query": "SELECT * FROM `other_tenant.secret.tbl`;"}, mock_context)
+    res_cross = forbidden_dml_check(
+        mock_tool, {"query": "SELECT * FROM `other_tenant.secret.tbl`;"}, mock_context
+    )
     assert res_cross is not None
     assert "Cross-dataset reference forbidden" in res_cross["result"]
 
@@ -124,6 +152,7 @@ def test_forbidden_dml_check_blocks_destructive_and_metadata_queries():
 # ==============================================================================
 # 2. BIGQUERY MAXIMUM_BYTES_BILLED CEILING TESTS
 # ==============================================================================
+
 
 def test_build_event_logs_query_enforces_maximum_bytes_billed():
     """Verify that QueryJobConfig includes maximum_bytes_billed to prevent runaway table scans."""
@@ -143,7 +172,9 @@ def test_build_event_logs_query_includes_partition_filter_on_all_ctes():
     assert "DATE(event_timestamp) >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)" in sql
 
     # Check partition filter count: must appear at least 3 times (FlaggedSessions, AccessMetrics, NetworkMetrics)
-    partition_filter_count = sql.count("DATE(event_timestamp) >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)")
+    partition_filter_count = sql.count(
+        "DATE(event_timestamp) >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)"
+    )
     assert partition_filter_count >= 3
 
 
@@ -170,6 +201,7 @@ def test_build_event_logs_query_partition_days_mapping(window, expected_days):
 # ==============================================================================
 # 3. WEBHOOK INBOUND OIDC JWT VALIDATION TESTS
 # ==============================================================================
+
 
 def test_webhook_oidc_bypasses_in_local_mode(monkeypatch):
     """Verify that in LOCAL_MODE=true, requests pass without requiring Google OIDC tokens."""
@@ -200,7 +232,9 @@ def test_webhook_oidc_rejects_invalid_bearer_token_in_cloud_mode(monkeypatch):
     client = TestClient(app)
 
     headers = {"Authorization": "Bearer invalid.forged.jwt"}
-    response = client.post("/apps/adk_agent/trigger/pubsub", json={"message": {}}, headers=headers)
+    response = client.post(
+        "/apps/adk_agent/trigger/pubsub", json={"message": {}}, headers=headers
+    )
     assert response.status_code == 403
     assert "Invalid OIDC bearer token" in response.json()["detail"]
 
@@ -212,8 +246,13 @@ def test_webhook_oidc_accepts_service_uri_audience(monkeypatch):
 
     monkeypatch.setenv("LOCAL_MODE", "false")
     monkeypatch.setenv("DISABLE_AUTH", "false")
-    monkeypatch.setenv("EXPECTED_OIDC_AUDIENCE", "https://cymbal-cyber-adk-agent-12345.us-east1.run.app")
-    monkeypatch.setenv("EXPECTED_INVOKER_EMAIL", "pubsub-invoker-sa@proj.iam.gserviceaccount.com")
+    monkeypatch.setenv(
+        "EXPECTED_OIDC_AUDIENCE",
+        "https://cymbal-cyber-adk-agent-12345.us-east1.run.app",
+    )
+    monkeypatch.setenv(
+        "EXPECTED_INVOKER_EMAIL", "pubsub-invoker-sa@proj.iam.gserviceaccount.com"
+    )
 
     client = TestClient(app)
 
@@ -224,7 +263,9 @@ def test_webhook_oidc_accepts_service_uri_audience(monkeypatch):
             "aud": "https://cymbal-cyber-adk-agent-12345.us-east1.run.app",
         }
         headers = {"Authorization": "Bearer valid.google.token"}
-        response = client.post("/apps/adk_agent/trigger/pubsub", json={"message": {}}, headers=headers)
+        response = client.post(
+            "/apps/adk_agent/trigger/pubsub", json={"message": {}}, headers=headers
+        )
         # Should not be rejected by OIDC auth (401 or 403)
         assert response.status_code not in (401, 403)
         assert mock_verify.called
@@ -233,6 +274,7 @@ def test_webhook_oidc_accepts_service_uri_audience(monkeypatch):
 # ==============================================================================
 # 4. CLOUD RUN PORT CONFIGURATION TESTS
 # ==============================================================================
+
 
 def test_cloud_run_port_configuration_default(monkeypatch):
     """Verify that port defaults to 8080 when PORT env var is unset."""
@@ -254,13 +296,16 @@ def test_cloud_run_port_configuration_custom(monkeypatch):
 # 5. INVESTIGATION AGENT SQL ELIMINATION TESTS
 # ==============================================================================
 
+
 def test_bq_investigation_agent_does_not_have_execute_sql():
     """Verify that bq_investigation_agent does not expose execute_sql,
     enforcing that the LLM cannot write or execute arbitrary SQL queries."""
     from adk_agent.agent import bq_investigation_agent
 
-    tool_names = [getattr(t, "__name__", getattr(t, "name", str(t))) for t in bq_investigation_agent.tools]
+    tool_names = [
+        getattr(t, "__name__", getattr(t, "name", str(t)))
+        for t in bq_investigation_agent.tools
+    ]
     assert "get_entity_behavioral_profile" in tool_names
     assert "execute_sql" not in tool_names
     assert len(bq_investigation_agent.tools) == 1
-

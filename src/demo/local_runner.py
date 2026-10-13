@@ -38,7 +38,9 @@ ESCALATIONS_DIR = os.path.join(LOCAL_DATA_DIR, "escalations")
 SCREENSHOTS_DIR = str(REPO_ROOT / "local_demo_data" / "user_screenshots")
 
 
-def step_1_generate_logs(threat_type: str = "malicious", target_user: str = "u.lewis") -> dict[str, Any]:
+def step_1_generate_logs(
+    threat_type: str = "malicious", target_user: str = "u.lewis"
+) -> dict[str, Any]:
     """Generates local synthetic access and network logs with injected threat."""
     print("\n=======================================================")
     print("[STEP 1] Generating Synthetic Logs & Injecting Threat")
@@ -52,18 +54,24 @@ def step_1_generate_logs(threat_type: str = "malicious", target_user: str = "u.l
     # 1. Background benign noise
     benign_acc, benign_net = engine.generate_benign_batch(50)
     sink.write_events(benign_acc, benign_net)
-    print(f"  -> Generated {len(benign_acc)} access events and {len(benign_net)} network events of benign background activity.")
+    print(
+        f"  -> Generated {len(benign_acc)} access events and {len(benign_net)} network events of benign background activity."
+    )
 
     # 2. Inject threat scenario
-    threat_acc, threat_net = engine.inject_threat(threat_type=threat_type, user_id=target_user)
+    threat_acc, threat_net = engine.inject_threat(
+        threat_type=threat_type, user_id=target_user
+    )
     sink.write_events(threat_acc, threat_net)
-    print(f"  -> Injected {len(threat_acc)} access events and {len(threat_net)} network events for scenario: '{threat_type.upper()}' (User: {target_user}).")
+    print(
+        f"  -> Injected {len(threat_acc)} access events and {len(threat_net)} network events for scenario: '{threat_type.upper()}' (User: {target_user})."
+    )
 
     return {
         "threat_type": threat_type,
         "user_id": target_user,
         "access_events": threat_acc,
-        "network_events": threat_net
+        "network_events": threat_net,
     }
 
 
@@ -83,7 +91,9 @@ def step_2_correlate_events(scenario_data: dict[str, Any]) -> dict[str, Any]:
     network_events = scenario_data["network_events"]
 
     # Extract successful login internal IP
-    login_ev = next((ev for ev in access_events if ev.get("event_type") == "login_success"), None)
+    login_ev = next(
+        (ev for ev in access_events if ev.get("event_type") == "login_success"), None
+    )
     _assigned_ip = login_ev.get("assigned_internal_ip") if login_ev else "10.50.1.20"
     source_ip = login_ev.get("source_ip") if login_ev else "175.45.177.32"
     device_id = login_ev.get("device_id") if login_ev else "ws-hr-05"
@@ -160,18 +170,22 @@ def step_2_correlate_events(scenario_data: dict[str, Any]) -> dict[str, Any]:
         "high_privilege_request_count": 3 if threat_type != "false_positive" else 1,
         "malicious_command_count": malicious_cmd_count,
         "malicious_dns_count": malicious_dns_count,
-        "detected_at": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+        "detected_at": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
     print("  -> Correlation Window Completed.")
     print(f"  -> Alert Contract ID: {alert_id}")
-    print(f"  -> Correlated User: {user_id} | Device: {device_id} | Public IP: {source_ip}")
+    print(
+        f"  -> Correlated User: {user_id} | Device: {device_id} | Public IP: {source_ip}"
+    )
     print(f"  -> Aggregated Anomaly Score: {total_score} (Threshold: >= 100)")
     print("  -> Alert contract payload emitted to ADK Multi-Agent Orchestrator!")
     return alert_payload
 
 
-def step_3_run_agent_investigation(alert: dict[str, Any], threat_type: str) -> dict[str, Any]:
+def step_3_run_agent_investigation(
+    alert: dict[str, Any], threat_type: str
+) -> dict[str, Any]:
     """
     Executes the 4-agent investigation team using local evidence-driven reasoning:
     - google_search_agent: OSINT IP reputation (strictly querying external IP)
@@ -211,6 +225,7 @@ def step_3_run_agent_investigation(alert: dict[str, Any], threat_type: str) -> d
     print("  [2] bq_investigation_agent (24-Hour Behavioral Telemetry):")
     os.environ["LOCAL_MODE"] = "true"
     from adk_agent.tools import get_entity_behavioral_profile, read_png_text_chunks
+
     profile = get_entity_behavioral_profile("user", user_id)
     fail_count = profile.get("total_login_failures_24h", 0)
     risky_files = profile.get("risky_file_transfers_24h", 0)
@@ -232,7 +247,9 @@ def step_3_run_agent_investigation(alert: dict[str, Any], threat_type: str) -> d
     print(f"      Result: {bq_summary}")
 
     # 3. visual_analysis_agent (Multimodal Screenshot Vision Forensics & Injection Defense)
-    print("  [3] visual_analysis_agent (Screenshot Forensics & Prompt Injection Guard):")
+    print(
+        "  [3] visual_analysis_agent (Screenshot Forensics & Prompt Injection Guard):"
+    )
     screenshot_file = os.path.join(SCREENSHOTS_DIR, f"{user_id}.png")
     prompt_injection_detected = False
     has_screenshot = os.path.exists(screenshot_file)
@@ -242,9 +259,16 @@ def step_3_run_agent_investigation(alert: dict[str, Any], threat_type: str) -> d
         ocr_text = ocr_chunks.get("forensic_ocr_text", "")
 
         INJECTION_KEYWORDS = [
-            "ai triage", "classify as", "instruction override", "system notice to ai",
-            "override instruction", "authorized red team", "authorized pentest",
-            "suppress all critical", "do not dispatch", "do not alert"
+            "ai triage",
+            "classify as",
+            "instruction override",
+            "system notice to ai",
+            "override instruction",
+            "authorized red team",
+            "authorized pentest",
+            "suppress all critical",
+            "do not dispatch",
+            "do not alert",
         ]
         if any(kw in ocr_text.lower() for kw in INJECTION_KEYWORDS):
             prompt_injection_detected = True
@@ -284,14 +308,19 @@ def step_3_run_agent_investigation(alert: dict[str, Any], threat_type: str) -> d
         def __init__(self, state: State):
             self.state = state
 
-    demo_state = State({
-        "prompt_injection_detected": prompt_injection_detected,
-        "malicious_indicators": mal_cmds > 0 or risky_files > 0,
-        "evidence_unavailable": False
-    }, {})
+    demo_state = State(
+        {
+            "prompt_injection_detected": prompt_injection_detected,
+            "malicious_indicators": mal_cmds > 0 or risky_files > 0,
+            "evidence_unavailable": False,
+        },
+        {},
+    )
     gate_block = security_gate_callback(_LocalTool(), {}, _LocalToolContext(demo_state))
     if gate_block:
-        print(f"      [🛡️ SECURITY GATE ENFORCED]: Attempted false-positive closure BLOCKED: {gate_block.get('reason')[:80]}...")
+        print(
+            f"      [🛡️ SECURITY GATE ENFORCED]: Attempted false-positive closure BLOCKED: {gate_block.get('reason')[:80]}..."
+        )
 
     if prompt_injection_detected:
         decision = "ESCALATED_PROMPT_INJECTION"
@@ -300,7 +329,11 @@ def step_3_run_agent_investigation(alert: dict[str, Any], threat_type: str) -> d
             "Security Gate Triggered: Threat score is high and forensic desktop evidence contains "
             "active prompt injection attempting to coerce AI triage into false-positive closure."
         )
-    elif mal_cmds > 0 or risky_files > 0 or (score >= 100 and ("North Korea" in osint_intel or "Russia" in osint_intel)):
+    elif (
+        mal_cmds > 0
+        or risky_files > 0
+        or (score >= 100 and ("North Korea" in osint_intel or "Russia" in osint_intel))
+    ):
         decision = "GENUINE_THREAT"
         severity = "CRITICAL"
         reason = "Confirmed APT credential compromise, unauthorized tool execution, and hostile foreign C2 infrastructure."
@@ -340,16 +373,23 @@ def step_3_run_agent_investigation(alert: dict[str, Any], threat_type: str) -> d
         status="ESCALATED",
         agent_decision=decision,
         agent_reason=reason,
-        screenshot_url=f"file://{os.path.abspath(screenshot_file)}" if has_screenshot else None,
+        screenshot_url=f"file://{os.path.abspath(screenshot_file)}"
+        if has_screenshot
+        else None,
         structured_report=report,
-        mitre_tactics=["Initial Access", "Command and Control", "Defense Evasion"] if prompt_injection_detected else (["Initial Access", "Command and Control", "Credential Access"] if threat_type == "malicious" else ["Discovery"]),
-        indicators_of_compromise=[source_ip, "c2-server-1.xyz"] if (threat_type == "malicious" or prompt_injection_detected) else [source_ip]
+        mitre_tactics=["Initial Access", "Command and Control", "Defense Evasion"]
+        if prompt_injection_detected
+        else (
+            ["Initial Access", "Command and Control", "Credential Access"]
+            if threat_type == "malicious"
+            else ["Discovery"]
+        ),
+        indicators_of_compromise=[source_ip, "c2-server-1.xyz"]
+        if (threat_type == "malicious" or prompt_injection_detected)
+        else [source_ip],
     )
 
-    return {
-        "ticket": ticket,
-        "report": report
-    }
+    return {"ticket": ticket, "report": report}
 
 
 def step_4_dispatch_ticket_locally(ticket: SocTicket):
@@ -359,7 +399,9 @@ def step_4_dispatch_ticket_locally(ticket: SocTicket):
     print("=======================================================")
     service = SocTicketingService(project_id="local-demo")
     msg = service.create_and_dispatch_ticket(ticket)
-    ticket_file = os.path.join(ESCALATIONS_DIR, f"human_escalation_information_{ticket.ticket_id}.json")
+    ticket_file = os.path.join(
+        ESCALATIONS_DIR, f"human_escalation_information_{ticket.ticket_id}.json"
+    )
 
     print(f"  -> {msg}")
     print(f"  -> File Queue: {ticket_file}")
@@ -367,16 +409,28 @@ def step_4_dispatch_ticket_locally(ticket: SocTicket):
     print("🎉 LOCAL DEMO EXECUTION COMPLETE!")
     print("-------------------------------------------------------")
     print("To open the interactive SOC Analyst Console, run:")
-    print("  LOCAL_MODE=true streamlit run src/demo/soc_ticketing/streamlit_soc_console.py")
+    print(
+        "  LOCAL_MODE=true streamlit run src/demo/soc_ticketing/streamlit_soc_console.py"
+    )
     print("-------------------------------------------------------\n")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="End-to-End Local Demo Runner (No Cloud Required)")
-    parser.add_argument("--threat", choices=["malicious", "false_positive", "injection"], default="malicious",
-                        help="Threat scenario to inject (malicious, false_positive, or injection).")
-    parser.add_argument("--user", type=str, default=None,
-                        help="Target user (default: u.lewis for malicious, l.taylor for false_positive, c.wilson for injection).")
+    parser = argparse.ArgumentParser(
+        description="End-to-End Local Demo Runner (No Cloud Required)"
+    )
+    parser.add_argument(
+        "--threat",
+        choices=["malicious", "false_positive", "injection"],
+        default="malicious",
+        help="Threat scenario to inject (malicious, false_positive, or injection).",
+    )
+    parser.add_argument(
+        "--user",
+        type=str,
+        default=None,
+        help="Target user (default: u.lewis for malicious, l.taylor for false_positive, c.wilson for injection).",
+    )
     args = parser.parse_args()
 
     if args.user:
@@ -389,7 +443,9 @@ def main():
         target_user = "u.lewis"
 
     # Step 1: Generate logs
-    scenario_data = step_1_generate_logs(threat_type=args.threat, target_user=target_user)
+    scenario_data = step_1_generate_logs(
+        threat_type=args.threat, target_user=target_user
+    )
 
     # Step 2: Correlate
     alert = step_2_correlate_events(scenario_data)
@@ -403,4 +459,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -50,13 +50,12 @@ DATASET_ID = os.getenv("BIGQUERY_DATASET", "Cymbal_Cyber")
 MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 BIGQUERY_ADK_THREAT_ASSESSMENT = f"{PROJECT_ID}.{DATASET_ID}.adk_threat_assessment"
 GCS_ESCALATION_BUCKET = os.getenv(
-    "ESCALATION_BUCKET",
-    f"cymbal-cyber-adk-escalations-bucket_{PROJECT_ID}"
+    "ESCALATION_BUCKET", f"cymbal-cyber-adk-escalations-bucket_{PROJECT_ID}"
 )
 AGENT_SERVICE_ACCOUNT_NAME = os.getenv("AGENT_SERVICE_ACCOUNT", "cymbal-adk-agent-sa")
 GCS_SIGNER_SERVICE_ACCOUNT = os.getenv(
     "GCS_SIGNER_SA",
-    f"{AGENT_SERVICE_ACCOUNT_NAME}@{PROJECT_ID}.iam.gserviceaccount.com"
+    f"{AGENT_SERVICE_ACCOUNT_NAME}@{PROJECT_ID}.iam.gserviceaccount.com",
 )
 
 # Initialize GenAI Client
@@ -66,7 +65,9 @@ _genai_client = None
 def get_genai_client():
     global _genai_client
     if _genai_client is None:
-        _genai_client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
+        _genai_client = genai.Client(
+            vertexai=True, project=PROJECT_ID, location=LOCATION
+        )
     return _genai_client
 
 
@@ -80,10 +81,15 @@ def get_bq_client():
         creds = None
         try:
             from src.demo.soc_ticketing.ticketing_service import get_gcp_credentials
+
             creds = get_gcp_credentials()
         except Exception:
             pass
-        _bq_client = bigquery.Client(project=PROJECT_ID, credentials=creds) if creds else bigquery.Client(project=PROJECT_ID)
+        _bq_client = (
+            bigquery.Client(project=PROJECT_ID, credentials=creds)
+            if creds
+            else bigquery.Client(project=PROJECT_ID)
+        )
     return _bq_client
 
 
@@ -97,7 +103,7 @@ def get_soc_service():
         _soc_service = SocTicketingService(
             project_id=PROJECT_ID,
             dataset_id=DATASET_ID,
-            escalation_bucket=GCS_ESCALATION_BUCKET
+            escalation_bucket=GCS_ESCALATION_BUCKET,
         )
     return _soc_service
 
@@ -117,15 +123,23 @@ def _parse_alert_payload_to_row(alert_payload_str: str) -> dict:
         "agent_decision": None,
         "agent_reason": None,
         "human_decision": None,
-        "human_reason": None
+        "human_reason": None,
     }
     try:
-        data = json.loads(alert_payload_str) if isinstance(alert_payload_str, str) else alert_payload_str
+        data = (
+            json.loads(alert_payload_str)
+            if isinstance(alert_payload_str, str)
+            else alert_payload_str
+        )
         row["user_id"] = data.get("user") or data.get("user_id")
         row["device_id"] = data.get("device") or data.get("device_id")
         row["source_ip"] = data.get("ip_address") or data.get("source_ip")
-        row["total_2_min_threat_score"] = data.get("threat_score") or data.get("total_2_min_threat_score")
-        row["transaction_window_end"] = data.get("window_end") or data.get("transaction_window_end")
+        row["total_2_min_threat_score"] = data.get("threat_score") or data.get(
+            "total_2_min_threat_score"
+        )
+        row["transaction_window_end"] = data.get("window_end") or data.get(
+            "transaction_window_end"
+        )
     except Exception as e:
         logger.warning("Error parsing alert payload: %s", e)
     return row
@@ -133,15 +147,34 @@ def _parse_alert_payload_to_row(alert_payload_str: str) -> dict:
 
 # --- Security & SQL Injection Prevention ---
 ALLOWED_ENTITY_TYPES = {"user", "user_id", "device", "device_id", "ip", "source_ip"}
-ALLOWED_INTERVAL_WINDOWS = {"1 HOUR", "2 HOUR", "6 HOUR", "12 HOUR", "24 HOUR", "48 HOUR", "7 DAY", "30 DAY"}
-DEFAULT_MAX_BYTES_BILLED = int(os.getenv("BQ_MAX_BYTES_BILLED", "1073741824"))  # 1 GB default scan ceiling
-DESTRUCTIVE_SQL_TOKENS = {"DROP", "ALTER", "DELETE", "UPDATE", "INSERT", "TRUNCATE", "GRANT", "REVOKE", "MERGE"}
+ALLOWED_INTERVAL_WINDOWS = {
+    "1 HOUR",
+    "2 HOUR",
+    "6 HOUR",
+    "12 HOUR",
+    "24 HOUR",
+    "48 HOUR",
+    "7 DAY",
+    "30 DAY",
+}
+DEFAULT_MAX_BYTES_BILLED = int(
+    os.getenv("BQ_MAX_BYTES_BILLED", "1073741824")
+)  # 1 GB default scan ceiling
+DESTRUCTIVE_SQL_TOKENS = {
+    "DROP",
+    "ALTER",
+    "DELETE",
+    "UPDATE",
+    "INSERT",
+    "TRUNCATE",
+    "GRANT",
+    "REVOKE",
+    "MERGE",
+}
 
 
 def validate_dataset_sandboxing(
-    sql: str,
-    allowed_dataset: str,
-    allow_metadata: bool = False
+    sql: str, allowed_dataset: str, allow_metadata: bool = False
 ) -> None:
     """
     Validates that a SQL query strictly references the designated allowed dataset
@@ -157,13 +190,15 @@ def validate_dataset_sandboxing(
     clean_sql = re.sub(r"/\*.*?\*/", "", clean_sql, flags=re.DOTALL)
 
     # Extract CTE names from WITH clauses so local aliases are not mistaken for external tables
-    cte_names = set(re.findall(r"(?:WITH|,)\s*([a-zA-Z0-9_]+)\s+AS\s*\(", clean_sql, re.IGNORECASE))
+    cte_names = set(
+        re.findall(r"(?:WITH|,)\s*([a-zA-Z0-9_]+)\s+AS\s*\(", clean_sql, re.IGNORECASE)
+    )
 
     # Match tables in FROM, JOIN, or TABLE clauses
     table_candidates = re.findall(
         r"\b(?:FROM|JOIN)\s+(?:TABLE\s+)?([`'\"a-zA-Z0-9_\-\.]+)",
         clean_sql,
-        re.IGNORECASE
+        re.IGNORECASE,
     )
 
     # Match backticked table/function qualifiers `dataset.table` or `project.dataset.table`
@@ -173,7 +208,12 @@ def validate_dataset_sandboxing(
 
     for item in all_candidates:
         ident = item.strip("`'\" \t\n")
-        if not ident or ident.startswith("(") or ident.upper() == "UNNEST" or ident in cte_names:
+        if (
+            not ident
+            or ident.startswith("(")
+            or ident.upper() == "UNNEST"
+            or ident in cte_names
+        ):
             continue
         if "." in ident:
             parts = ident.split(".")
@@ -210,15 +250,15 @@ def inject_dataset_into_query(query: str, dataset_id: str = DATASET_ID) -> str:
     for tbl in known_tables:
         pattern = rf"\b(FROM|JOIN)\s+[`]?{tbl}[`]?(?=[\s;,)]|$)"
         replacement = rf"\1 `{dataset_id}.{tbl}`"
-        modified_query = re.sub(pattern, replacement, modified_query, flags=re.IGNORECASE)
+        modified_query = re.sub(
+            pattern, replacement, modified_query, flags=re.IGNORECASE
+        )
 
     return modified_query
 
 
 def validate_safe_sql_query(
-    sql: str,
-    allow_metadata: bool = False,
-    allowed_dataset: str | None = None
+    sql: str, allow_metadata: bool = False, allowed_dataset: str | None = None
 ) -> None:
     """
     Defense-in-depth pre-execution guardrail validating that SQL queries intended
@@ -240,18 +280,24 @@ def validate_safe_sql_query(
     upper_sql = sql.upper()
     for token in DESTRUCTIVE_SQL_TOKENS:
         if re.search(rf"\b{token}\b", upper_sql):
-            raise ValueError(f"Security Policy Violation: Destructive SQL operation '{token}' is strictly forbidden.")
+            raise ValueError(
+                f"Security Policy Violation: Destructive SQL operation '{token}' is strictly forbidden."
+            )
 
     # Sandbox dataset references if an allowed dataset is enforced
     if allowed_dataset:
         validate_dataset_sandboxing(sql, allowed_dataset, allow_metadata=allow_metadata)
+
 
 ENTITY_SAFE_PATTERN = re.compile(r"^[a-zA-Z0-9\._\-:@]+$")
 SQL_INJECTION_DANGEROUS_PATTERNS = [
     re.compile(r"['\";\\]"),
     re.compile(r"--"),
     re.compile(r"/\*|\*/"),
-    re.compile(r"\b(UNION|SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|EXEC|EXECUTE)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(UNION|SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|EXEC|EXECUTE)\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"\b(OR|AND)\b\s+['\"0-9\w]", re.IGNORECASE),
 ]
 
@@ -305,9 +351,7 @@ def create_rich_ticket_id(user_id: str) -> str:
 
 
 def build_event_logs_query(
-    entity_type: str,
-    entity_id: str,
-    window_to_investigate: str = "24 HOUR"
+    entity_type: str, entity_id: str, window_to_investigate: str = "24 HOUR"
 ) -> tuple[str, bigquery.QueryJobConfig]:
     """
     Generates a secure, parameterized SQL query and QueryJobConfig to construct
@@ -351,7 +395,12 @@ def build_event_logs_query(
     }
     partition_days = window_partition_days_map.get(clean_window, 1)
 
-    logger.info("Building %s parameterized SQL threat profile for %s: %s", clean_window, clean_type, clean_id)
+    logger.info(
+        "Building %s parameterized SQL threat profile for %s: %s",
+        clean_window,
+        clean_type,
+        clean_id,
+    )
 
     if clean_type in {"device", "device_id"}:
         access_filter = "device_id = @entity_id"
@@ -410,7 +459,7 @@ def build_event_logs_query(
         query_parameters=[
             bigquery.ScalarQueryParameter("entity_id", "STRING", clean_id)
         ],
-        maximum_bytes_billed=DEFAULT_MAX_BYTES_BILLED
+        maximum_bytes_billed=DEFAULT_MAX_BYTES_BILLED,
     )
 
     return query_sql.strip(), job_config
@@ -419,6 +468,7 @@ def build_event_logs_query(
 def read_png_text_chunks(file_path: str) -> dict[str, str]:
     """Reads embedded tEXt chunks from a PNG file without external image libraries."""
     import struct
+
     texts: dict[str, str] = {}
     if not os.path.exists(file_path):
         return texts
@@ -448,7 +498,9 @@ def read_png_text_chunks(file_path: str) -> dict[str, str]:
     return texts
 
 
-def _compute_profile_from_local_logs(entity_type: str, entity_id: str) -> dict[str, Any]:
+def _compute_profile_from_local_logs(
+    entity_type: str, entity_id: str
+) -> dict[str, Any]:
     """Computes exact behavioral profile metrics dynamically from local synthetic log files."""
     logs_dir = os.path.join(os.getcwd(), "local_demo_data", "logs")
     access_file = os.path.join(logs_dir, "user_access_events.jsonl")
@@ -482,9 +534,9 @@ def _compute_profile_from_local_logs(entity_type: str, entity_id: str) -> dict[s
                     ev_ip = str(ev.get("source_ip") or "").lower()
 
                     matches = (
-                        (entity_type == "user" and ev_user == clean_id) or
-                        (entity_type == "device" and ev_dev == clean_id) or
-                        (entity_type == "ip" and ev_ip == clean_id)
+                        (entity_type == "user" and ev_user == clean_id)
+                        or (entity_type == "device" and ev_dev == clean_id)
+                        or (entity_type == "ip" and ev_ip == clean_id)
                     )
                     if matches:
                         total_access += 1
@@ -495,7 +547,11 @@ def _compute_profile_from_local_logs(entity_type: str, entity_id: str) -> dict[s
                         ua = str(ev.get("user_agent") or "")
                         if ua:
                             user_agents.add(ua)
-                            if re.search(r"^(python-requests|curl|Go-http-client)", ua, re.IGNORECASE):
+                            if re.search(
+                                r"^(python-requests|curl|Go-http-client)",
+                                ua,
+                                re.IGNORECASE,
+                            ):
                                 suspicious_ua += 1
         except Exception as e:
             logger.warning("Error reading local access logs: %s", e)
@@ -510,9 +566,8 @@ def _compute_profile_from_local_logs(entity_type: str, entity_id: str) -> dict[s
                     ev_user = str(ev.get("user_id") or "").lower()
                     ev_ip = str(ev.get("source_ip") or "").lower()
 
-                    matches = (
-                        (entity_type == "user" and ev_user == clean_id) or
-                        (entity_type == "ip" and ev_ip == clean_id)
+                    matches = (entity_type == "user" and ev_user == clean_id) or (
+                        entity_type == "ip" and ev_ip == clean_id
                     )
                     if matches:
                         total_network += 1
@@ -522,10 +577,16 @@ def _compute_profile_from_local_logs(entity_type: str, entity_id: str) -> dict[s
                         if ft in ("exe", "dll", "ps1", "bat", "vbs"):
                             risky_files += 1
                         cmd = str(ev.get("command_line") or "")
-                        if re.search(r"(?i)(powershell -enc|IEX|DownloadString|mimikatz|payload)", cmd):
+                        if re.search(
+                            r"(?i)(powershell -enc|IEX|DownloadString|mimikatz|payload)",
+                            cmd,
+                        ):
                             mal_cmds += 1
                         domain = str(ev.get("network_domain") or "")
-                        if re.search(r"(\.ru|\.xyz|bad-domain|payload-downloader|c2-server)", domain):
+                        if re.search(
+                            r"(\.ru|\.xyz|bad-domain|payload-downloader|c2-server)",
+                            domain,
+                        ):
                             mal_dns += 1
                         if ev.get("destination_ip"):
                             dest_ips.add(ev["destination_ip"])
@@ -547,7 +608,7 @@ def _compute_profile_from_local_logs(entity_type: str, entity_id: str) -> dict[s
         "malicious_commands_24h": mal_cmds,
         "malicious_dns_queries_24h": mal_dns,
         "distinct_destination_ips_24h": len(dest_ips),
-        "distinct_files_transferred_24h": len(files_transferred)
+        "distinct_files_transferred_24h": len(files_transferred),
     }
 
 
@@ -555,7 +616,7 @@ def get_entity_behavioral_profile(
     entity_type: str,
     entity_id: str,
     window_to_investigate: str = "24 HOUR",
-    tool_context: ToolContext | None = None
+    tool_context: ToolContext | None = None,
 ) -> dict[str, Any]:
     """
     Retrieves the 24-hour behavioral profile and correlated anomaly metrics for an entity
@@ -575,7 +636,9 @@ def get_entity_behavioral_profile(
         dict: Correlated behavioral metrics including login failure counts, suspicious user agents,
               high privilege executions, risky file transfers, and C2 domain queries.
     """
-    sql, job_config = build_event_logs_query(entity_type, entity_id, window_to_investigate)
+    sql, job_config = build_event_logs_query(
+        entity_type, entity_id, window_to_investigate
+    )
     is_local_mode = os.getenv("LOCAL_MODE", "false").lower() == "true"
 
     if is_local_mode:
@@ -600,11 +663,19 @@ def get_entity_behavioral_profile(
                     "malicious_commands_24h": 0,
                     "malicious_dns_queries_24h": 0,
                     "distinct_destination_ips_24h": 0,
-                    "distinct_files_transferred_24h": 0
+                    "distinct_files_transferred_24h": 0,
                 }
         except Exception as e:
-            logger.error("BigQuery query failed for %s (%s). Failing closed with evidence_unavailable.", entity_id, e)
-            if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
+            logger.error(
+                "BigQuery query failed for %s (%s). Failing closed with evidence_unavailable.",
+                entity_id,
+                e,
+            )
+            if (
+                tool_context
+                and hasattr(tool_context, "state")
+                and tool_context.state is not None
+            ):
                 tool_context.state["evidence_unavailable"] = True
             return {
                 "status": "ERROR",
@@ -613,18 +684,24 @@ def get_entity_behavioral_profile(
                     "CRITICAL INFRASTRUCTURE FAILURE: BigQuery telemetry unavailable. "
                     "Evidence cannot be verified. Security policy prohibits closing alert as FALSE POSITIVE. "
                     "You MUST invoke escalate_to_human immediately."
-                )
+                ),
             }
 
     # Update state flag on malicious indicators to enforce deterministic security gate
     if (
-        res.get("total_login_failures_24h", 0) > 5 or
-        res.get("malicious_commands_24h", 0) > 0 or
-        res.get("risky_file_transfers_24h", 0) > 0 or
-        res.get("malicious_dns_queries_24h", 0) > 0
+        res.get("total_login_failures_24h", 0) > 5
+        or res.get("malicious_commands_24h", 0) > 0
+        or res.get("risky_file_transfers_24h", 0) > 0
+        or res.get("malicious_dns_queries_24h", 0) > 0
     ):
-        logger.info("Setting state['malicious_indicators'] = True for entity: %s", entity_id)
-        if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
+        logger.info(
+            "Setting state['malicious_indicators'] = True for entity: %s", entity_id
+        )
+        if (
+            tool_context
+            and hasattr(tool_context, "state")
+            and tool_context.state is not None
+        ):
             tool_context.state["malicious_indicators"] = True
 
     return res
@@ -635,7 +712,7 @@ def execute_sql(
     tool_context: ToolContext | None = None,
     *,
     allow_metadata: bool = False,
-    allowed_dataset: str | None = None
+    allowed_dataset: str | None = None,
 ) -> str:
     """
     Executes a read-only SQL query against the BigQuery security dataset.
@@ -661,40 +738,58 @@ def execute_sql(
 
     target_dataset = allowed_dataset or DATASET_ID
     # Validate destructive tokens, INFORMATION_SCHEMA, and cross-dataset references
-    validate_safe_sql_query(query, allow_metadata=allow_metadata, allowed_dataset=target_dataset)
+    validate_safe_sql_query(
+        query, allow_metadata=allow_metadata, allowed_dataset=target_dataset
+    )
 
     # Inject dataset dynamically for bare table references
     interpolated_query = inject_dataset_into_query(query, dataset_id=target_dataset)
 
     is_local_mode = os.getenv("LOCAL_MODE", "false").lower() == "true"
     if is_local_mode:
-        logger.info("Local mode execute_sql executing query: %s", interpolated_query[:100])
-        return json.dumps([{"status": "LOCAL_SIMULATION_SUCCESS", "query": interpolated_query[:100]}])
+        logger.info(
+            "Local mode execute_sql executing query: %s", interpolated_query[:100]
+        )
+        return json.dumps(
+            [{"status": "LOCAL_SIMULATION_SUCCESS", "query": interpolated_query[:100]}]
+        )
 
     try:
         bq = get_bq_client()
         job_config = bigquery.QueryJobConfig(
             maximum_bytes_billed=DEFAULT_MAX_BYTES_BILLED,
-            default_dataset=f"{PROJECT_ID}.{target_dataset}"
+            default_dataset=f"{PROJECT_ID}.{target_dataset}",
         )
         query_job = bq.query(interpolated_query, job_config=job_config)
         rows = [dict(row.items()) for row in query_job.result()]
         return json.dumps(rows, default=str)
     except Exception as e:
         logger.error("execute_sql query execution failed: %s", e)
-        if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
+        if (
+            tool_context
+            and hasattr(tool_context, "state")
+            and tool_context.state is not None
+        ):
             tool_context.state["evidence_unavailable"] = True
         raise
 
 
-def get_visual_analysis_for_user(gcs_uri: str, tool_context: ToolContext | None = None) -> str:
+def get_visual_analysis_for_user(
+    gcs_uri: str, tool_context: ToolContext | None = None
+) -> str:
     """
     Performs multimodal inspection of a desktop screenshot using Gemini.
     Performs OCR on terminals, identifies command prompts, and evaluates suspicious UI activity.
     Detects adversarial prompt injection attempts and sets state['prompt_injection_detected'].
     """
-    if not gcs_uri or (not gcs_uri.startswith("gs://") and not gcs_uri.startswith("file://")):
-        if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
+    if not gcs_uri or (
+        not gcs_uri.startswith("gs://") and not gcs_uri.startswith("file://")
+    ):
+        if (
+            tool_context
+            and hasattr(tool_context, "state")
+            and tool_context.state is not None
+        ):
             tool_context.state["evidence_unavailable"] = True
         return f"Cannot perform visual analysis. Invalid or missing GCS URI: {gcs_uri}. Visual evidence unavailable."
 
@@ -714,20 +809,34 @@ def get_visual_analysis_for_user(gcs_uri: str, tool_context: ToolContext | None 
     if is_local_mode or "file://" in gcs_uri:
         # Local forensic inspection: Extract OCR metadata from local screenshot file
         filename = gcs_uri.split("/")[-1].replace(".png", "")
-        file_path_candidate = gcs_uri.replace("file://", "") if gcs_uri.startswith("file://") else ""
+        file_path_candidate = (
+            gcs_uri.replace("file://", "") if gcs_uri.startswith("file://") else ""
+        )
         repo_root = Path(__file__).resolve().parents[1]
-        repo_screenshot = repo_root / "local_demo_data" / "user_screenshots" / f"{filename}.png"
+        repo_screenshot = (
+            repo_root / "local_demo_data" / "user_screenshots" / f"{filename}.png"
+        )
         if file_path_candidate and os.path.exists(file_path_candidate):
             local_path = file_path_candidate
         elif repo_screenshot.exists():
             local_path = str(repo_screenshot)
-        elif os.path.exists(os.path.join(os.getcwd(), "local_demo_data", "user_screenshots", f"{filename}.png")):
-            local_path = os.path.join(os.getcwd(), "local_demo_data", "user_screenshots", f"{filename}.png")
+        elif os.path.exists(
+            os.path.join(
+                os.getcwd(), "local_demo_data", "user_screenshots", f"{filename}.png"
+            )
+        ):
+            local_path = os.path.join(
+                os.getcwd(), "local_demo_data", "user_screenshots", f"{filename}.png"
+            )
         else:
-            local_path = os.path.join(os.getcwd(), "src", "demo", "user_screenshots", f"{filename}.png")
+            local_path = os.path.join(
+                os.getcwd(), "src", "demo", "user_screenshots", f"{filename}.png"
+            )
         ocr_chunks = read_png_text_chunks(local_path)
         if "forensic_ocr_text" in ocr_chunks:
-            visual_text = f"Forensic Desktop OCR Output:\n{ocr_chunks['forensic_ocr_text']}"
+            visual_text = (
+                f"Forensic Desktop OCR Output:\n{ocr_chunks['forensic_ocr_text']}"
+            )
         else:
             visual_text = f"Forensic inspection of desktop {filename}.png: Workspace shows standard developer console. No malicious tools."
     else:
@@ -737,25 +846,42 @@ def get_visual_analysis_for_user(gcs_uri: str, tool_context: ToolContext | None 
                 model=MODEL_NAME,
                 contents=[
                     types.Part.from_uri(file_uri=gcs_uri, mime_type="image/png"),
-                    types.Part.from_text(text=prompt_text)
-                ]
+                    types.Part.from_text(text=prompt_text),
+                ],
             )
             visual_text = (response.text or "").strip()
         except Exception as e:
-            logger.error("Error during multimodal visual analysis for %s: %s", gcs_uri, e)
-            if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
+            logger.error(
+                "Error during multimodal visual analysis for %s: %s", gcs_uri, e
+            )
+            if (
+                tool_context
+                and hasattr(tool_context, "state")
+                and tool_context.state is not None
+            ):
                 tool_context.state["evidence_unavailable"] = True
             return f"Error: Multimodal visual analysis service unavailable for {gcs_uri}: {e}. Visual evidence unavailable."
 
     # Deterministic Prompt Injection Keyword Scanner
     INJECTION_KEYWORDS = [
-        "ai triage", "classify as", "instruction override", "system notice to ai",
-        "override instruction", "authorized red team", "authorized pentest",
-        "suppress all critical", "do not dispatch", "do not alert"
+        "ai triage",
+        "classify as",
+        "instruction override",
+        "system notice to ai",
+        "override instruction",
+        "authorized red team",
+        "authorized pentest",
+        "suppress all critical",
+        "do not dispatch",
+        "do not alert",
     ]
     if any(kw in visual_text.lower() for kw in INJECTION_KEYWORDS):
         logger.warning("PROMPT INJECTION DETECTED in visual evidence for %s", gcs_uri)
-        if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
+        if (
+            tool_context
+            and hasattr(tool_context, "state")
+            and tool_context.state is not None
+        ):
             tool_context.state["prompt_injection_detected"] = True
         visual_text = f"[SECURITY ALERT: PROMPT INJECTION DETECTED IN DESKTOP SCREENSHOT]\n{visual_text}"
 
@@ -778,16 +904,19 @@ def get_gcs_uri_for_user(user: str) -> str:
     validate_safe_sql_query(sql, allowed_dataset=DATASET_ID)
     try:
         from google.cloud import bigquery
+
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
                 bigquery.ScalarQueryParameter("user_id", "STRING", clean_user)
             ],
-            maximum_bytes_billed=DEFAULT_MAX_BYTES_BILLED
+            maximum_bytes_billed=DEFAULT_MAX_BYTES_BILLED,
         )
         bq = get_bq_client()
         results = list(bq.query(sql, job_config=job_config).result())
         if not results:
-            fallback_uri = f"gs://cymbal-cyber-screenshots_{PROJECT_ID}/{clean_user}.png"
+            fallback_uri = (
+                f"gs://cymbal-cyber-screenshots_{PROJECT_ID}/{clean_user}.png"
+            )
             logger.info("No join match in view, using default URI: %s", fallback_uri)
             return fallback_uri
         return results[0].gcs_uri
@@ -812,11 +941,15 @@ def generate_signed_url(gcs_uri: str) -> str:
                 source_credentials=source_credentials,
                 target_principal=GCS_SIGNER_SERVICE_ACCOUNT,
                 target_scopes=["https://www.googleapis.com/auth/devstorage.read_only"],
-                lifetime=300
+                lifetime=300,
             )
             storage_client = storage.Client(credentials=target_credentials)
         except Exception as imp_err:
-            logger.error("Impersonation of signer SA (%s) failed: %s", GCS_SIGNER_SERVICE_ACCOUNT, imp_err)
+            logger.error(
+                "Impersonation of signer SA (%s) failed: %s",
+                GCS_SIGNER_SERVICE_ACCOUNT,
+                imp_err,
+            )
             return f"Error: Failed to obtain impersonated signing credentials for {GCS_SIGNER_SERVICE_ACCOUNT}: {imp_err}"
 
         bucket_name, object_name = gcs_uri.replace("gs://", "").split("/", 1)
@@ -826,10 +959,12 @@ def generate_signed_url(gcs_uri: str) -> str:
         return blob.generate_signed_url(
             version="v4",
             expiration=timedelta(minutes=30),
-            service_account_email=GCS_SIGNER_SERVICE_ACCOUNT
+            service_account_email=GCS_SIGNER_SERVICE_ACCOUNT,
         )
     except Exception as e:
-        logger.error("Could not generate impersonated signed URL for %s: %s", gcs_uri, e)
+        logger.error(
+            "Could not generate impersonated signed URL for %s: %s", gcs_uri, e
+        )
         return f"Error: Failed to generate signed URL: {e}"
 
 
@@ -840,7 +975,7 @@ def dispatch_to_soc_ticketing_system(
     structured_report: str,
     severity: str = "HIGH",
     screenshot_url: str = "",
-    tool_context: ToolContext | None = None
+    tool_context: ToolContext | None = None,
 ) -> str:
     """
     Passes a confirmed or suspected threat incident ticket directly to the SOC Ticketing System.
@@ -859,27 +994,31 @@ def dispatch_to_soc_ticketing_system(
         device_id=device_id,
         source_ip=source_ip,
         threat_score=threat_score,
-        severity=severity.upper() if severity in ["CRITICAL", "HIGH", "MEDIUM", "LOW"] else "HIGH",
+        severity=severity.upper()
+        if severity in ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+        else "HIGH",
         status="ESCALATED",
         agent_decision="PERCEIVED_THREAT",
         agent_reason=agent_reason,
         screenshot_url=screenshot_url or None,
         structured_report=structured_report,
         mitre_tactics=["Initial Access", "Command and Control", "Privilege Escalation"],
-        indicators_of_compromise=[source_ip]
+        indicators_of_compromise=[source_ip],
     )
 
     soc_service = get_soc_service()
     res = soc_service.create_and_dispatch_ticket(ticket)
-    if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
+    if (
+        tool_context
+        and hasattr(tool_context, "state")
+        and tool_context.state is not None
+    ):
         tool_context.state["ticket_dispatched"] = True
     return res
 
 
 def log_false_positive(
-    alert_payload: str,
-    agent_comment: str,
-    tool_context: ToolContext | None = None
+    alert_payload: str, agent_comment: str, tool_context: ToolContext | None = None
 ) -> str:
     """Logs the alert as an autonomously resolved False Positive in BigQuery."""
     logger.info("Logging false positive: %s", agent_comment)
@@ -894,16 +1033,28 @@ def log_false_positive(
         errors = bq.insert_rows_json(BIGQUERY_ADK_THREAT_ASSESSMENT, [row_data])
         if errors:
             logger.error("Failed to insert false positive to BigQuery: %s", errors)
-            if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
+            if (
+                tool_context
+                and hasattr(tool_context, "state")
+                and tool_context.state is not None
+            ):
                 tool_context.state["evidence_unavailable"] = True
             return f"Failed to log false positive in BigQuery. Errors: {errors}"
 
-        if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
+        if (
+            tool_context
+            and hasattr(tool_context, "state")
+            and tool_context.state is not None
+        ):
             tool_context.state["false_positive_logged"] = True
         return "Successfully logged alert as a False Positive in BigQuery."
     except Exception as e:
         logger.error("Exception during false positive logging: %s", e)
-        if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
+        if (
+            tool_context
+            and hasattr(tool_context, "state")
+            and tool_context.state is not None
+        ):
             tool_context.state["evidence_unavailable"] = True
         return f"Error logging false positive: {e}"
 
@@ -913,7 +1064,7 @@ def escalate_to_human(
     alert_payload: str,
     agent_reason_for_escalation: str,
     context_data: str,
-    tool_context: ToolContext | None = None
+    tool_context: ToolContext | None = None,
 ) -> str:
     """
     Dispatches the incident ticket to the SOC ticketing queue for human analyst adjudication.
@@ -925,7 +1076,9 @@ def escalate_to_human(
     user_id = row.get("user_id") or "unknown_user"
     screenshot_url = None
     if context_data:
-        m_url = re.search(r'https://storage\.googleapis\.com/[^\s\)\"\']+', context_data)
+        m_url = re.search(
+            r"https://storage\.googleapis\.com/[^\s\)\"\']+", context_data
+        )
         if m_url:
             screenshot_url = m_url.group(0)
 
@@ -941,14 +1094,21 @@ def escalate_to_human(
         agent_decision="PERCEIVED_THREAT",
         agent_reason=agent_reason_for_escalation,
         screenshot_url=screenshot_url,
-        structured_report=context_data
+        structured_report=context_data,
     )
     result = soc_service.create_and_dispatch_ticket(ticket)
-    if tool_context and hasattr(tool_context, "state") and tool_context.state is not None:
+    if (
+        tool_context
+        and hasattr(tool_context, "state")
+        and tool_context.state is not None
+    ):
         tool_context.state["escalation_dispatched"] = True
-    logger.info("Escalated ticket %s to human analyst: %s", ticket_id, agent_reason_for_escalation)
+    logger.info(
+        "Escalated ticket %s to human analyst: %s",
+        ticket_id,
+        agent_reason_for_escalation,
+    )
     return (
         f"Incident successfully escalated to Human SOC Analyst: Ticket ID '{ticket_id}'. "
         f"Status: ESCALATED_PENDING_REVIEW. Queue Result: {result}"
     )
-

@@ -47,7 +47,9 @@ class BigQueryThreatScanner:
         self.bq_client = bigquery.Client(project=project_id)
         self.session_service = InMemorySessionService()
 
-    def find_new_threat_events(self, lookback_minutes: int = 15, min_score: int = 100) -> list[dict[str, Any]]:
+    def find_new_threat_events(
+        self, lookback_minutes: int = 15, min_score: int = 100
+    ) -> list[dict[str, Any]]:
         """
         Queries BigQuery to detect correlated security threat events that
         have not yet been assessed in adk_threat_assessment.
@@ -113,7 +115,11 @@ class BigQueryThreatScanner:
         LIMIT 3;
         """
         try:
-            logger.info("Scanning BigQuery (%s.%s) for new threat events...", self.project_id, self.dataset_id)
+            logger.info(
+                "Scanning BigQuery (%s.%s) for new threat events...",
+                self.project_id,
+                self.dataset_id,
+            )
             query_job = self.bq_client.query(query)
             results = [dict(row.items()) for row in query_job.result()]
             # Format datetime fields
@@ -135,13 +141,18 @@ class BigQueryThreatScanner:
         if self.bq_client is None:
             return
         try:
-            assessment_table_id = f"{self.project_id}.{self.dataset_id}.adk_threat_assessment"
+            assessment_table_id = (
+                f"{self.project_id}.{self.dataset_id}.adk_threat_assessment"
+            )
             pending_row = {
-                "transaction_window_end": threat_payload.get("window_end") or datetime.now(UTC).isoformat(),
+                "transaction_window_end": threat_payload.get("window_end")
+                or datetime.now(UTC).isoformat(),
                 "user_id": threat_payload.get("user_id"),
                 "device_id": threat_payload.get("device_id") or "unknown_device",
                 "source_ip": threat_payload.get("source_ip") or "unknown_ip",
-                "total_2_min_threat_score": threat_payload.get("total_2_min_threat_score", 100),
+                "total_2_min_threat_score": threat_payload.get(
+                    "total_2_min_threat_score", 100
+                ),
                 "agent_decision": "PENDING_INVESTIGATION",
                 "agent_reason": "In-flight autonomous investigation initiated by threat scanner.",
                 "human_decision": None,
@@ -149,9 +160,14 @@ class BigQueryThreatScanner:
                 "alert_payload": json.dumps(threat_payload, default=str),
             }
             self.bq_client.insert_rows_json(assessment_table_id, [pending_row])
-            logger.info("Marked in-flight investigation PENDING for user: %s", threat_payload.get("user_id"))
+            logger.info(
+                "Marked in-flight investigation PENDING for user: %s",
+                threat_payload.get("user_id"),
+            )
         except Exception as e:
-            logger.warning("Could not pre-insert PENDING assessment row in BigQuery: %s", e)
+            logger.warning(
+                "Could not pre-insert PENDING assessment row in BigQuery: %s", e
+            )
 
     async def investigate_threat(self, threat_payload: dict[str, Any]) -> str:
         """
@@ -164,7 +180,10 @@ class BigQueryThreatScanner:
         user_id = threat_payload.get("user_id", "security_scanner")
 
         payload_json = json.dumps(threat_payload, default=str)
-        logger.info("Dispatching threat to ADK Multi-Agent Orchestrator (Session: %s)...", session_id)
+        logger.info(
+            "Dispatching threat to ADK Multi-Agent Orchestrator (Session: %s)...",
+            session_id,
+        )
 
         _ = await self.session_service.create_session(
             app_name=app_name,
@@ -182,8 +201,8 @@ class BigQueryThreatScanner:
                 "evidence_unavailable": False,
                 "ticket_dispatched": False,
                 "escalation_dispatched": False,
-                "false_positive_logged": False
-            }
+                "false_positive_logged": False,
+            },
         )
 
         plugins: list[BasePlugin] = [bq_analytics_plugin] if bq_analytics_plugin else []
@@ -191,16 +210,14 @@ class BigQueryThreatScanner:
             agent=root_agent,
             app_name=app_name,
             session_service=self.session_service,
-            plugins=plugins
+            plugins=plugins,
         )
 
         content = types.Content(role="user", parts=[types.Part(text=payload_json)])
         final_response = ""
 
         async for event in runner.run_async(
-            user_id=user_id,
-            session_id=session_id,
-            new_message=content
+            user_id=user_id, session_id=session_id, new_message=content
         ):
             if event.is_final_response() and event.content and event.content.parts:
                 part = event.content.parts[0]
@@ -210,15 +227,25 @@ class BigQueryThreatScanner:
 
         return final_response
 
-    async def run_loop(self, daemon: bool = False, interval: int = SCAN_INTERVAL_SECONDS):
+    async def run_loop(
+        self, daemon: bool = False, interval: int = SCAN_INTERVAL_SECONDS
+    ):
         """Runs the threat scanning loop."""
         setup_logging()
-        logger.info("Starting BigQuery Threat Scanner (Daemon: %s, Interval: %ds)...", daemon, interval)
+        logger.info(
+            "Starting BigQuery Threat Scanner (Daemon: %s, Interval: %ds)...",
+            daemon,
+            interval,
+        )
 
         while True:
             threats = self.find_new_threat_events()
             for threat in threats:
-                logger.info("Discovered Threat for user: %s (Score: %s)", threat.get("user_id"), threat.get("total_2_min_threat_score"))
+                logger.info(
+                    "Discovered Threat for user: %s (Score: %s)",
+                    threat.get("user_id"),
+                    threat.get("total_2_min_threat_score"),
+                )
                 await self.investigate_threat(threat)
 
             if not daemon:
@@ -230,9 +257,20 @@ class BigQueryThreatScanner:
 
 def main():
     parser = argparse.ArgumentParser(description="BigQuery Threat Scanner Service")
-    parser.add_argument("--daemon", action="store_true", help="Run scanner continuously in the background.")
-    parser.add_argument("--once", action="store_true", help="Run a single scan and exit.")
-    parser.add_argument("--interval", type=int, default=SCAN_INTERVAL_SECONDS, help="Seconds between scans.")
+    parser.add_argument(
+        "--daemon",
+        action="store_true",
+        help="Run scanner continuously in the background.",
+    )
+    parser.add_argument(
+        "--once", action="store_true", help="Run a single scan and exit."
+    )
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=SCAN_INTERVAL_SECONDS,
+        help="Seconds between scans.",
+    )
     parser.add_argument("--project-id", default=PROJECT_ID, help="GCP Project ID.")
     parser.add_argument("--dataset", default=DATASET_ID, help="BigQuery dataset name.")
     args = parser.parse_args()
@@ -244,4 +282,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

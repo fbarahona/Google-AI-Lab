@@ -1,6 +1,7 @@
 """
 Synthetic Data Generator Package.
 """
+
 from .log_generator import SyntheticLogEngine
 from .models import NetworkEvent, UserAccessEvent
 from .sinks import BaseSink, BigQuerySink, GoogleCloudStorageSink, LocalSink, PubSubSink
@@ -19,6 +20,5 @@ __all__ = [
     "SyntheticLogEngine",
     "UserAccessEvent",
     "generate_false_positive_threat_scenario",
-    "generate_malicious_threat_scenario"
+    "generate_malicious_threat_scenario",
 ]
-
