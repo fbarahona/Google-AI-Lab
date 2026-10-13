@@ -112,6 +112,8 @@ if command -v terraform >/dev/null 2>&1 && [ -d "${TERRAFORM_DIR}" ]; then
   TARGET_OPTS=(
     -target=google_artifact_registry_repository.agent_repo
     -target=google_artifact_registry_repository_iam_member.compute_sa_writer
+    -target=google_project_iam_member.compute_sa_storage_viewer
+    -target=google_project_iam_member.compute_sa_log_writer
     -target=google_artifact_registry_repository_iam_member.cloudbuild_sa_writer
   )
   if [[ -n "${DEPLOYER_MEMBER}" ]]; then

@@ -403,6 +403,20 @@ resource "google_artifact_registry_repository_iam_member" "compute_sa_writer" {
   member     = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
 }
 
+# Grant Compute Engine default service account storage viewer permissions to read Cloud Build source tarballs
+resource "google_project_iam_member" "compute_sa_storage_viewer" {
+  project = var.project_id
+  role    = "roles/storage.objectViewer"
+  member  = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
+}
+
+# Grant Compute Engine default service account logging writer permissions to publish build logs
+resource "google_project_iam_member" "compute_sa_log_writer" {
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
+}
+
 # Grant Cloud Build service account writer permissions on the repository
 resource "google_artifact_registry_repository_iam_member" "cloudbuild_sa_writer" {
   project    = var.project_id
