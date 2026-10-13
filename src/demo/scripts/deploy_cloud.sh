@@ -36,10 +36,18 @@ else
   echo "GEMINI_API_KEY detected and will be injected into Cloud Run."
 fi
 
+# Ensure Terraform uses the active gcloud authentication token, preventing "invalid token JSON from metadata: EOF"
+if command -v gcloud >/dev/null 2>&1; then
+  ACTIVE_OAUTH_TOKEN="$(gcloud auth print-access-token 2>/dev/null || true)"
+  if [ -n "${ACTIVE_OAUTH_TOKEN}" ]; then
+    export GOOGLE_OAUTH_ACCESS_TOKEN="${ACTIVE_OAUTH_TOKEN}"
+  fi
+fi
+
 # Validation guard: Verify active billing is enabled for the target GCP project
 if command -v gcloud >/dev/null 2>&1; then
   echo "Validating billing status for project: ${PROJECT_ID}..."
-  gcloud billing projects describe "${PROJECT_ID}" --format="value(billingEnabled)" 2>/dev/null | grep -q "true" || {
+  gcloud billing projects describe "${PROJECT_ID}" --format="value(billingEnabled)" 2>/dev/null | grep -qi "true" || {
     echo "Error: Billing is not enabled for project ${PROJECT_ID}"
     exit 1
   }
@@ -52,11 +60,31 @@ if command -v gcloud >/dev/null 2>&1; then
     bigquerystorage.googleapis.com \
     artifactregistry.googleapis.com \
     cloudscheduler.googleapis.com \
+    cloudbuild.googleapis.com \
     --project="${PROJECT_ID}" --quiet || true
 fi
 
 ARTIFACT_REPO="${ARTIFACT_REPO:-cymbal-cyber}"
 IMAGE_TAG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REPO}/cymbal-cyber-agent:latest"
+
+# Detect active deploying account to ensure it is granted Artifact Registry writer permissions
+DEPLOYER_MEMBER=""
+if command -v gcloud >/dev/null 2>&1; then
+  ACTIVE_ACCOUNT=$(gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null | head -n1 || true)
+  if [[ -n "${ACTIVE_ACCOUNT}" ]]; then
+    if [[ "${ACTIVE_ACCOUNT}" == *".gserviceaccount.com"* ]]; then
+      DEPLOYER_MEMBER="serviceAccount:${ACTIVE_ACCOUNT}"
+    else
+      DEPLOYER_MEMBER="user:${ACTIVE_ACCOUNT}"
+    fi
+    echo "Deploying identity detected: ${DEPLOYER_MEMBER}"
+  fi
+fi
+
+DEPLOYER_VAR=()
+if [[ -n "${DEPLOYER_MEMBER}" ]]; then
+  DEPLOYER_VAR=(-var="deployer_member=${DEPLOYER_MEMBER}")
+fi
 
 # 1. Provision Artifact Registry repository via targeted Terraform first
 if command -v terraform >/dev/null 2>&1 && [ -d "${TERRAFORM_DIR}" ]; then
@@ -80,11 +108,20 @@ if command -v terraform >/dev/null 2>&1 && [ -d "${TERRAFORM_DIR}" ]; then
     fi
   fi
 
+  TARGET_OPTS=(
+    -target=google_artifact_registry_repository.agent_repo
+    -target=google_artifact_registry_repository_iam_member.compute_sa_writer
+    -target=google_artifact_registry_repository_iam_member.cloudbuild_sa_writer
+  )
+  if [[ -n "${DEPLOYER_MEMBER}" ]]; then
+    TARGET_OPTS+=(-target=google_artifact_registry_repository_iam_member.deployer_writer)
+  fi
+
   terraform -chdir="${TERRAFORM_DIR}" apply -auto-approve \
-    -target=google_artifact_registry_repository.agent_repo \
-    -target=google_artifact_registry_repository_iam_member.compute_sa_writer \
+    "${TARGET_OPTS[@]}" \
     -var="project_id=${PROJECT_ID}" \
-    -var="region=${REGION}"
+    -var="region=${REGION}" \
+    "${DEPLOYER_VAR[@]}"
 fi
 
 # 2. Configure regional Docker authentication for Artifact Registry
@@ -122,7 +159,8 @@ if command -v terraform >/dev/null 2>&1 && [ -d "${TERRAFORM_DIR}" ]; then
     -var="project_id=${PROJECT_ID}" \
     -var="region=${REGION}" \
     -var="agent_image=${IMAGE_TAG}" \
-    -var="gemini_api_key=${GEMINI_API_KEY:-}"
+    -var="gemini_api_key=${GEMINI_API_KEY:-}" \
+    "${DEPLOYER_VAR[@]}"
 fi
 
 # 3. Direct update of Cloud Run Service & Job (ensures active revision rollout)

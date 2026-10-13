@@ -94,3 +94,9 @@ variable "gemini_api_key" {
   sensitive   = true
 }
 
+variable "deployer_member" {
+  description = "Optional IAM member (e.g. user:name@example.com or serviceAccount:sa@...) granted roles/artifactregistry.writer to build and push container images."
+  type        = string
+  default     = ""
+}
+

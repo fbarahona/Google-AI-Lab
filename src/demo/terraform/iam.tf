@@ -391,3 +391,35 @@ resource "google_kms_crypto_key_iam_member" "bigquery_kms_encrypter_decrypter" {
   member        = "serviceAccount:${google_project_service_identity.bigquery_sa[0].email}"
 }
 
+# ==============================================================================
+# 7. Artifact Registry Build & Push Workload IAM (Container Image Deployment)
+# ==============================================================================
+# Grant Compute Engine default service account writer permissions (Cloud Build modern default)
+resource "google_artifact_registry_repository_iam_member" "compute_sa_writer" {
+  project    = var.project_id
+  location   = var.region
+  repository = google_artifact_registry_repository.agent_repo.name
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
+}
+
+# Grant Cloud Build service account writer permissions on the repository
+resource "google_artifact_registry_repository_iam_member" "cloudbuild_sa_writer" {
+  project    = var.project_id
+  location   = var.region
+  repository = google_artifact_registry_repository.agent_repo.name
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${data.google_project.project.number}@cloudbuild.gserviceaccount.com"
+}
+
+# Grant deploying user or CI/CD identity writer permissions to push container images
+resource "google_artifact_registry_repository_iam_member" "deployer_writer" {
+  count      = var.deployer_member != "" ? 1 : 0
+  project    = var.project_id
+  location   = var.region
+  repository = google_artifact_registry_repository.agent_repo.name
+  role       = "roles/artifactregistry.writer"
+  member     = var.deployer_member
+}
+
+

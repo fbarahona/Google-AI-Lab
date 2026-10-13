@@ -19,15 +19,8 @@ resource "google_artifact_registry_repository" "agent_repo" {
   depends_on = [google_project_service.required]
 }
 
-# Grant Compute Engine default service account writer permissions on the repository
-# (Modern Google Cloud default for Cloud Build; legacy @cloudbuild.gserviceaccount.com omitted to prevent apply failures)
-resource "google_artifact_registry_repository_iam_member" "compute_sa_writer" {
-  project    = var.project_id
-  location   = var.region
-  repository = google_artifact_registry_repository.agent_repo.name
-  role       = "roles/artifactregistry.writer"
-  member     = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
-}
+# NOTE: Artifact Registry repository IAM permissions (compute_sa_writer, cloudbuild_sa_writer, deployer_writer)
+# are centralized in iam.tf.
 
 # NOTE: The ADK agent webhook service (google_cloud_run_v2_service.adk_agent_service)
 # and its invoker binding are configured in cloud_run.tf with horizontal scaling controls.
