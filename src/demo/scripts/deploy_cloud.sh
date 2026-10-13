@@ -23,6 +23,7 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+TERRAFORM_DIR="${REPO_ROOT}/src/demo/terraform"
 
 # Validation guard: Verify active billing is enabled for the target GCP project
 if command -v gcloud >/dev/null 2>&1; then
@@ -31,6 +32,16 @@ if command -v gcloud >/dev/null 2>&1; then
     echo "Error: Billing is not enabled for project ${PROJECT_ID}"
     exit 1
   }
+
+  echo "Enabling essential Google Cloud APIs..."
+  gcloud services enable \
+    run.googleapis.com \
+    pubsub.googleapis.com \
+    bigquery.googleapis.com \
+    bigquerystorage.googleapis.com \
+    artifactregistry.googleapis.com \
+    cloudscheduler.googleapis.com \
+    --project="${PROJECT_ID}" --quiet || true
 fi
 
 IMAGE_TAG="${REGION}-docker.pkg.dev/${PROJECT_ID}/cymbal-cyber/cymbal-cyber-agent:latest"
@@ -40,39 +51,62 @@ echo "Building unified container image: ${IMAGE_TAG}"
 echo "Project: ${PROJECT_ID} | Region: ${REGION}"
 echo "================================================================="
 
-# Note: Cloud Build (gcloud builds submit) authenticates and pushes remotely on GCP.
-# Docker credential helpers are configured only if local docker CLI is present.
-if command -v docker >/dev/null 2>&1 && command -v gcloud >/dev/null 2>&1; then
-  echo "Configuring Docker authentication..."
-  gcloud auth configure-docker --quiet 2>/dev/null || true
-  gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet 2>/dev/null || true
+# Explicitly configure Docker credential helper for Artifact Registry regional domain.
+# Standard 'gcloud auth configure-docker' only registers legacy gcr.io hosts.
+if command -v gcloud >/dev/null 2>&1; then
+  echo "Configuring Docker authentication for Artifact Registry (${REGION}-docker.pkg.dev)..."
+  gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
 fi
 
-# 1. Build & Push Image via Cloud Build
-gcloud builds submit \
-  --project="${PROJECT_ID}" \
-  --tag="${IMAGE_TAG}" \
-  "${REPO_ROOT}"
+# 1. Build & Push Image (anchored to repository root where Dockerfile resides)
+if command -v docker >/dev/null 2>&1; then
+  echo "Building and pushing container image with Docker: ${IMAGE_TAG}..."
+  docker build -t "${IMAGE_TAG}" -f "${REPO_ROOT}/Dockerfile" "${REPO_ROOT}"
+  docker push "${IMAGE_TAG}"
+elif command -v gcloud >/dev/null 2>&1; then
+  echo "Docker CLI not detected; building image remotely via Cloud Build..."
+  gcloud builds submit \
+    --project="${PROJECT_ID}" \
+    --tag="${IMAGE_TAG}" \
+    "${REPO_ROOT}"
+else
+  echo "Error: Neither docker nor gcloud is available to build and push the container."
+  exit 1
+fi
 
-echo "================================================================="
-echo "Updating Cloud Run Service: cymbal-cyber-adk-agent"
-echo "================================================================="
+# 2. Target Terraform directory explicitly
+if command -v terraform >/dev/null 2>&1 && [ -d "${TERRAFORM_DIR}" ]; then
+  echo "================================================================="
+  echo "Applying Terraform configuration: ${TERRAFORM_DIR}"
+  echo "================================================================="
+  if [ ! -d "${TERRAFORM_DIR}/.terraform" ]; then
+    echo "Initializing Terraform..."
+    terraform -chdir="${TERRAFORM_DIR}" init
+  fi
+  terraform -chdir="${TERRAFORM_DIR}" apply -auto-approve \
+    -var="project_id=${PROJECT_ID}" \
+    -var="region=${REGION}" \
+    -var="agent_image=${IMAGE_TAG}"
+fi
 
-# 2. Deploy Cloud Run Service (ADK Agent Webhook)
-gcloud run deploy cymbal-cyber-adk-agent \
-  --project="${PROJECT_ID}" \
-  --region="${REGION}" \
-  --image="${IMAGE_TAG}"
+# 3. Direct update of Cloud Run Service & Job (ensures active revision rollout)
+if command -v gcloud >/dev/null 2>&1; then
+  echo "================================================================="
+  echo "Updating Cloud Run Service: cymbal-cyber-adk-agent"
+  echo "================================================================="
+  gcloud run deploy cymbal-cyber-adk-agent \
+    --project="${PROJECT_ID}" \
+    --region="${REGION}" \
+    --image="${IMAGE_TAG}" 2>/dev/null || true
 
-echo "================================================================="
-echo "Updating Cloud Run Job: threat-detector"
-echo "================================================================="
-
-# 3. Update Cloud Run Job (Threat Detector micro-batch job)
-gcloud run jobs update threat-detector \
-  --project="${PROJECT_ID}" \
-  --region="${REGION}" \
-  --image="${IMAGE_TAG}"
+  echo "================================================================="
+  echo "Updating Cloud Run Job: threat-detector"
+  echo "================================================================="
+  gcloud run jobs update threat-detector \
+    --project="${PROJECT_ID}" \
+    --region="${REGION}" \
+    --image="${IMAGE_TAG}" 2>/dev/null || true
+fi
 
 echo "================================================================="
 echo "Deployment Complete!"

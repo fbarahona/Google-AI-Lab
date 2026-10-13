@@ -61,7 +61,6 @@ resource "google_service_account" "agent_sa" {
 # Project-level least-privilege roles for Agent Runtime SA
 locals {
   agent_project_roles = toset([
-    "roles/bigquery.jobUser",
     "roles/bigquery.connectionUser",
     "roles/aiplatform.user",
     "roles/logging.logWriter",
@@ -74,6 +73,13 @@ resource "google_project_iam_member" "agent_project_bindings" {
 
   project = var.project_id
   role    = each.value
+  member  = "serviceAccount:${google_service_account.agent_sa.email}"
+}
+
+# Required to run BigQuery query jobs (client.query)
+resource "google_project_iam_member" "agent_sa_bq_job_user" {
+  project = var.project_id
+  role    = "roles/bigquery.jobUser"
   member  = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
@@ -350,5 +356,20 @@ resource "google_pubsub_topic_iam_member" "detector_alerts_publisher" {
   topic   = google_pubsub_topic.alerts_topic.name
   role    = "roles/pubsub.publisher"
   member  = "serviceAccount:${google_service_account.detector_sa.email}"
+}
+
+# 6. BigQuery Service Agent KMS IAM (conditioned on CMEK configuration)
+resource "google_project_service_identity" "bigquery_sa" {
+  count    = var.kms_key_name != "" ? 1 : 0
+  provider = google-beta
+  project  = var.project_id
+  service  = "bigquery.googleapis.com"
+}
+
+resource "google_kms_crypto_key_iam_member" "bigquery_kms_encrypter_decrypter" {
+  count         = var.kms_key_name != "" ? 1 : 0
+  crypto_key_id = var.kms_key_name
+  role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+  member        = "serviceAccount:${google_project_service_identity.bigquery_sa[0].email}"
 }
 

@@ -10,6 +10,7 @@ import os
 import re
 import time
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import google.auth
@@ -708,8 +709,12 @@ def get_visual_analysis_for_user(gcs_uri: str, tool_context: ToolContext | None 
         # Local forensic inspection: Extract OCR metadata from local screenshot file
         filename = gcs_uri.split("/")[-1].replace(".png", "")
         file_path_candidate = gcs_uri.replace("file://", "") if gcs_uri.startswith("file://") else ""
+        repo_root = Path(__file__).resolve().parents[1]
+        repo_screenshot = repo_root / "local_demo_data" / "user_screenshots" / f"{filename}.png"
         if file_path_candidate and os.path.exists(file_path_candidate):
             local_path = file_path_candidate
+        elif repo_screenshot.exists():
+            local_path = str(repo_screenshot)
         elif os.path.exists(os.path.join(os.getcwd(), "local_demo_data", "user_screenshots", f"{filename}.png")):
             local_path = os.path.join(os.getcwd(), "local_demo_data", "user_screenshots", f"{filename}.png")
         else:

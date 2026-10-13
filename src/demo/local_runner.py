@@ -23,6 +23,7 @@ import argparse
 import os
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from src.demo.data_generator.log_generator import SyntheticLogEngine
@@ -30,10 +31,11 @@ from src.demo.data_generator.sinks import LocalSink
 from src.demo.soc_ticketing.models import SocTicket
 from src.demo.soc_ticketing.ticketing_service import SocTicketingService
 
-LOCAL_DATA_DIR = "./local_demo_data"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+LOCAL_DATA_DIR = str(REPO_ROOT / "local_demo_data")
 LOGS_DIR = os.path.join(LOCAL_DATA_DIR, "logs")
 ESCALATIONS_DIR = os.path.join(LOCAL_DATA_DIR, "escalations")
-SCREENSHOTS_DIR = os.path.join(LOCAL_DATA_DIR, "user_screenshots") if os.path.exists(os.path.join(LOCAL_DATA_DIR, "user_screenshots")) else "src/demo/user_screenshots"
+SCREENSHOTS_DIR = str(REPO_ROOT / "local_demo_data" / "user_screenshots")
 
 
 def step_1_generate_logs(threat_type: str = "malicious", target_user: str = "u.lewis") -> dict[str, Any]:

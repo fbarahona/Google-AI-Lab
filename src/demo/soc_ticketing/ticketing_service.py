@@ -14,6 +14,7 @@ import logging
 import os
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 try:
@@ -23,7 +24,9 @@ except ImportError:
 
 logger = logging.getLogger("SocTicketingService")
 
-LOCAL_QUEUE_DIR = os.getenv("LOCAL_QUEUE_DIR", "./local_demo_data/escalations")
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SCREENSHOTS_DIR = REPO_ROOT / "local_demo_data" / "user_screenshots"
+LOCAL_QUEUE_DIR = os.getenv("LOCAL_QUEUE_DIR", str(REPO_ROOT / "local_demo_data" / "escalations"))
 LOCAL_HISTORY_DIR = os.path.join(LOCAL_QUEUE_DIR, "history")
 
 
@@ -348,7 +351,7 @@ class SocTicketingService:
     def _generate_seed_history(self) -> list[dict[str, Any]]:
         """Generates realistic baseline historic tickets for the dashboard."""
         now = datetime.now(UTC)
-        screenshots_dir = "local_demo_data/user_screenshots" if os.path.exists("local_demo_data/user_screenshots") else "src/demo/user_screenshots"
+        screenshots_dir = str(SCREENSHOTS_DIR)
         return [
             {
                 "ticket_id": "SOC-TICKET-g.harris-1791600100",

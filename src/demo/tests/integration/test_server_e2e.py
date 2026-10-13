@@ -113,17 +113,21 @@ def server_fixture(request: Any) -> Iterator[subprocess.Popen[str]]:
     """Pytest fixture to start and stop the server for testing."""
     logger.info("Starting server process")
     server_process = start_server()
-    if not wait_for_server():
-        pytest.fail("Server failed to start")
-    logger.info("Server process started")
 
     def stop_server() -> None:
         logger.info("Stopping server process")
         server_process.terminate()
-        server_process.wait()
+        try:
+            server_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            server_process.kill()
         logger.info("Server process stopped")
 
     request.addfinalizer(stop_server)
+
+    if not wait_for_server():
+        pytest.fail("Server failed to start")
+    logger.info("Server process started")
     yield server_process
 
 

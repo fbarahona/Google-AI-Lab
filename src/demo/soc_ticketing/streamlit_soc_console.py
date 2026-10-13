@@ -169,7 +169,8 @@ st_autorefresh(interval=8 * 1000, key="soc_autorefresh")
 # Service initialization
 PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo")
 DATASET_ID = os.getenv("BIGQUERY_DATASET", "Cymbal_Cyber")
-SCREENSHOTS_DIR = "local_demo_data/user_screenshots" if os.path.exists("local_demo_data/user_screenshots") else "src/demo/user_screenshots"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SCREENSHOTS_DIR = str(REPO_ROOT / "local_demo_data" / "user_screenshots")
 
 @st.cache_resource
 def get_service() -> SocTicketingService:

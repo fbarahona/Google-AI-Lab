@@ -1,5 +1,6 @@
 locals {
   required_services = toset([
+    "bigquery.googleapis.com",
     "bigqueryunified.googleapis.com",
     "aiplatform.googleapis.com",
     "pubsub.googleapis.com",

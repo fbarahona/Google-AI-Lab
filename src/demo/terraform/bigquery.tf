@@ -1,5 +1,6 @@
 # BigQuery Dataset
 resource "google_bigquery_dataset" "cyber_dataset" {
+  # checkov:skip=CKV_GCP_81: "Default Google-managed encryption keys protect data at rest by default for zero-continuous-cost baseline; CMEK/CSEK is supported via var.kms_key_name"
   project                    = var.project_id
   dataset_id                 = var.dataset_id
   friendly_name              = "Cymbal Cyber Security Analytics"
@@ -7,17 +8,32 @@ resource "google_bigquery_dataset" "cyber_dataset" {
   location                   = var.bigquery_location
   delete_contents_on_destroy = true
 
+  dynamic "default_encryption_configuration" {
+    for_each = var.kms_key_name != "" ? [var.kms_key_name] : []
+    content {
+      kms_key_name = default_encryption_configuration.value
+    }
+  }
+
   depends_on = [google_project_service.required]
 }
 
 # 1. user_access_events Table
 resource "google_bigquery_table" "user_access_events" {
+  # checkov:skip=CKV_GCP_80: "Default Google-managed encryption keys protect data at rest by default for zero-continuous-cost baseline; CMEK/CSEK is supported via var.kms_key_name"
   project                  = var.project_id
   dataset_id               = google_bigquery_dataset.cyber_dataset.dataset_id
   table_id                 = "user_access_events"
   description              = "Logs user login attempts and session creation, linking users to assigned internal IPs."
   deletion_protection      = false
   require_partition_filter = true
+
+  dynamic "encryption_configuration" {
+    for_each = var.kms_key_name != "" ? [var.kms_key_name] : []
+    content {
+      kms_key_name = encryption_configuration.value
+    }
+  }
 
   time_partitioning {
     type  = "DAY"
@@ -41,12 +57,20 @@ resource "google_bigquery_table" "user_access_events" {
 
 # 2. network_events Table
 resource "google_bigquery_table" "network_events" {
+  # checkov:skip=CKV_GCP_80: "Default Google-managed encryption keys protect data at rest by default for zero-continuous-cost baseline; CMEK/CSEK is supported via var.kms_key_name"
   project                  = var.project_id
   dataset_id               = google_bigquery_dataset.cyber_dataset.dataset_id
   table_id                 = "network_events"
   description              = "Logs granular network activity like DNS queries, connections, and file transfers."
   deletion_protection      = false
   require_partition_filter = true
+
+  dynamic "encryption_configuration" {
+    for_each = var.kms_key_name != "" ? [var.kms_key_name] : []
+    content {
+      kms_key_name = encryption_configuration.value
+    }
+  }
 
   time_partitioning {
     type  = "DAY"
@@ -175,11 +199,19 @@ resource "google_bigquery_routine" "is_malicious_command" {
 
 # 4. adk_threat_assessment Table
 resource "google_bigquery_table" "adk_threat_assessment" {
+  # checkov:skip=CKV_GCP_80: "Default Google-managed encryption keys protect data at rest by default for zero-continuous-cost baseline; CMEK/CSEK is supported via var.kms_key_name"
   project             = var.project_id
   dataset_id          = google_bigquery_dataset.cyber_dataset.dataset_id
   table_id            = "adk_threat_assessment"
   description         = "Stores the final output and reasoning from the ADK agent workflow."
   deletion_protection = false
+
+  dynamic "encryption_configuration" {
+    for_each = var.kms_key_name != "" ? [var.kms_key_name] : []
+    content {
+      kms_key_name = encryption_configuration.value
+    }
+  }
 
   schema = jsonencode([
     { name = "transaction_window_end", type = "TIMESTAMP", mode = "NULLABLE" },
@@ -197,11 +229,19 @@ resource "google_bigquery_table" "adk_threat_assessment" {
 
 # 4. soc_tickets Table
 resource "google_bigquery_table" "soc_tickets" {
+  # checkov:skip=CKV_GCP_80: "Default Google-managed encryption keys protect data at rest by default for zero-continuous-cost baseline; CMEK/CSEK is supported via var.kms_key_name"
   project             = var.project_id
   dataset_id          = google_bigquery_dataset.cyber_dataset.dataset_id
   table_id            = "soc_tickets"
   description         = "Dedicated store for tickets passed to the SOC ticketing system."
   deletion_protection = false
+
+  dynamic "encryption_configuration" {
+    for_each = var.kms_key_name != "" ? [var.kms_key_name] : []
+    content {
+      kms_key_name = encryption_configuration.value
+    }
+  }
 
   schema = jsonencode([
     { name = "ticket_id", type = "STRING", mode = "REQUIRED" },
@@ -226,11 +266,19 @@ resource "google_bigquery_table" "soc_tickets" {
 
 # 5. agent_events Table (for BigQuery Agent Analytics Plugin)
 resource "google_bigquery_table" "agent_events" {
+  # checkov:skip=CKV_GCP_80: "Default Google-managed encryption keys protect data at rest by default for zero-continuous-cost baseline; CMEK/CSEK is supported via var.kms_key_name"
   project             = var.project_id
   dataset_id          = google_bigquery_dataset.cyber_dataset.dataset_id
   table_id            = "agent_events"
   description         = "Stores tracing and execution events for ADK agents via BigQueryAgentAnalyticsPlugin."
   deletion_protection = false
+
+  dynamic "encryption_configuration" {
+    for_each = var.kms_key_name != "" ? [var.kms_key_name] : []
+    content {
+      kms_key_name = encryption_configuration.value
+    }
+  }
 
   time_partitioning {
     type = "DAY"
@@ -293,12 +341,21 @@ resource "google_bigquery_table" "user_screenshots_view" {
 
 # 8. Detection Alerts Table (Partitioned by window_end, clustered by user_id)
 resource "google_bigquery_table" "alerts" {
-  project                  = var.project_id
-  dataset_id               = google_bigquery_dataset.cyber_dataset.dataset_id
-  table_id                 = "alerts"
-  description              = "De-duplicated alert events detected by scheduled micro-batch detector, Dataflow, or CQ."
-  deletion_protection      = false
+  # checkov:skip=CKV_GCP_80: "Default Google-managed encryption keys protect data at rest by default for zero-continuous-cost baseline; CMEK/CSEK is supported via var.kms_key_name"
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.cyber_dataset.dataset_id
+  table_id            = "alerts"
+  description         = "De-duplicated alert events detected by scheduled micro-batch detector, Dataflow, or CQ."
+  deletion_protection = false
+  # Must remain false: adk_agent/threat_detector.py MERGE DML matches on target.alert_id without target partition filter
   require_partition_filter = false
+
+  dynamic "encryption_configuration" {
+    for_each = var.kms_key_name != "" ? [var.kms_key_name] : []
+    content {
+      kms_key_name = encryption_configuration.value
+    }
+  }
 
   time_partitioning {
     type  = "DAY"
@@ -328,11 +385,19 @@ resource "google_bigquery_table" "alerts" {
 
 # 9. Alerts Dead Letter Table (Captures alerts that failed 5 delivery attempts)
 resource "google_bigquery_table" "alerts_dead_letter" {
+  # checkov:skip=CKV_GCP_80: "Default Google-managed encryption keys protect data at rest by default for zero-continuous-cost baseline; CMEK/CSEK is supported via var.kms_key_name"
   project             = var.project_id
   dataset_id          = google_bigquery_dataset.cyber_dataset.dataset_id
   table_id            = "alerts_dead_letter"
   description         = "Records all alert payloads delivered to cymbal_cyber_alerts_dlq after delivery failure."
   deletion_protection = false
+
+  dynamic "encryption_configuration" {
+    for_each = var.kms_key_name != "" ? [var.kms_key_name] : []
+    content {
+      kms_key_name = encryption_configuration.value
+    }
+  }
 
   time_partitioning {
     type  = "DAY"

@@ -1,10 +1,83 @@
 # ==============================================================================
-# SCHEDULED MICRO-BATCH THREAT DETECTOR (Budget Detection Architecture)
+# CLOUD RUN WORKLOADS: ADK AGENT WEBHOOK SERVICE & THREAT DETECTOR JOB
 # ==============================================================================
-# NOTE: The ADK agent webhook service (google_cloud_run_v2_service.adk_agent_service)
-# is defined in deploy.tf. Do not redeclare it here.
 
-# Scheduled Micro-Batch Threat Detector Cloud Run Job
+# 1. Cloud Run Deployment for ADK Multi-Agent Team
+# We deploy the ADK Agent to Cloud Run to natively support Pub/Sub OIDC push tokens
+# without requiring an intermediary token-exchange relay service.
+resource "google_cloud_run_v2_service" "adk_agent_service" {
+  name                = "cymbal-cyber-adk-agent"
+  location            = var.region
+  project             = var.project_id
+  ingress             = "INGRESS_TRAFFIC_ALL"
+  deletion_protection = false
+
+  template {
+    timeout                          = "600s"
+    service_account                  = google_service_account.agent_sa.email
+    max_instance_request_concurrency = 4
+
+    scaling {
+      min_instance_count = 0
+      max_instance_count = 10
+    }
+
+    containers {
+      image = var.agent_image != "" ? var.agent_image : "us-docker.pkg.dev/cloudrun/container/hello" # Placeholder until agents-cli deploy
+      resources {
+        limits = {
+          cpu    = "1"
+          memory = "4Gi"
+        }
+      }
+      env {
+        name  = "PROJECT_ID"
+        value = var.project_id
+      }
+      env {
+        name  = "GOOGLE_CLOUD_PROJECT"
+        value = var.project_id
+      }
+      env {
+        name  = "LOCAL_MODE"
+        value = "false"
+      }
+      env {
+        name  = "GCS_SIGNER_SA"
+        value = google_service_account.agent_sa.email
+      }
+      env {
+        name  = "EXPECTED_OIDC_AUDIENCE"
+        value = local.agent_service_url
+      }
+      env {
+        name  = "EXPECTED_INVOKER_EMAIL"
+        value = google_service_account.invoker_sa.email
+      }
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].containers[0].image,
+      client,
+      client_version,
+    ]
+  }
+
+  depends_on = [google_project_service.required]
+}
+
+# Allow Pub/Sub Invoker SA to invoke the Cloud Run Agent Service
+resource "google_cloud_run_v2_service_iam_member" "agent_invoker" {
+  name     = google_cloud_run_v2_service.adk_agent_service.name
+  location = google_cloud_run_v2_service.adk_agent_service.location
+  project  = google_cloud_run_v2_service.adk_agent_service.project
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.invoker_sa.email}"
+}
+
+# 2. Scheduled Micro-Batch Threat Detector Cloud Run Job
 resource "google_cloud_run_v2_job" "threat_detector" {
   project             = var.project_id
   name                = "threat-detector"
@@ -18,8 +91,8 @@ resource "google_cloud_run_v2_job" "threat_detector" {
       timeout         = "240s"
 
       containers {
-        # Placeholder until the agent image is built/pushed (same image as the webhook service)
-        image = "us-docker.pkg.dev/cloudrun/container/job"
+        # Set to var.agent_image if provided, otherwise placeholder until built/pushed
+        image = var.agent_image != "" ? var.agent_image : "us-docker.pkg.dev/cloudrun/container/job"
         command = [
           "python",
           "-m",

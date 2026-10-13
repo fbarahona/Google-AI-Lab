@@ -74,3 +74,16 @@ variable "billing_account_id" {
   type        = string
   default     = ""
 }
+
+variable "kms_key_name" {
+  description = "Optional Cloud KMS CryptoKey resource ID for Customer-Managed/Supplied Encryption Keys (CMEK/CSEK) on BigQuery dataset and tables. If omitted (empty string), Google-managed encryption is used."
+  type        = string
+  default     = ""
+}
+
+variable "agent_image" {
+  description = "Container image URL for the ADK agent Cloud Run service and threat detector job."
+  type        = string
+  default     = ""
+}
+

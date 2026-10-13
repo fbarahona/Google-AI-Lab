@@ -29,79 +29,9 @@ resource "google_artifact_registry_repository_iam_member" "compute_sa_writer" {
   member     = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
 }
 
-# 1. Cloud Run Deployment for ADK Multi-Agent Team
-# We deploy the ADK Agent to Cloud Run to natively support Pub/Sub OIDC push tokens
-# without requiring an intermediary token-exchange relay service.
-resource "google_cloud_run_v2_service" "adk_agent_service" {
-  name                = "cymbal-cyber-adk-agent"
-  location            = var.region
-  project             = var.project_id
-  ingress             = "INGRESS_TRAFFIC_ALL"
-  deletion_protection = false
+# NOTE: The ADK agent webhook service (google_cloud_run_v2_service.adk_agent_service)
+# and its invoker binding are configured in cloud_run.tf with horizontal scaling controls.
 
-  template {
-    timeout         = "600s"
-    service_account = google_service_account.agent_sa.email
-
-    scaling {
-      min_instance_count = 0
-      max_instance_count = 3
-    }
-
-    containers {
-      image = "us-docker.pkg.dev/cloudrun/container/hello" # Placeholder until agents-cli deploy
-      resources {
-        limits = {
-          cpu    = "1"
-          memory = "4Gi"
-        }
-      }
-      env {
-        name  = "PROJECT_ID"
-        value = var.project_id
-      }
-      env {
-        name  = "GOOGLE_CLOUD_PROJECT"
-        value = var.project_id
-      }
-      env {
-        name  = "LOCAL_MODE"
-        value = "false"
-      }
-      env {
-        name  = "GCS_SIGNER_SA"
-        value = google_service_account.agent_sa.email
-      }
-      env {
-        name  = "EXPECTED_OIDC_AUDIENCE"
-        value = local.agent_service_url
-      }
-      env {
-        name  = "EXPECTED_INVOKER_EMAIL"
-        value = google_service_account.invoker_sa.email
-      }
-    }
-  }
-
-  lifecycle {
-    ignore_changes = [
-      template[0].containers[0].image,
-      client,
-      client_version,
-    ]
-  }
-
-  depends_on = [google_project_service.required]
-}
-
-# Allow Pub/Sub Invoker SA to invoke the Cloud Run Agent Service
-resource "google_cloud_run_v2_service_iam_member" "agent_invoker" {
-  name     = google_cloud_run_v2_service.adk_agent_service.name
-  location = google_cloud_run_v2_service.adk_agent_service.location
-  project  = google_cloud_run_v2_service.adk_agent_service.project
-  role     = "roles/run.invoker"
-  member   = "serviceAccount:${google_service_account.invoker_sa.email}"
-}
 
 # 2. BigQuery Continuous Query Infrastructure (Gated behind enable_continuous_query)
 # BigQuery Continuous Queries require an Enterprise Edition slot reservation (billed 24/7).
