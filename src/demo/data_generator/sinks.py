@@ -67,7 +67,15 @@ class GoogleCloudStorageSink(BaseSink):
         from google.cloud import storage
         self.bucket_name = bucket_name
         self.prefix = prefix
-        self.client = storage.Client()
+        try:
+            self.client = storage.Client()
+        except Exception as exc:
+            logger.error(
+                "Failed to initialize Storage Client. If running locally, ensure "
+                "Application Default Credentials (ADC) are set via: "
+                "'gcloud auth application-default login'. Error: %s", exc
+            )
+            raise
         self.bucket = self.client.bucket(bucket_name)
 
     def write_events(
@@ -104,7 +112,15 @@ class PubSubSink(BaseSink):
 
     def __init__(self, project_id: str, topic_id: str):
         from google.cloud import pubsub_v1
-        self.publisher = pubsub_v1.PublisherClient()
+        try:
+            self.publisher = pubsub_v1.PublisherClient()
+        except Exception as exc:
+            logger.error(
+                "Failed to initialize PubSub PublisherClient. If running locally, ensure "
+                "Application Default Credentials (ADC) are set via: "
+                "'gcloud auth application-default login'. Error: %s", exc
+            )
+            raise
         self.topic_path = self.publisher.topic_path(project_id, topic_id)
 
     def write_events(
@@ -142,7 +158,15 @@ class BigQuerySink(BaseSink):
         from google.cloud import bigquery
         self.project_id = project_id
         self.dataset_id = dataset_id
-        self.client = bigquery.Client(project=project_id)
+        try:
+            self.client = bigquery.Client(project=project_id)
+        except Exception as exc:
+            logger.error(
+                "Failed to initialize BigQuery Client. If running locally, ensure "
+                "Application Default Credentials (ADC) are set via: "
+                "'gcloud auth application-default login'. Error: %s", exc
+            )
+            raise
         self.access_table = f"{project_id}.{dataset_id}.user_access_events"
         self.network_table = f"{project_id}.{dataset_id}.network_events"
 

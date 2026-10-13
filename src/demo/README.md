@@ -137,19 +137,22 @@ Modular CLI tool and Python API generating high-fidelity security logs:
 - **Sinks:** Write logs to Cloud Storage, Cloud Pub/Sub, direct BigQuery, or local files in [`data_generator/sinks.py`](data_generator/sinks.py).
 
 ```bash
+# Note: Streaming to cloud sinks (pubsub, bigquery, gcs) requires local Application Default Credentials:
+# gcloud auth application-default login
+
 # Generate batch benign logs locally:
 PYTHONPATH=src uv run python -m demo.data_generator.log_generator --mode benign --batch-size 100 --sink=local
 
-# Stream benign logs directly to BigQuery:
+# Stream benign logs directly to BigQuery (requires ADC):
 PYTHONPATH=src uv run python -m demo.data_generator.log_generator --mode continuous --rate 50 --sink=bigquery
 
-# Upload batch logs to Cloud Storage:
+# Upload batch logs to Cloud Storage (requires ADC):
 PYTHONPATH=src uv run python -m demo.data_generator.log_generator --mode benign --batch-size 250 --sink=gcs --bucket cymbal-cyber-raw-logs_<PROJECT_ID>
 
 # Inject ad-hoc MALICIOUS threat scenario directly to BigQuery:
 PYTHONPATH=src uv run python -m demo.data_generator.log_generator --mode threat --threat-type malicious --user u.lewis --sink=bigquery
 
-# Or publish to Pub/Sub (allow 60s for BigQuery Storage Write API buffer ingestion before detection):
+# Or publish to Pub/Sub (requires ADC; allow 60s for BigQuery Storage Write API buffer ingestion before detection):
 PYTHONPATH=src uv run python -m demo.data_generator.log_generator --mode threat --threat-type malicious --user u.lewis --sink=pubsub
 echo "Allowing 60s for BigQuery streaming buffer ingestion..." && sleep 60
 uv run python -m adk_agent.threat_detector --lookback 15 --min-score 100

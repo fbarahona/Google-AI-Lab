@@ -119,6 +119,9 @@ Open `http://localhost:8501` to view incident queues, inspect desktop screenshot
 
 ### 5. Scheduled Micro-Batch Threat Detector Job
 ```bash
+# Note: Streaming to cloud sinks or running detector locally requires Application Default Credentials (ADC):
+# gcloud auth application-default login
+
 # Run single detection cycle:
 python -m adk_agent.threat_detector --lookback 15 --min-score 100
 

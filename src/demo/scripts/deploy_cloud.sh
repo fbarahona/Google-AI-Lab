@@ -58,30 +58,46 @@ fi
 ARTIFACT_REPO="${ARTIFACT_REPO:-cymbal-cyber}"
 IMAGE_TAG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REPO}/cymbal-cyber-agent:latest"
 
-echo "================================================================="
-echo "Building unified container image: ${IMAGE_TAG}"
-echo "Project: ${PROJECT_ID} | Region: ${REGION}"
-echo "================================================================="
+# 1. Provision Artifact Registry repository via targeted Terraform first
+if command -v terraform >/dev/null 2>&1 && [ -d "${TERRAFORM_DIR}" ]; then
+  echo "================================================================="
+  echo "1. Provisioning Artifact Registry repository via Terraform..."
+  echo "================================================================="
+  if [ ! -d "${TERRAFORM_DIR}/.terraform" ]; then
+    echo "Initializing Terraform..."
+    terraform -chdir="${TERRAFORM_DIR}" init
+  fi
 
-# Pre-flight Docker & Artifact Registry Setup:
-# 1. Explicitly configure Docker credential helper for Artifact Registry regional domain.
-#    Standard 'gcloud auth configure-docker' only registers legacy gcr.io hosts.
-# 2. Ensure Artifact Registry repository exists prior to pushing to prevent 404 Not Found.
+  # Import pre-existing GCP repository into state if manually created out-of-band to prevent 409
+  if command -v gcloud >/dev/null 2>&1 && gcloud artifacts repositories describe "${ARTIFACT_REPO}" --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+    if ! terraform -chdir="${TERRAFORM_DIR}" state list 2>/dev/null | grep -q "google_artifact_registry_repository.agent_repo"; then
+      echo "Importing existing Artifact Registry repository into Terraform state..."
+      terraform -chdir="${TERRAFORM_DIR}" import \
+        -var="project_id=${PROJECT_ID}" \
+        -var="region=${REGION}" \
+        google_artifact_registry_repository.agent_repo \
+        "projects/${PROJECT_ID}/locations/${REGION}/repositories/${ARTIFACT_REPO}" 2>/dev/null || true
+    fi
+  fi
+
+  terraform -chdir="${TERRAFORM_DIR}" apply -auto-approve \
+    -target=google_artifact_registry_repository.agent_repo \
+    -target=google_artifact_registry_repository_iam_member.compute_sa_writer \
+    -var="project_id=${PROJECT_ID}" \
+    -var="region=${REGION}"
+fi
+
+# 2. Configure regional Docker authentication for Artifact Registry
 if command -v gcloud >/dev/null 2>&1; then
   echo "Configuring Docker authentication for Artifact Registry (${REGION}-docker.pkg.dev)..."
   gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
-
-  if ! gcloud artifacts repositories describe "${ARTIFACT_REPO}" --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
-    echo "Provisioning Artifact Registry repository (${ARTIFACT_REPO})..."
-    gcloud artifacts repositories create "${ARTIFACT_REPO}" \
-      --repository-format=docker \
-      --location="${REGION}" \
-      --description="Cymbal Cyber Agent Registry" \
-      --project="${PROJECT_ID}"
-  fi
 fi
 
-# 1. Build & Push Image (anchored to repository root where Dockerfile resides)
+# 3. Build & Push Image (anchored to repository root where Dockerfile resides)
+echo "================================================================="
+echo "2. Building and pushing container image: ${IMAGE_TAG}"
+echo "Project: ${PROJECT_ID} | Region: ${REGION}"
+echo "================================================================="
 if command -v docker >/dev/null 2>&1; then
   echo "Building and pushing container image with Docker: ${IMAGE_TAG}..."
   docker build -t "${IMAGE_TAG}" -f "${REPO_ROOT}/Dockerfile" "${REPO_ROOT}"
@@ -97,30 +113,11 @@ else
   exit 1
 fi
 
-# 2. Target Terraform directory explicitly
+# 4. Apply complete Terraform configuration
 if command -v terraform >/dev/null 2>&1 && [ -d "${TERRAFORM_DIR}" ]; then
   echo "================================================================="
-  echo "Applying Terraform configuration: ${TERRAFORM_DIR}"
+  echo "3. Applying complete Terraform configuration: ${TERRAFORM_DIR}"
   echo "================================================================="
-  if [ ! -d "${TERRAFORM_DIR}/.terraform" ]; then
-    echo "Initializing Terraform..."
-    terraform -chdir="${TERRAFORM_DIR}" init
-  fi
-
-  # If Artifact Registry repository exists in GCP, ensure it is imported into Terraform state to prevent 409 Conflict
-  if command -v gcloud >/dev/null 2>&1 && gcloud artifacts repositories describe "${ARTIFACT_REPO}" --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
-    if ! terraform -chdir="${TERRAFORM_DIR}" state list 2>/dev/null | grep -q "google_artifact_registry_repository.agent_repo"; then
-      echo "Importing Artifact Registry repository into Terraform state..."
-      terraform -chdir="${TERRAFORM_DIR}" import \
-        -var="project_id=${PROJECT_ID}" \
-        -var="region=${REGION}" \
-        -var="agent_image=${IMAGE_TAG}" \
-        -var="gemini_api_key=${GEMINI_API_KEY:-}" \
-        google_artifact_registry_repository.agent_repo \
-        "projects/${PROJECT_ID}/locations/${REGION}/repositories/${ARTIFACT_REPO}" 2>/dev/null || true
-    fi
-  fi
-
   terraform -chdir="${TERRAFORM_DIR}" apply -auto-approve \
     -var="project_id=${PROJECT_ID}" \
     -var="region=${REGION}" \
@@ -156,6 +153,9 @@ echo "================================================================="
 echo ""
 echo "================================================================="
 echo "Live Verification Workflow:"
+echo "0. Ensure Application Default Credentials (ADC) are active:"
+echo "   gcloud auth application-default login"
+echo ""
 echo "1. Publish synthetic threat telemetry to Pub/Sub:"
 echo "   PYTHONPATH=src uv run python -m demo.data_generator.log_generator --mode threat --threat-type malicious --user u.lewis --sink=pubsub"
 echo ""

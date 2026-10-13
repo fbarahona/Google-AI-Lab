@@ -83,12 +83,12 @@ resource "google_project_iam_member" "agent_sa_bq_job_user" {
   member  = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
-# Resource-level BigQuery dataset READER access (queries tables & UDFs)
-resource "google_bigquery_dataset_access" "agent_dataset_reader" {
-  project       = var.project_id
-  dataset_id    = google_bigquery_dataset.cyber_dataset.dataset_id
-  role          = "READER"
-  user_by_email = google_service_account.agent_sa.email
+# Resource-level BigQuery dataset dataEditor access (queries tables, UDFs, updates triage status and tickets)
+resource "google_bigquery_dataset_iam_member" "agent_sa_bq_editor" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
+  role       = "roles/bigquery.dataEditor"
+  member     = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
 # Table-level least-privilege dataEditor scoped strictly to soc_tickets
