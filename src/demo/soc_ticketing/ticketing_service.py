@@ -309,21 +309,73 @@ class SocTicketingService:
                 LIMIT 100
                 """
                 results = list(self.bq_client.query(query).result())
-                return [dict(row.items()) for row in results]
+                tickets = [dict(row.items()) for row in results]
             except Exception as e:
                 logger.warning("BigQuery fetch_new_tickets query failed: %s", e)
 
-        # Fallback to local queue
-        for path in glob.glob(os.path.join(self.queue_dir, "human_escalation_information_*.json")):
+        # Reconcile GCS escalation files if cloud storage is enabled (Self-Healing Sync)
+        if self.is_cloud_enabled() and self.storage_client is not None:
             try:
-                with open(path, encoding="utf-8") as f:
-                    tickets.append(json.load(f))
-            except Exception:
-                pass
+                bucket = self.storage_client.bucket(self.escalation_bucket_name)
+                bq_ticket_ids = {t.get("ticket_id") for t in tickets if t.get("ticket_id")}
+                for blob in bucket.list_blobs(prefix="human_escalation_information_"):
+                    if blob.name.endswith(".json"):
+                        try:
+                            gcs_ticket = json.loads(blob.download_as_text())
+                            tid = gcs_ticket.get("ticket_id")
+                            if tid and tid not in bq_ticket_ids:
+                                tickets.append(gcs_ticket)
+                                bq_ticket_ids.add(tid)
+                                self._backfill_ticket_to_bq(gcs_ticket)
+                        except Exception as parse_err:
+                            logger.debug("Failed parsing GCS blob %s: %s", blob.name, parse_err)
+            except Exception as gcs_err:
+                logger.debug("GCS escalation bucket sync check skipped: %s", gcs_err)
+
+        if not tickets:
+            # Fallback to local queue if no tickets retrieved from BQ or GCS
+            for path in glob.glob(os.path.join(self.queue_dir, "human_escalation_information_*.json")):
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        tickets.append(json.load(f))
+                except Exception:
+                    pass
 
         # Sort newest first
-        tickets.sort(key=lambda x: x.get("timestamp") or x.get("created_at") or "", reverse=True)
+        tickets.sort(key=lambda x: str(x.get("created_at") or x.get("timestamp") or ""), reverse=True)
         return tickets
+
+    def _backfill_ticket_to_bq(self, ticket_data: dict[str, Any]) -> None:
+        """Self-healing backfill of GCS escalation ticket into BigQuery soc_tickets."""
+        if self.bq_client is None:
+            return
+        try:
+            soc_table_id = f"{self.project_id}.{self.dataset_id}.soc_tickets"
+            soc_columns = {
+                "ticket_id", "created_at", "user_id", "device_id", "source_ip",
+                "threat_score", "severity", "status", "agent_decision", "agent_reason",
+                "mitre_tactics", "indicators_of_compromise", "screenshot_url",
+                "structured_report", "human_decision", "human_comment", "adjudicated_at"
+            }
+            soc_row = {k: v for k, v in ticket_data.items() if k in soc_columns}
+            if not isinstance(soc_row.get("mitre_tactics"), list):
+                soc_row["mitre_tactics"] = []
+            if not isinstance(soc_row.get("indicators_of_compromise"), list):
+                soc_row["indicators_of_compromise"] = []
+            for req_str in [
+                "ticket_id", "created_at", "user_id", "device_id", "source_ip",
+                "severity", "status", "agent_decision", "agent_reason", "structured_report"
+            ]:
+                if soc_row.get(req_str) is None:
+                    soc_row[req_str] = ""
+
+            errors = self.bq_client.insert_rows_json(soc_table_id, [soc_row], ignore_unknown_values=True)
+            if errors:
+                logger.warning("BigQuery backfill errors for %s: %s", ticket_data.get("ticket_id"), errors)
+            else:
+                logger.info("Successfully self-healed and backfilled ticket %s into BigQuery", ticket_data.get("ticket_id"))
+        except Exception as e:
+            logger.warning("Failed self-healing backfill of ticket %s to BigQuery: %s", ticket_data.get("ticket_id"), e)
 
     def record_human_verdict(
         self,

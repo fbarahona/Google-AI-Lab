@@ -922,10 +922,17 @@ def escalate_to_human(
     soc_service = get_soc_service()
     row = _parse_alert_payload_to_row(alert_payload)
 
+    user_id = row.get("user_id") or "unknown_user"
+    screenshot_url = None
+    if context_data:
+        m_url = re.search(r'https://storage\.googleapis\.com/[^\s\)\"\']+', context_data)
+        if m_url:
+            screenshot_url = m_url.group(0)
+
     ticket = SocTicket(
         ticket_id=ticket_id,
         transaction_window_end=row.get("transaction_window_end"),
-        user_id=row.get("user_id") or "unknown_user",
+        user_id=user_id,
         device_id=row.get("device_id") or "unknown_device",
         source_ip=row.get("source_ip") or "unknown_ip",
         threat_score=row.get("total_2_min_threat_score") or 100,
@@ -933,6 +940,7 @@ def escalate_to_human(
         status="ESCALATED",
         agent_decision="PERCEIVED_THREAT",
         agent_reason=agent_reason_for_escalation,
+        screenshot_url=screenshot_url,
         structured_report=context_data
     )
     result = soc_service.create_and_dispatch_ticket(ticket)

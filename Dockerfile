@@ -23,6 +23,7 @@ COPY ./pyproject.toml ./README.md ./uv.lock* ./
 
 COPY ./adk_agent ./adk_agent
 COPY ./src ./src
+COPY ./local_demo_data/user_screenshots ./local_demo_data/user_screenshots
 
 RUN uv sync --frozen
 

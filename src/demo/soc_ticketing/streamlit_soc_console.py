@@ -609,8 +609,22 @@ elif st.session_state.active_nav_tab == "New Tickets":
 
                     st.warning(f"**ADK Agent Rationale:** {reason}")
 
+                    # Full Forensic Report
+                    report_text = (
+                        current_ticket.get("structured_report")
+                        or current_ticket.get("context_for_human")
+                        or current_ticket.get("agent_reason")
+                        or "*No structured report content recorded.*"
+                    )
+
                     # Desktop Screenshot Evidence
                     screenshot_url = current_ticket.get("screenshot_url")
+                    if not screenshot_url and report_text:
+                        import re
+                        m_url = re.search(r'https://storage\.googleapis\.com/[^\s\)\"\']+', report_text)
+                        if m_url:
+                            screenshot_url = m_url.group(0)
+
                     screenshot_path = os.path.join(SCREENSHOTS_DIR, f"{user}.png")
                     if os.path.exists(screenshot_path):
                         with st.expander("🖼️ Workstation Desktop Screenshot Evidence", expanded=True):
@@ -619,12 +633,6 @@ elif st.session_state.active_nav_tab == "New Tickets":
                         with st.expander("🖼️ Workstation Desktop Screenshot Evidence", expanded=True):
                             st.image(screenshot_url, caption=f"Forensic Screenshot for User: {user}", width="stretch")
 
-                    # Full Forensic Report
-                    report_text = (
-                        current_ticket.get("structured_report")
-                        or current_ticket.get("context_for_human")
-                        or "*No structured report content recorded.*"
-                    )
                     with st.expander("📋 Full Multi-Agent Forensic Investigation Report", expanded=True):
                         st.markdown(report_text, unsafe_allow_html=True)
 
@@ -746,11 +754,26 @@ elif st.session_state.active_nav_tab == "Historic Tickets":
 
                 # Screenshot preview
                 h_user = inspect_item.get("user_id", "")
+                h_report = (
+                    inspect_item.get("structured_report")
+                    or inspect_item.get("context_for_human")
+                    or inspect_item.get("agent_reason")
+                    or "*No report content.*"
+                )
+                h_url = inspect_item.get("screenshot_url")
+                if not h_url and h_report:
+                    import re
+                    m_url = re.search(r'https://storage\.googleapis\.com/[^\s\)\"\']+', h_report)
+                    if m_url:
+                        h_url = m_url.group(0)
+
                 h_screenshot = os.path.join(SCREENSHOTS_DIR, f"{h_user}.png")
                 if os.path.exists(h_screenshot):
                     st.image(h_screenshot, caption=f"Archived Screenshot Evidence for {h_user}", width="stretch")
+                elif h_url and h_url.startswith("http"):
+                    st.image(h_url, caption=f"Archived Screenshot Evidence for {h_user}", width="stretch")
 
                 st.markdown("##### Original Agent Investigation Report")
-                st.markdown(inspect_item.get("structured_report", "*No report content.*"), unsafe_allow_html=True)
+                st.markdown(h_report, unsafe_allow_html=True)
     else:
         st.info("No historical tickets match the selected filters.")
