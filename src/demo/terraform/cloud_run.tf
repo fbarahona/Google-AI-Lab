@@ -179,3 +179,90 @@ resource "google_cloud_scheduler_job" "threat_detector_schedule" {
 }
 
 # NOTE: Cloud Scheduler Job invoker IAM binding (google_cloud_run_v2_job_iam_member.scheduler_invokes_detector) is centralized in iam.tf
+
+# 3. Interactive SOC Analyst Console (Streamlit Dashboard)
+resource "google_cloud_run_v2_service" "soc_console_service" {
+  name                = "cymbal-cyber-soc-console"
+  location            = var.region
+  project             = var.project_id
+  ingress             = "INGRESS_TRAFFIC_ALL"
+  deletion_protection = false
+
+  template {
+    timeout                          = "300s"
+    service_account                  = google_service_account.agent_sa.email
+    max_instance_request_concurrency = 80
+
+    scaling {
+      min_instance_count = 0
+      max_instance_count = 5
+    }
+
+    containers {
+      image   = var.agent_image != "" ? var.agent_image : "us-docker.pkg.dev/cloudrun/container/hello"
+      command = ["python"]
+      args = [
+        "-m",
+        "streamlit",
+        "run",
+        "src/demo/soc_ticketing/streamlit_soc_console.py",
+        "--server.port=8080",
+        "--server.address=0.0.0.0",
+        "--server.enableCORS=false",
+        "--server.enableXsrfProtection=false",
+        "--browser.gatherUsageStats=false"
+      ]
+
+      resources {
+        limits = {
+          cpu    = "1"
+          memory = "2Gi"
+        }
+      }
+
+      env {
+        name  = "PROJECT_ID"
+        value = var.project_id
+      }
+      env {
+        name  = "GOOGLE_CLOUD_PROJECT"
+        value = var.project_id
+      }
+      env {
+        name  = "GOOGLE_CLOUD_LOCATION"
+        value = var.region
+      }
+      env {
+        name  = "BIGQUERY_DATASET"
+        value = var.dataset_id
+      }
+      env {
+        name  = "ESCALATION_BUCKET"
+        value = google_storage_bucket.escalations.name
+      }
+      env {
+        name  = "SCREENSHOTS_BUCKET"
+        value = google_storage_bucket.screenshots.name
+      }
+      env {
+        name  = "LOCAL_MODE"
+        value = "false"
+      }
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].containers[0].image,
+      client,
+      client_version,
+    ]
+  }
+
+  depends_on = [
+    google_project_service.required,
+    google_service_account.agent_sa,
+    google_storage_bucket.escalations,
+    google_bigquery_dataset.cyber_dataset
+  ]
+}

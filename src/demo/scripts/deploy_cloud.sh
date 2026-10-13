@@ -227,6 +227,17 @@ if command -v terraform >/dev/null 2>&1 && [ -d "${TERRAFORM_DIR}" ]; then
     fi
   fi
 
+  if ! echo "${TF_STATE_LIST}" | grep -q "^google_cloud_run_v2_service.soc_console_service$"; then
+    if gcloud run services describe cymbal-cyber-soc-console --project="${PROJECT_ID}" --region="${REGION}" >/dev/null 2>&1; then
+      echo "Importing existing Cloud Run service cymbal-cyber-soc-console into Terraform state..."
+      terraform -chdir="${TERRAFORM_DIR}" import \
+        -var="project_id=${PROJECT_ID}" \
+        -var="region=${REGION}" \
+        -var="agent_image=${IMAGE_TAG}" \
+        google_cloud_run_v2_service.soc_console_service "projects/${PROJECT_ID}/locations/${REGION}/services/cymbal-cyber-soc-console" 2>/dev/null || true
+    fi
+  fi
+
   terraform -chdir="${TERRAFORM_DIR}" apply -auto-approve \
     -var="project_id=${PROJECT_ID}" \
     -var="region=${REGION}" \
@@ -252,12 +263,34 @@ if command -v gcloud >/dev/null 2>&1; then
     --project="${PROJECT_ID}" \
     --region="${REGION}" \
     --image="${IMAGE_TAG}" 2>/dev/null || true
+  echo "================================================================="
+  echo "Updating Cloud Run Service: cymbal-cyber-soc-console"
+  echo "================================================================="
+  gcloud run deploy cymbal-cyber-soc-console \
+    --project="${PROJECT_ID}" \
+    --region="${REGION}" \
+    --image="${IMAGE_TAG}" \
+    --service-account="cymbal-adk-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com" \
+    --command="python" \
+    --args="-m,streamlit,run,src/demo/soc_ticketing/streamlit_soc_console.py,--server.port=8080,--server.address=0.0.0.0,--server.enableCORS=false,--server.enableXsrfProtection=false,--browser.gatherUsageStats=false" \
+    --set-env-vars="PROJECT_ID=${PROJECT_ID},GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=${REGION},BIGQUERY_DATASET=Cymbal_Cyber,ESCALATION_BUCKET=cymbal-cyber-adk-escalations-bucket_${PROJECT_ID},SCREENSHOTS_BUCKET=cymbal-cyber-screenshots_${PROJECT_ID},LOCAL_MODE=false" \
+    --port=8080 \
+    --cpu=1 \
+    --memory=2Gi \
+    --min-instances=0 \
+    --max-instances=5 \
+    --no-allow-unauthenticated \
+    --quiet 2>/dev/null || true
 fi
 
 echo "================================================================="
 echo "Deployment Complete!"
 echo "- Webhook Service : cymbal-cyber-adk-agent"
 echo "- Scheduled Job   : threat-detector"
+SOC_CONSOLE_URL="$(gcloud run services describe cymbal-cyber-soc-console --project="${PROJECT_ID}" --region="${REGION}" --format="value(status.url)" 2>/dev/null || true)"
+if [ -n "${SOC_CONSOLE_URL}" ]; then
+  echo "- SOC Console     : ${SOC_CONSOLE_URL}"
+fi
 echo "- Image           : ${IMAGE_TAG}"
 echo "================================================================="
 echo ""

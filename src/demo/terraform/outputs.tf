@@ -132,3 +132,8 @@ output "bigquery_connection_sa" {
   description = "Service Account associated with the BigQuery Connection."
   value       = google_bigquery_connection.vertex_ai_connection.cloud_resource[0].service_account_id
 }
+
+output "soc_console_url" {
+  description = "Public URL of the interactive Streamlit SOC Analyst Console."
+  value       = google_cloud_run_v2_service.soc_console_service.uri
+}

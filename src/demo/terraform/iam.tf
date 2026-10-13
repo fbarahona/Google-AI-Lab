@@ -170,6 +170,16 @@ resource "google_cloud_run_v2_job_iam_member" "scheduler_invokes_detector" {
   member   = "serviceAccount:${google_service_account.invoker_sa.email}"
 }
 
+# Allow deployer identity to invoke the SOC Console
+resource "google_cloud_run_v2_service_iam_member" "soc_console_deployer_invoker" {
+  count    = var.deployer_member != "" ? 1 : 0
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.soc_console_service.name
+  role     = "roles/run.invoker"
+  member   = var.deployer_member
+}
+
 
 # 4. Dataflow Pipeline Workload Service Account (Optional on-demand)
 # Role: Executes Dataflow streaming ingestion from Pub/Sub raw logs to BigQuery.
