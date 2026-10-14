@@ -383,7 +383,7 @@ def build_event_logs_query(
             f"Invalid window '{window_to_investigate}'. Must be one of {sorted(ALLOWED_INTERVAL_WINDOWS)}."
         )
 
-    # Derive partition interval in days to satisfy require_partition_filter = true on partitioned tables
+    # Derive partition interval in days so each CTE prunes DAY partitions (cost); the tables do not require a partition filter
     window_partition_days_map = {
         "1 HOUR": 1,
         "2 HOUR": 1,

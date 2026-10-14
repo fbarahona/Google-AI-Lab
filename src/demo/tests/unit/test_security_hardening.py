@@ -164,8 +164,8 @@ def test_build_event_logs_query_enforces_maximum_bytes_billed():
 
 def test_build_event_logs_query_includes_partition_filter_on_all_ctes():
     """Verify that every CTE (FlaggedSessions, AccessMetrics, NetworkMetrics)
-    includes an explicit DATE(event_timestamp) partition filter satisfying
-    require_partition_filter = true on user_access_events and network_events."""
+    includes an explicit DATE(event_timestamp) partition filter so scans of
+    user_access_events and network_events prune DAY partitions."""
     sql, _ = build_event_logs_query("user", "u.lewis", "24 HOUR")
 
     # Verify each CTE has its own partition filter
