@@ -1,6 +1,6 @@
 # Real-Time Cyber Security AI & Google ADK Multi-Agent Sandbox
 
-A reference demo with production-style patterns demonstrating real-time cybersecurity threat detection, autonomous multi-agent AI forensic investigation, and human-in-the-loop Security Operations Center (SOC) triage built on **Google Cloud Platform (project `<project_id>`)**, **Google Agent Development Kit (ADK)**, and **Google Agents CLI (`agents-cli`)**.
+A reference demo with production-style patterns demonstrating real-time cybersecurity threat detection, autonomous multi-agent AI forensic investigation, and human-in-the-loop Security Operations Center (SOC) triage built on **Google Cloud Platform (project `${PROJECT_ID}`)**, **Google Agent Development Kit (ADK)**, and **Google Agents CLI (`agents-cli`)**.
 
 ---
 
@@ -197,8 +197,8 @@ cp .env.example .env
 |---|---|---|
 | `GEMINI_MODEL` | Active Gemini model for agents and vision | `gemini-3.8-flash` |
 | `GOOGLE_GENAI_USE_ENTERPRISE` | Route requests through Vertex AI | `true` |
-| `GOOGLE_CLOUD_PROJECT` | GCP Project ID | `<project_id>` |
-| `GOOGLE_CLOUD_LOCATION` | GCP location / region | `us-east1` (or `<region>`) |
+| `GOOGLE_CLOUD_PROJECT` | GCP Project ID | `${PROJECT_ID}` |
+| `GOOGLE_CLOUD_LOCATION` | GCP location / region | `${REGION}` (or `global`) |
 | `BIGQUERY_DATASET` | Target BigQuery dataset | `Cymbal_Cyber` |
 | `GEMINI_API_KEY` | Optional: Gemini Developer API key (if not using ADC) | `""` |
 
@@ -248,13 +248,13 @@ To execute `./src/demo/scripts/deploy_cloud.sh` or run `terraform apply`, the de
 To configure a new user or deployment service account, run:
 
 ```bash
-PROJECT_ID="<YOUR_PROJECT_ID>"
-DEPLOYER_EMAIL="<DEPLOYER_EMAIL>"  # e.g., deployer@example.com or sa@project.iam.gserviceaccount.com
+PROJECT_ID="${PROJECT_ID}"
+ADMIN_EMAIL="${ADMIN_EMAIL}"  # e.g., deployer@example.com or sa@project.iam.gserviceaccount.com
 
-if [[ "${DEPLOYER_EMAIL}" == *".gserviceaccount.com"* ]]; then
-  MEMBER="serviceAccount:${DEPLOYER_EMAIL}"
+if [[ "${ADMIN_EMAIL}" == *".gserviceaccount.com"* ]]; then
+  MEMBER="serviceAccount:${ADMIN_EMAIL}"
 else
-  MEMBER="user:${DEPLOYER_EMAIL}"
+  MEMBER="user:${ADMIN_EMAIL}"
 fi
 
 ROLES=(
@@ -290,7 +290,7 @@ After provisioning the infrastructure with Terraform (`terraform apply`), build 
 
 ```bash
 # Option A: One-command deployment script
-./src/demo/scripts/deploy_cloud.sh <PROJECT_ID> <REGION>
+./src/demo/scripts/deploy_cloud.sh ${PROJECT_ID} ${REGION}
 
 # Option B: Manual gcloud deployment
 IMAGE_TAG="${GOOGLE_CLOUD_LOCATION}-docker.pkg.dev/${GOOGLE_CLOUD_PROJECT}/cymbal-cyber/cymbal-cyber-agent:latest"
@@ -347,12 +347,12 @@ The `gcloud run services proxy` command tunnels traffic locally through your aut
 
 * **Interactive SOC Analyst Console (Streamlit):**
   ```bash
-  SOC_URL="$(gcloud run services describe cymbal-cyber-soc-console --project="<PROJECT_ID>" --region="<REGION>" --format="value(status.url)")"
-  TOKEN="$(gcloud auth print-identity-token --impersonate-service-account=pubsub-invoker-sa@<PROJECT_ID>.iam.gserviceaccount.com --audiences="${SOC_URL}" 2>/dev/null)"
+  SOC_URL="$(gcloud run services describe cymbal-cyber-soc-console --project="${PROJECT_ID}" --region="${REGION}" --format="value(status.url)")"
+  TOKEN="$(gcloud auth print-identity-token --impersonate-service-account=pubsub-invoker-sa@${PROJECT_ID}.iam.gserviceaccount.com --audiences="${SOC_URL}" 2>/dev/null)"
 
   gcloud run services proxy cymbal-cyber-soc-console \
-    --project="<PROJECT_ID>" \
-    --region="<REGION>" \
+    --project="${PROJECT_ID}" \
+    --region="${REGION}" \
     --port=8501 \
     --token="${TOKEN}"
   ```
@@ -360,12 +360,12 @@ The `gcloud run services proxy` command tunnels traffic locally through your aut
 
 * **ADK Agent Web Playground & FastAPI Backend:**
   ```bash
-  AGENT_URL="$(gcloud run services describe cymbal-cyber-adk-agent --project="<PROJECT_ID>" --region="<REGION>" --format="value(status.url)")"
-  TOKEN="$(gcloud auth print-identity-token --impersonate-service-account=pubsub-invoker-sa@<PROJECT_ID>.iam.gserviceaccount.com --audiences="${AGENT_URL}" 2>/dev/null)"
+  AGENT_URL="$(gcloud run services describe cymbal-cyber-adk-agent --project="${PROJECT_ID}" --region="${REGION}" --format="value(status.url)")"
+  TOKEN="$(gcloud auth print-identity-token --impersonate-service-account=pubsub-invoker-sa@${PROJECT_ID}.iam.gserviceaccount.com --audiences="${AGENT_URL}" 2>/dev/null)"
 
   gcloud run services proxy cymbal-cyber-adk-agent \
-    --project="<PROJECT_ID>" \
-    --region="<REGION>" \
+    --project="${PROJECT_ID}" \
+    --region="${REGION}" \
     --port=8080 \
     --token="${TOKEN}"
   ```
@@ -377,14 +377,14 @@ The `gcloud run services proxy` command tunnels traffic locally through your aut
    ```bash
    # SOC Analyst Console URL
    gcloud run services describe cymbal-cyber-soc-console \
-     --project="<PROJECT_ID>" \
-     --region="<REGION>" \
+     --project="${PROJECT_ID}" \
+     --region="${REGION}" \
      --format="value(status.url)"
 
    # ADK Multi-Agent Service URL
    gcloud run services describe cymbal-cyber-adk-agent \
-     --project="<PROJECT_ID>" \
-     --region="<REGION>" \
+     --project="${PROJECT_ID}" \
+     --region="${REGION}" \
      --format="value(status.url)"
    ```
 
@@ -394,7 +394,7 @@ The `gcloud run services proxy` command tunnels traffic locally through your aut
 3. **Programmatic / API Invocation (OIDC Bearer Token):**
    When invoking webhooks or testing endpoints directly from the command line:
    ```bash
-   ADK_URL="$(gcloud run services describe cymbal-cyber-adk-agent --project="<PROJECT_ID>" --region="<REGION>" --format="value(status.url)")"
+   ADK_URL="$(gcloud run services describe cymbal-cyber-adk-agent --project="${PROJECT_ID}" --region="${REGION}" --format="value(status.url)")"
    TOKEN="$(gcloud auth print-identity-token)"
 
    curl -X POST "${ADK_URL}/apps/adk_agent/trigger/pubsub" \
@@ -407,8 +407,8 @@ The `gcloud run services proxy` command tunnels traffic locally through your aut
    To permit unauthenticated web access for public presentations:
    ```bash
    gcloud run services add-iam-policy-binding cymbal-cyber-soc-console \
-     --project="<PROJECT_ID>" \
-     --region="<REGION>" \
+     --project="${PROJECT_ID}" \
+     --region="${REGION}" \
      --member="allUsers" \
      --role="roles/run.invoker"
    ```
@@ -422,7 +422,7 @@ The `gcloud run services proxy` command tunnels traffic locally through your aut
 > - **Default Trigger Path ($0/mo continuous):** Cloud Scheduler triggers the `threat-detector` Cloud Run Job every 5 minutes via OAuth, evaluating 2-minute tumbling windows closed >60s ago via BigQuery MERGE and pushing detected alerts to the `cymbal_cyber_alerts` Pub/Sub topic without requiring slot reservations. With the 5-minute scheduler cadence and 60-second late-data allowance, alerts arrive ~5 to 7 minutes after event occurrence.
 > - **BigQuery Continuous Queries (`enable_continuous_query = true`):** Requires a 100-slot Enterprise Edition reservation. Slot reservations bill 24/7 at **~$0.06/slot-hour = ~$6.00/hour (~$4,320/month) whether or not a query is running**. Canceling the continuous query job saves no money; only disabling the reservation in Terraform (`enable_continuous_query = false && terraform apply`) stops slot billing. When enabled, submit the query via:
 >   ```bash
->   ./src/demo/scripts/launch_continuous_query.sh <PROJECT_ID>
+>   ./src/demo/scripts/launch_continuous_query.sh ${PROJECT_ID}
 >   ```
 > - **Dataflow Streaming Pipeline (`src/demo/scripts/run_dataflow_demo.sh`):** An optional Apache Beam ETL ingestion pipeline from Pub/Sub into BigQuery event tables. Replaces direct Pub/Sub BigQuery subscriptions (do not run both concurrently to avoid duplicate events). Provisions continuous streaming worker VMs and throughput (**~$100–$300/month**). Gated off by default.
 > - **Cloud Run & Vertex AI:** Billed on-demand per request execution duration and token usage.
@@ -431,14 +431,14 @@ The `gcloud run services proxy` command tunnels traffic locally through your aut
 The Terraform configuration in `src/demo/terraform/deploy.tf` provisions an automated cost alert (`google_billing_budget.demo_budget`) with a $100 ceiling and 50% / 90% threshold notifications when supplied with your Billing Account ID:
 ```bash
 cd src/demo/terraform
-terraform apply -var="project_id=<PROJECT_ID>" -var="billing_account_id=<YOUR_BILLING_ACCOUNT_ID>"
+terraform apply -var="project_id=${PROJECT_ID}" -var="billing_account_id=<YOUR_BILLING_ACCOUNT_ID>"
 ```
 
 ### Complete Cloud Teardown
 To avoid continuous billing, tear down cloud infrastructure immediately when finished testing:
 ```bash
 cd src/demo/terraform
-terraform destroy -var="project_id=<PROJECT_ID>"
+terraform destroy -var="project_id=${PROJECT_ID}"
 ```
 *(All BigQuery datasets and GCS buckets are configured with `delete_contents_on_destroy` and `force_destroy` so teardown succeeds cleanly even if populated).*
 
