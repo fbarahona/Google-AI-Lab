@@ -232,10 +232,11 @@ if command -v terraform >/dev/null 2>&1 && [ -d "${TERRAFORM_DIR}" ]; then
   TF_STATE_LIST="$(terraform -chdir="${TERRAFORM_DIR}" state list 2>/dev/null || true)"
 
   # Service Accounts
-  for SA_NAME in bq-continuous-query-sa cymbal-adk-agent-sa pubsub-invoker-sa threat-detector-job-sa; do
+  for SA_NAME in bq-continuous-query-sa cymbal-adk-agent-sa cymbal-soc-console-sa pubsub-invoker-sa threat-detector-job-sa; do
     case "${SA_NAME}" in
       bq-continuous-query-sa) TF_RES="google_service_account.continuous_query_sa" ;;
       cymbal-adk-agent-sa)    TF_RES="google_service_account.agent_sa" ;;
+      cymbal-soc-console-sa)  TF_RES="google_service_account.soc_console_sa" ;;
       pubsub-invoker-sa)      TF_RES="google_service_account.invoker_sa" ;;
       threat-detector-job-sa) TF_RES="google_service_account.detector_sa" ;;
     esac
@@ -335,10 +336,10 @@ if command -v gcloud >/dev/null 2>&1; then
     --project="${PROJECT_ID}" \
     --region="${REGION}" \
     --image="${IMAGE_TAG}" \
-    --service-account="cymbal-adk-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com" \
+    --service-account="cymbal-soc-console-sa@${PROJECT_ID}.iam.gserviceaccount.com" \
     --command="python" \
     --args="-m,streamlit,run,src/demo/soc_ticketing/streamlit_soc_console.py,--server.port=8080,--server.address=0.0.0.0,--server.enableCORS=false,--server.enableXsrfProtection=false,--browser.gatherUsageStats=false" \
-    --set-env-vars="PROJECT_ID=${PROJECT_ID},GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=${REGION},BIGQUERY_DATASET=Cymbal_Cyber,ESCALATION_BUCKET=cymbal-cyber-adk-escalations-bucket_${PROJECT_ID},SCREENSHOTS_BUCKET=cymbal-cyber-screenshots_${PROJECT_ID},LOCAL_MODE=false" \
+    --set-env-vars="PROJECT_ID=${PROJECT_ID},GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=${REGION},BIGQUERY_DATASET=Cymbal_Cyber,ESCALATION_BUCKET=cymbal-cyber-adk-escalations-bucket_${PROJECT_ID},SCREENSHOTS_BUCKET=cymbal-cyber-screenshots_${PROJECT_ID},RAW_LOGS_TOPIC=cymbal_cyber_raw_logs,LOCAL_MODE=false" \
     --port=8080 \
     --cpu=1 \
     --memory=2Gi \

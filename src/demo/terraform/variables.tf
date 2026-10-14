@@ -39,6 +39,12 @@ variable "agent_service_account_id" {
   default     = "cymbal-adk-agent-sa"
 }
 
+variable "console_service_account_id" {
+  description = "ID for the dedicated SOC console (Streamlit) service account."
+  type        = string
+  default     = "cymbal-soc-console-sa"
+}
+
 variable "invoker_service_account_id" {
   description = "ID for the dedicated Pub/Sub push subscription invoker service account."
   type        = string

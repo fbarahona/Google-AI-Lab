@@ -33,6 +33,13 @@ In enterprise security engineering, granting broad administrative roles across a
 │      agent_events, bucket-level read on screenshots, bucket-level write     │
 │      on escalations, aiplatform.user                                        │
 │    - Keyless V4 signed URL self-impersonation (scoped to itself only)       │
+│    - ZERO publish rights on raw telemetry (cannot forge its own evidence)   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 4b. SOC Console Workload Identity (`cymbal-soc-console-sa`)                 │
+│    - Streamlit analyst console: dashboards, verdicts, ticket Q&A, demo data │
+│    - Scoped: BigQuery jobUser, dataset READER, table-level dataEditor on    │
+│      soc_tickets and adk_threat_assessment, bucket-level objectUser on      │
+│      escalations, aiplatform.user, publisher on cymbal_cyber_raw_logs only  │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ 5. Pub/Sub Push Invoker Identity (`pubsub-invoker-sa`)                      │
 │    - OIDC token identity for authenticating push subscription delivery      │
@@ -206,6 +213,16 @@ To enforce the principle of least privilege, background automation is split into
   - `roles/storage.objectUser` on `escalations` bucket (uploading escalation tickets).
   - `roles/storage.objectUser` on `adk_staging` bucket.
   - `roles/iam.serviceAccountTokenCreator` bound **strictly to itself** for generating short-lived keyless V4 signed URLs without persistent keys.
+
+### 4B2. SOC Console Identity (`cymbal-soc-console-sa`)
+- **Purpose:** Runs the Streamlit analyst console (`cymbal-cyber-soc-console`). It has its own identity so the agent never holds a publish right on raw telemetry: the console's "Inject scenario" and "Stream logs" controls publish to `cymbal_cyber_raw_logs`, which feeds the same BigQuery subscriptions, detector and agent as real traffic.
+- **Project Roles:** `roles/bigquery.jobUser`, `roles/aiplatform.user` (the "Ask the Agent" ticket assistant), `roles/logging.logWriter`, `roles/serviceusage.serviceUsageConsumer`.
+- **Resource Bindings (Least-Privilege Scoped):**
+  - `READER` access on BigQuery dataset `Cymbal_Cyber` (dashboard metrics, ticket queue and archive).
+  - Table-level `roles/bigquery.dataEditor` on `soc_tickets` (simulated demo tickets and analyst verdicts) and `adk_threat_assessment` (analyst verdict rows).
+  - `roles/storage.objectUser` on the `escalations` bucket (escalation request and response files).
+  - `roles/pubsub.publisher` scoped strictly to topic `cymbal_cyber_raw_logs`.
+- **Zero Access:** No screenshots bucket access (the console shows bundled demo screenshots or the agent's signed URLs), no token creation, no write access to the raw event tables.
 
 ### 4C. Pub/Sub Push Invoker Identity (`pubsub-invoker-sa`)
 - **Purpose:** Provides the OIDC identity used by Pub/Sub push subscription (`adk_agent_trigger`) to authenticate delivery to the agent webhook endpoint.

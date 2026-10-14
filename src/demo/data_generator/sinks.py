@@ -11,6 +11,24 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def to_bq_subscription_row(event: dict[str, Any]) -> dict[str, Any]:
+    """Returns a copy of the event with event_timestamp as epoch microseconds.
+
+    Pub/Sub BigQuery subscriptions map a JSON integer to a TIMESTAMP column as
+    microseconds since the epoch, which avoids depending on which string formats
+    the subscription accepts.
+    """
+    row = dict(event)
+    ts = row.get("event_timestamp")
+    if isinstance(ts, str):
+        ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    if isinstance(ts, datetime):
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        row["event_timestamp"] = int(ts.timestamp() * 1_000_000)
+    return row
+
+
 class BaseSink(abc.ABC):
     """Abstract interface for log destinations."""
 
@@ -120,8 +138,10 @@ class GoogleCloudStorageSink(BaseSink):
 class PubSubSink(BaseSink):
     """Publishes log records to Cloud Pub/Sub topics for streaming ingestion."""
 
-    def __init__(self, project_id: str, topic_id: str):
+    def __init__(self, project_id: str, topic_id: str, publish_timeout: float = 30.0):
         from google.cloud import pubsub_v1
+
+        self.publish_timeout = publish_timeout
 
         try:
             self.publisher = pubsub_v1.PublisherClient()
@@ -138,27 +158,41 @@ class PubSubSink(BaseSink):
     def write_events(
         self, access_events: list[dict[str, Any]], network_events: list[dict[str, Any]]
     ) -> int:
-        total = 0
-        for ev in access_events:
-            # For BigQuery subscription with use_table_schema=true, publish the event JSON directly
-            message_data = json.dumps(ev).encode("utf-8")
-            self.publisher.publish(
-                self.topic_path,
-                message_data,
-                event_family="access",
-                table="user_access_events",
-            )
-            total += 1
-        for ev in network_events:
-            message_data = json.dumps(ev).encode("utf-8")
-            self.publisher.publish(
-                self.topic_path,
-                message_data,
-                event_family="network",
-                table="network_events",
-            )
-            total += 1
-        return total
+        """Publishes every event and waits for Pub/Sub to accept it.
+
+        Raises RuntimeError if any message is rejected (for example a missing
+        pubsub.publisher grant), so callers never report a silent failure as success.
+        """
+        futures = []
+        for family, table, events in (
+            ("access", "user_access_events", access_events),
+            ("network", "network_events", network_events),
+        ):
+            for ev in events:
+                # The BigQuery subscriptions (use_table_schema=true) write the JSON
+                # fields straight into the table columns.
+                message_data = json.dumps(to_bq_subscription_row(ev)).encode("utf-8")
+                futures.append(
+                    self.publisher.publish(
+                        self.topic_path,
+                        message_data,
+                        event_family=family,
+                        table=table,
+                    )
+                )
+
+        failures: list[Exception] = []
+        for future in futures:
+            try:
+                future.result(timeout=self.publish_timeout)
+            except Exception as exc:
+                failures.append(exc)
+        if failures:
+            raise RuntimeError(
+                f"{len(failures)} of {len(futures)} messages were not published to "
+                f"{self.topic_path}: {failures[0]}"
+            ) from failures[0]
+        return len(futures)
 
 
 class BigQuerySink(BaseSink):

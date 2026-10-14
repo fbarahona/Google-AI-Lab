@@ -23,6 +23,11 @@ output "agent_service_account_email" {
   value       = google_service_account.agent_sa.email
 }
 
+output "console_service_account_email" {
+  description = "Dedicated SOC console service account email."
+  value       = google_service_account.soc_console_sa.email
+}
+
 output "invoker_service_account_email" {
   description = "Dedicated Pub/Sub push subscription invoker service account email."
   value       = google_service_account.invoker_sa.email

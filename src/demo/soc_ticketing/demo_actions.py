@@ -1,33 +1,39 @@
 """
 Demo data actions triggered from the SOC console (scenario injection, benign log
-streaming). These write telemetry and a simulated ticket so the console has
-something to show without waiting for the detector and agent pipeline.
+streaming).
+
+In the cloud the telemetry is published to the raw-logs Pub/Sub topic, so it takes
+the real path: BigQuery subscription, scheduled detector, agent, ticket. Injection
+also writes a scripted ticket marked SIMULATED so there is something to show before
+the agent's ticket arrives; the console badges it and keeps it out of the metrics.
 """
 
 import logging
+import os
 import time
 
 try:
-    from .models import SocTicket
+    from .models import SIMULATED_DECISION, SocTicket
     from .ticketing_service import SocTicketingService
 except ImportError:
-    from models import SocTicket
+    from models import SIMULATED_DECISION, SocTicket
     from ticketing_service import SocTicketingService
 
 logger = logging.getLogger("SocConsole")
 
+DEFAULT_RAW_LOGS_TOPIC = "cymbal_cyber_raw_logs"
 
-def _write_events(svc: SocTicketingService, acc_events, net_events) -> None:
-    from demo.data_generator.sinks import BigQuerySink, LocalSink
 
-    if svc.bq_client is not None:
-        try:
-            sink = BigQuerySink(project_id=svc.project_id, dataset_id=svc.dataset_id)
-            sink.write_events(acc_events, net_events)
-        except Exception as e:
-            logger.warning("Could not write events to BigQuery sink: %s", e)
+def _write_events(svc: SocTicketingService, acc_events, net_events) -> int:
+    """Writes telemetry and returns how many events were written. Raises on failure."""
+    from demo.data_generator.sinks import LocalSink, PubSubSink
+
+    if svc.is_cloud_enabled():
+        topic = os.getenv("RAW_LOGS_TOPIC", DEFAULT_RAW_LOGS_TOPIC)
+        sink = PubSubSink(project_id=svc.project_id, topic_id=topic)
     else:
-        LocalSink(output_dir=svc.queue_dir).write_events(acc_events, net_events)
+        sink = LocalSink(output_dir=os.path.join(svc.queue_dir, "telemetry"))
+    return sink.write_events(acc_events, net_events)
 
 
 def build_simulated_report(
@@ -45,7 +51,7 @@ def build_simulated_report(
         visual = (
             "* Desktop screenshot shows a terminal running credential dumping tooling."
         )
-        osint = f"* `{source_ip}` geolocates to North Korea and appears in public C2 blocklists."
+        osint = f"* `{source_ip}` is in an address range registered to North Korea."
         mitre = (
             "* **Credential Access (T1003):** Mimikatz credential dumping.\n"
             "* **Execution (T1059.001):** Encoded PowerShell.\n"
@@ -83,7 +89,9 @@ def build_simulated_report(
         f"* **Origin IP:** `{source_ip}`\n"
         f"* **Threat Score:** `{score}`\n"
         f"* **Severity:** `{severity}`\n"
-        f"* **Verdict:** {reason}\n\n"
+        f"* **Verdict:** {reason}\n"
+        "* **Source:** Scripted by the console's demo controls. The agent did not "
+        "produce this report and no threat intelligence was looked up.\n\n"
         f"**2. Behavioral Findings:**\n{behavior}\n\n"
         f"**3. Visual Forensics:**\n{visual}\n\n"
         f"**4. External Threat Intelligence:**\n{osint}\n\n"
@@ -96,12 +104,16 @@ def build_simulated_report(
 def inject_threat_scenario(
     svc: SocTicketingService, threat_type: str, user_id: str, screenshots_dir: str
 ) -> str:
-    """Injects a threat scenario's telemetry and a simulated ticket. Returns the ticket id."""
+    """Injects a threat scenario's telemetry plus a simulated ticket.
+
+    Returns a status message. Raises if the telemetry could not be written, in which
+    case no simulated ticket is created either.
+    """
     from demo.data_generator.log_generator import SyntheticLogEngine
 
     eng = SyntheticLogEngine(project_id=svc.project_id, dataset_id=svc.dataset_id)
     acc_events, net_events = eng.inject_threat(threat_type=threat_type, user_id=user_id)
-    _write_events(svc, acc_events, net_events)
+    written = _write_events(svc, acc_events, net_events)
 
     is_malicious = threat_type == "malicious"
     score = 1950 if is_malicious else 120
@@ -113,7 +125,7 @@ def inject_threat_scenario(
     )
     reason, report = build_simulated_report(threat_type, user_id, dev_id, src_ip, score)
     ticket = SocTicket(
-        ticket_id=f"SOC-TICKET-{user_id}-{int(time.time())}",
+        ticket_id=f"SIM-TICKET-{user_id}-{int(time.time())}",
         user_id=user_id,
         device_id=dev_id,
         source_ip=src_ip,
@@ -121,7 +133,7 @@ def inject_threat_scenario(
         severity="CRITICAL" if is_malicious else "LOW",
         status="ESCALATED",
         category="Malware" if is_malicious else "Policy Violation",
-        agent_decision="PERCEIVED_THREAT" if is_malicious else "FALSE_POSITIVE",
+        agent_decision=SIMULATED_DECISION,
         agent_reason=reason,
         mitre_tactics=["Command and Control", "Execution", "Credential Access"]
         if is_malicious
@@ -131,13 +143,23 @@ def inject_threat_scenario(
         screenshot_url=f"{screenshots_dir}/{user_id}.png",
     )
     svc.create_and_dispatch_ticket(ticket)
-    return ticket.ticket_id
+
+    if svc.is_cloud_enabled():
+        return (
+            f"Published {written} events for {user_id} and added a simulated ticket. "
+            "The detector runs every 5 minutes; the agent's own ticket follows."
+        )
+    return (
+        f"Wrote {written} events for {user_id} and added a simulated ticket. "
+        "Run local_runner for the agent's investigation."
+    )
 
 
-def stream_benign_logs(svc: SocTicketingService, batch_size: int = 50) -> None:
-    """Streams a batch of benign activity logs."""
+def stream_benign_logs(svc: SocTicketingService, batch_size: int = 50) -> str:
+    """Streams a batch of benign activity logs. Returns a status message; raises on failure."""
     from demo.data_generator.log_generator import SyntheticLogEngine
 
     eng = SyntheticLogEngine(project_id=svc.project_id, dataset_id=svc.dataset_id)
     acc_events, net_events = eng.generate_benign_batch(count=batch_size)
-    _write_events(svc, acc_events, net_events)
+    written = _write_events(svc, acc_events, net_events)
+    return f"Streamed {written} benign events."
