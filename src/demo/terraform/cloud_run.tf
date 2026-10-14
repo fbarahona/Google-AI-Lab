@@ -198,7 +198,7 @@ resource "google_cloud_run_v2_service" "soc_console_service" {
 
   template {
     timeout                          = "300s"
-    service_account                  = google_service_account.agent_sa.email
+    service_account                  = google_service_account.soc_console_sa.email
     max_instance_request_concurrency = 80
 
     scaling {
@@ -253,6 +253,10 @@ resource "google_cloud_run_v2_service" "soc_console_service" {
         value = google_storage_bucket.screenshots.name
       }
       env {
+        name  = "RAW_LOGS_TOPIC"
+        value = google_pubsub_topic.raw_logs_topic.name
+      }
+      env {
         name  = "LOCAL_MODE"
         value = "false"
       }
@@ -269,7 +273,7 @@ resource "google_cloud_run_v2_service" "soc_console_service" {
 
   depends_on = [
     google_project_service.required,
-    google_service_account.agent_sa,
+    google_service_account.soc_console_sa,
     google_storage_bucket.escalations,
     google_bigquery_dataset.cyber_dataset
   ]

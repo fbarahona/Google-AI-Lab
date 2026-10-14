@@ -254,6 +254,7 @@ graph TD
 ### 4. SOC Ticketing System & Console (`src/demo/soc_ticketing/`)
 - **Service Backend:** [`soc_ticketing/ticketing_service.py`](soc_ticketing/ticketing_service.py) handles ticket creation, BigQuery storage (`soc_tickets`, `adk_threat_assessment`), GCS queue management, and outbound webhooks.
 - **Streamlit Analyst Console:** [`soc_ticketing/streamlit_soc_console.py`](soc_ticketing/streamlit_soc_console.py) provides a web UI for human analysts to review and adjudicate tickets.
+- **Demo controls ("Inject scenario", "Stream logs"):** [`soc_ticketing/demo_actions.py`](soc_ticketing/demo_actions.py). In the cloud the console publishes the events to `cymbal_cyber_raw_logs` as its own service account (`cymbal-soc-console-sa`), so they take the real path: BigQuery subscription, scheduled detector (about 5 to 7 minutes), agent investigation, agent ticket. Locally the events are written under the queue folder's `telemetry/` directory. Either way, injection also adds a scripted ticket with `agent_decision = "SIMULATED"` so there is something to triage right away; the console badges it "Simulated" and every dashboard metric leaves it out. A failed write shows an error toast and adds no ticket.
 
 ---
 

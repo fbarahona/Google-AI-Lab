@@ -7,6 +7,10 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+# agent_decision for tickets scripted by the console's demo controls. The console
+# badges them and every dashboard metric leaves them out.
+SIMULATED_DECISION = "SIMULATED"
+
 
 class SocTicket(BaseModel):
     """Schema for incident tickets passed to the SOC Ticketing System."""

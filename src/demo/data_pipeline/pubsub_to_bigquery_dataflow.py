@@ -12,6 +12,7 @@ import argparse
 import json
 import logging
 import os
+from datetime import UTC, datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,15 @@ def parse_and_route_record(message_bytes: bytes) -> tuple[str, dict[str, Any]]:
             table = "network_events"
         else:
             table = "user_access_events"
+
+    # PubSubSink sends event_timestamp as epoch microseconds for the BigQuery
+    # subscriptions; streaming inserts read a number as seconds, so send ISO-8601.
+    ts = data.get("event_timestamp") if isinstance(data, dict) else None
+    if isinstance(ts, int):
+        data = {
+            **data,
+            "event_timestamp": datetime.fromtimestamp(ts / 1_000_000, UTC).isoformat(),
+        }
 
     return table, data
 

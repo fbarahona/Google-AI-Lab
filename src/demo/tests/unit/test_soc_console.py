@@ -225,3 +225,25 @@ def test_console_overview_renders(tmp_path, monkeypatch):
     at.run()
     assert not at.exception, at.exception
     assert any("Triage Queue (1)" in str(link.label) for link in at.get("page_link"))
+
+
+def test_console_demo_action_failure_shows_error_toast(tmp_path, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+
+    import demo.data_generator.sinks as sinks
+
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    monkeypatch.setenv("LOCAL_QUEUE_DIR", str(tmp_path))
+
+    def refuse(self, access_events, network_events):
+        raise RuntimeError("publish denied")
+
+    monkeypatch.setattr(sinks.LocalSink, "write_events", refuse)
+
+    at = AppTest.from_file(str(CONSOLE), default_timeout=60)
+    at.run()
+    at.button(key="sb_benign").click().run()
+    assert not at.exception, at.exception
+    toasts = [t.value for t in at.toast]
+    assert any("failed: publish denied" in t for t in toasts), toasts
+    assert not any("done" in t for t in toasts)

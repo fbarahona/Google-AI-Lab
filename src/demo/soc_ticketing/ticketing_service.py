@@ -20,9 +20,9 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .models import SocTicket
+    from .models import SIMULATED_DECISION, SocTicket
 except ImportError:
-    from models import SocTicket
+    from models import SIMULATED_DECISION, SocTicket
 
 logger = logging.getLogger("SocTicketingService")
 
@@ -827,7 +827,8 @@ class SocTicketingService:
         """
         Dynamically calculates all SOC dashboard metrics directly from BigQuery tables.
         Provides clean fallback / zero counts when tables are empty.
-        Uses CTE deduplication on soc_tickets so metrics always reflect the latest state.
+        Uses CTE deduplication on soc_tickets so metrics always reflect the latest state,
+        and leaves out simulated tickets written by the console's demo controls.
         """
         metrics: dict[str, Any] = {
             "monitored_devices": 0,
@@ -848,8 +849,16 @@ class SocTicketingService:
         }
 
         if self.bq_client is None:
-            new_t = self.fetch_new_tickets()
-            hist_t = self.fetch_historic_tickets()
+            new_t = [
+                t
+                for t in self.fetch_new_tickets()
+                if t.get("agent_decision") != SIMULATED_DECISION
+            ]
+            hist_t = [
+                t
+                for t in self.fetch_historic_tickets()
+                if t.get("agent_decision") != SIMULATED_DECISION
+            ]
             metrics["escalated_alerts"] = len(new_t)
             metrics["triaged_alerts"] = len(hist_t)
             return metrics
@@ -873,6 +882,7 @@ class SocTicketingService:
                 FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
               )
               WHERE rn = 1
+                AND COALESCE(agent_decision, '') != '{SIMULATED_DECISION}'
             ),
             access_stats AS (
               SELECT
@@ -939,6 +949,7 @@ class SocTicketingService:
                 FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
               )
               WHERE rn = 1
+                AND COALESCE(agent_decision, '') != '{SIMULATED_DECISION}'
             )
             SELECT
               INITCAP(severity) AS severity,
@@ -968,6 +979,7 @@ class SocTicketingService:
                 FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
               )
               WHERE rn = 1
+                AND COALESCE(agent_decision, '') != '{SIMULATED_DECISION}'
             )
             SELECT
               CASE
@@ -1002,6 +1014,7 @@ class SocTicketingService:
                 FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
               )
               WHERE rn = 1
+                AND COALESCE(agent_decision, '') != '{SIMULATED_DECISION}'
             )
             SELECT
               CASE
@@ -1036,6 +1049,7 @@ class SocTicketingService:
                 FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
               )
               WHERE rn = 1
+                AND COALESCE(agent_decision, '') != '{SIMULATED_DECISION}'
             )
             SELECT
               tactic AS category,
@@ -1145,6 +1159,7 @@ class SocTicketingService:
                 FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
               )
               WHERE rn = 1
+                AND COALESCE(agent_decision, '') != '{SIMULATED_DECISION}'
             )
             SELECT
               user_id,

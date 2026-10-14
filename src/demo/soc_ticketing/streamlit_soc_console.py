@@ -42,6 +42,7 @@ try:
         create_threat_trend_chart,
     )
     from .demo_actions import inject_threat_scenario, stream_benign_logs
+    from .models import SIMULATED_DECISION
     from .report_parser import parse_report
     from .ticket_assistant import TicketAssistant
     from .ticketing_service import SocTicketingService
@@ -55,6 +56,7 @@ except ImportError:
         create_threat_trend_chart,
     )
     from demo_actions import inject_threat_scenario, stream_benign_logs
+    from models import SIMULATED_DECISION
     from report_parser import parse_report
     from ticket_assistant import TicketAssistant
     from ticketing_service import SocTicketingService
@@ -223,11 +225,24 @@ def short_ts(value: Any) -> str:
     return str(value or "")[:19].replace("T", " ")
 
 
+def is_simulated(ticket: dict[str, Any]) -> bool:
+    return ticket.get("agent_decision") == SIMULATED_DECISION
+
+
 def run_demo_action(label: str, action) -> None:
-    with st.spinner(f"{label}..."):
-        action()
+    try:
+        with st.spinner(f"{label}..."):
+            message = action()
+    except Exception as e:
+        logger.exception("%s failed", label)
+        detail = str(e)
+        if len(detail) > 200:
+            detail = detail[:200] + "..."
+        st.session_state.status_toast = f"{label} failed: {detail}"
+        st.session_state.status_toast_icon = "❌"
+        return
     refresh_data()
-    st.session_state.status_toast = f"{label}: done."
+    st.session_state.status_toast = message or f"{label}: done."
 
 
 def inject(threat_type: str, user_id: str) -> None:
@@ -249,7 +264,10 @@ st.session_state.setdefault("status_toast", None)
 st.session_state.setdefault("seen_ticket_ids", None)
 
 if st.session_state.status_toast:
-    st.toast(st.session_state.status_toast, icon="✅")
+    st.toast(
+        st.session_state.status_toast,
+        icon=st.session_state.pop("status_toast_icon", None) or "✅",
+    )
     st.session_state.status_toast = None
 
 
@@ -366,9 +384,14 @@ def render_ticket_detail(ticket: dict[str, Any], archived: bool) -> None:
         with head_r:
             badges = st.container(horizontal=True, horizontal_alignment="right")
             badges.badge(sev, color=SEVERITY_COLORS.get(sev, "gray"))
-            badges.badge(
-                decision.replace("_", " "), color="violet", icon=":material/smart_toy:"
-            )
+            if is_simulated(ticket):
+                badges.badge("Simulated", color="gray", icon=":material/science:")
+            else:
+                badges.badge(
+                    decision.replace("_", " "),
+                    color="violet",
+                    icon=":material/smart_toy:",
+                )
             if archived:
                 verdict = ticket.get("human_decision") or "Adjudicated"
                 badges.badge(
@@ -378,6 +401,12 @@ def render_ticket_detail(ticket: dict[str, Any], archived: bool) -> None:
                 )
             else:
                 badges.badge(str(ticket.get("status") or "OPEN"), color="gray")
+
+        if is_simulated(ticket):
+            st.caption(
+                "Scripted by the demo controls, not produced by the agent. "
+                "Left out of every dashboard metric."
+            )
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("User", ticket.get("user_id", "Unknown"))
@@ -390,7 +419,9 @@ def render_ticket_detail(ticket: dict[str, Any], archived: bool) -> None:
             or ticket.get("agent_reason_for_escalation")
             or "Threat score threshold exceeded."
         )
-        if "FALSE" in decision:
+        if is_simulated(ticket):
+            st.info(f"**Scripted verdict:** {reason}", icon=":material/science:")
+        elif "FALSE" in decision:
             st.success(f"**Agent verdict:** {reason}", icon=":material/verified_user:")
         else:
             st.error(f"**Agent verdict:** {reason}", icon=":material/crisis_alert:")
@@ -801,7 +832,8 @@ def queue_panel() -> None:
             selected = tid == st.session_state.selected_ticket_id
             label = (
                 f"{SEVERITY_ICONS.get(sev, '⚪')} **{t.get('user_id', 'Unknown')}** · {sev} · "
-                f"score {t.get('threat_score', 'N/A')}  \n"
+                f"score {t.get('threat_score', 'N/A')}"
+                f"{' · 🧪 Simulated' if is_simulated(t) else ''}  \n"
                 f"{short_ts(t.get('created_at') or t.get('timestamp'))}"
             )
             if st.button(
@@ -860,9 +892,11 @@ def archive_page() -> None:
     )
     historic = load_historic_tickets()
 
-    total = len(historic)
-    threats = sum(1 for t in historic if t.get("human_decision") == "Genuine Threat")
-    fps = sum(1 for t in historic if t.get("human_decision") == "False Positive")
+    # Simulated tickets stay listed below but are left out of the KPIs.
+    counted = [t for t in historic if not is_simulated(t)]
+    total = len(counted)
+    threats = sum(1 for t in counted if t.get("human_decision") == "Genuine Threat")
+    fps = sum(1 for t in counted if t.get("human_decision") == "False Positive")
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Archived Incidents", total)
     k2.metric(
@@ -914,6 +948,7 @@ def archive_page() -> None:
     rows = [
         {
             "Ticket ID": t.get("ticket_id"),
+            "Source": "🧪 Simulated" if is_simulated(t) else "Agent",
             "User": t.get("user_id"),
             "Origin IP": t.get("source_ip"),
             "Score": t.get("threat_score"),

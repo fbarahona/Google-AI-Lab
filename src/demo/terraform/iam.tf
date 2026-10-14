@@ -154,6 +154,81 @@ resource "google_service_account_iam_member" "agent_self_impersonation" {
 }
 
 
+# 2b. SOC Console Service Account
+# Role: Runs the Streamlit analyst console. Reads tickets and telemetry, records analyst
+# verdicts, answers ticket questions through Vertex AI, and publishes demo telemetry to
+# the raw-logs topic. Kept separate from the agent SA so the agent can never publish
+# raw telemetry, the evidence it investigates.
+resource "google_service_account" "soc_console_sa" {
+  project      = var.project_id
+  account_id   = var.console_service_account_id
+  display_name = "Cymbal Cyber SOC Console SA"
+  description  = "Runs the SOC analyst console and publishes demo telemetry to the raw-logs topic."
+
+  depends_on = [google_project_service.required]
+}
+
+# bigquery.jobUser runs dashboard and ticket queries; aiplatform.user serves the
+# "Ask the Agent" ticket assistant through Vertex AI.
+locals {
+  console_project_roles = toset([
+    "roles/bigquery.jobUser",
+    "roles/aiplatform.user",
+    "roles/logging.logWriter",
+    "roles/serviceusage.serviceUsageConsumer",
+  ])
+}
+
+resource "google_project_iam_member" "console_project_bindings" {
+  for_each = local.console_project_roles
+
+  project = var.project_id
+  role    = each.value
+  member  = "serviceAccount:${google_service_account.soc_console_sa.email}"
+}
+
+# Dataset READER: tickets, alerts and event tables for the dashboard
+resource "google_bigquery_dataset_access" "console_dataset_reader" {
+  project       = var.project_id
+  dataset_id    = google_bigquery_dataset.cyber_dataset.dataset_id
+  role          = "READER"
+  user_by_email = google_service_account.soc_console_sa.email
+}
+
+# Table-level dataEditor on soc_tickets (simulated tickets and analyst verdicts)
+resource "google_bigquery_table_iam_member" "console_soc_tickets_editor" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
+  table_id   = google_bigquery_table.soc_tickets.table_id
+  role       = "roles/bigquery.dataEditor"
+  member     = "serviceAccount:${google_service_account.soc_console_sa.email}"
+}
+
+# Table-level dataEditor on adk_threat_assessment (analyst verdict rows)
+resource "google_bigquery_table_iam_member" "console_adk_threat_assessment_editor" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
+  table_id   = google_bigquery_table.adk_threat_assessment.table_id
+  role       = "roles/bigquery.dataEditor"
+  member     = "serviceAccount:${google_service_account.soc_console_sa.email}"
+}
+
+# Escalations bucket: list, read, write and delete escalation request/response files
+resource "google_storage_bucket_iam_member" "console_escalations_user" {
+  bucket = google_storage_bucket.escalations.name
+  role   = "roles/storage.objectUser"
+  member = "serviceAccount:${google_service_account.soc_console_sa.email}"
+}
+
+# Publisher scoped strictly to the raw-logs topic ("Inject scenario" / "Stream logs")
+resource "google_pubsub_topic_iam_member" "console_raw_logs_publisher" {
+  project = var.project_id
+  topic   = google_pubsub_topic.raw_logs_topic.name
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:${google_service_account.soc_console_sa.email}"
+}
+
+
 # 3. Pub/Sub Push Subscription & Cloud Scheduler Invoker Service Account
 # Role: Dedicated identity used by Pub/Sub push subscription and Cloud Scheduler to authenticate to Agent Runtime endpoint and trigger the Threat Detector job.
 resource "google_service_account" "invoker_sa" {
