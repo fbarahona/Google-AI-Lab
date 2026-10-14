@@ -20,9 +20,9 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .models import SIMULATED_DECISION, SocTicket
+    from .models import AUTO_CLOSED_FP_DECISION, SIMULATED_DECISION, SocTicket
 except ImportError:
-    from models import SIMULATED_DECISION, SocTicket
+    from models import AUTO_CLOSED_FP_DECISION, SIMULATED_DECISION, SocTicket
 
 logger = logging.getLogger("SocTicketingService")
 
@@ -32,6 +32,44 @@ LOCAL_QUEUE_DIR = os.getenv(
     "LOCAL_QUEUE_DIR", str(REPO_ROOT / "local_demo_data" / "escalations")
 )
 LOCAL_HISTORY_DIR = os.path.join(LOCAL_QUEUE_DIR, "history")
+
+SOC_TICKET_COLUMNS = frozenset(
+    {
+        "ticket_id",
+        "created_at",
+        "user_id",
+        "device_id",
+        "source_ip",
+        "threat_score",
+        "severity",
+        "status",
+        "agent_decision",
+        "agent_reason",
+        "mitre_tactics",
+        "indicators_of_compromise",
+        "screenshot_url",
+        "structured_report",
+        "human_decision",
+        "human_comment",
+        "adjudicated_at",
+    }
+)
+SOC_TICKET_REQUIRED_STRINGS = (
+    "ticket_id",
+    "created_at",
+    "user_id",
+    "device_id",
+    "source_ip",
+    "severity",
+    "status",
+    "agent_decision",
+    "agent_reason",
+    "structured_report",
+)
+
+
+class TicketPersistenceError(RuntimeError):
+    """A ticket could not be written to its system of record."""
 
 
 def get_gcp_credentials():
@@ -195,22 +233,99 @@ class SocTicketingService:
                 pass
         return False
 
+    @staticmethod
+    def _local_mode() -> bool:
+        return os.getenv("LOCAL_MODE", "false").lower() == "true"
+
+    @staticmethod
+    def _soc_tickets_row(ticket_data: dict[str, Any]) -> dict[str, Any]:
+        """Projects a ticket dict onto the soc_tickets columns, filling REQUIRED ones."""
+        row = {k: v for k, v in ticket_data.items() if k in SOC_TICKET_COLUMNS}
+        for list_col in ("mitre_tactics", "indicators_of_compromise"):
+            if not isinstance(row.get(list_col), list):
+                row[list_col] = []
+        for req_str in SOC_TICKET_REQUIRED_STRINGS:
+            if row.get(req_str) is None:
+                row[req_str] = ""
+        return row
+
+    def _assessment_row(self, ticket: SocTicket, **overrides: Any) -> dict[str, Any]:
+        row = {
+            "transaction_window_end": ticket.transaction_window_end
+            or datetime.now(UTC).isoformat(),
+            "user_id": ticket.user_id,
+            "device_id": ticket.device_id,
+            "source_ip": ticket.source_ip,
+            "total_2_min_threat_score": ticket.threat_score,
+            "agent_decision": ticket.agent_decision or "GENUINE_THREAT",
+            "agent_reason": ticket.agent_reason,
+            "human_decision": None,
+            "human_reason": None,
+            "alert_payload": json.dumps(ticket.model_dump()),
+        }
+        row.update(overrides)
+        return row
+
+    def _insert_required(self, table: str, row: dict[str, Any], ticket_id: str) -> None:
+        """Streams one row into BigQuery; raises TicketPersistenceError on any failure."""
+        table_id = f"{self.project_id}.{self.dataset_id}.{table}"
+        if self.bq_client is None:
+            raise TicketPersistenceError(
+                f"Ticket {ticket_id} not stored: no BigQuery client for {table_id}."
+            )
+        try:
+            errors = self.bq_client.insert_rows_json(
+                table_id, [row], ignore_unknown_values=True
+            )
+        except Exception as e:
+            raise TicketPersistenceError(
+                f"Ticket {ticket_id} not stored in {table_id}: {e}"
+            ) from e
+        if errors:
+            raise TicketPersistenceError(
+                f"Ticket {ticket_id} not stored in {table_id}: {errors}"
+            )
+        logger.info("Persisted ticket %s to %s", ticket_id, table_id)
+
+    def _write_local_json(self, path: str, payload: dict[str, Any]) -> None:
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+        except OSError as e:
+            raise TicketPersistenceError(
+                f"Ticket {payload.get('ticket_id')} not stored at {path}: {e}"
+            ) from e
+
     def create_and_dispatch_ticket(self, ticket: SocTicket) -> str:
         """
-        Ingests and dispatches a new incident ticket to the SOC ticketing system:
-        - Inserts ticket row into BigQuery soc_tickets and adk_threat_assessment
-        - Uploads ticket payload to GCS (or local file queue in local mode)
+        Ingests and dispatches a new incident ticket to the SOC ticketing system.
+
+        Fails closed: raises TicketPersistenceError unless the ticket reached its system
+        of record (BigQuery soc_tickets and adk_threat_assessment in the cloud, the local
+        file queue in LOCAL_MODE), so callers never report a lost ticket as dispatched.
+        The GCS escalation copy is best effort. Writing the same ticket_id again
+        overwrites the GCS and local copies, and readers deduplicate BigQuery rows.
         """
         logger.info("Passing ticket %s to SOC ticketing system...", ticket.ticket_id)
         payload = ticket.model_dump()
+        filename = f"human_escalation_information_{ticket.ticket_id}.json"
 
-        # 1. Cloud Storage write (if cloud available)
-        if self.is_cloud_enabled() and self.storage_client is not None:
+        if self._local_mode():
+            self._write_local_json(os.path.join(self.queue_dir, filename), payload)
+            return f"Successfully dispatched ticket {ticket.ticket_id} to SOC ticketing system with severity {ticket.severity}."
+
+        # BigQuery is the system of record; a failure here must not look like success.
+        self._insert_required(
+            "soc_tickets", self._soc_tickets_row(payload), ticket.ticket_id
+        )
+        self._insert_required(
+            "adk_threat_assessment", self._assessment_row(ticket), ticket.ticket_id
+        )
+
+        if self.storage_client is not None:
             try:
                 bucket = self.storage_client.bucket(self.escalation_bucket_name)
-                filename = f"human_escalation_information_{ticket.ticket_id}.json"
-                blob = bucket.blob(filename)
-                blob.upload_from_string(
+                bucket.blob(filename).upload_from_string(
                     json.dumps(payload, indent=2), content_type="application/json"
                 )
                 logger.info(
@@ -220,113 +335,44 @@ class SocTicketingService:
                     filename,
                 )
             except Exception as e:
-                logger.warning("Could not upload to GCS: %s", e)
-
-        # 2. Local File Queue write
-        local_file = os.path.join(
-            self.queue_dir, f"human_escalation_information_{ticket.ticket_id}.json"
-        )
-        try:
-            with open(local_file, "w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=2)
-        except Exception as e:
-            logger.debug("Local file write skipped: %s", e)
-
-        # 3. BigQuery write (Single Source of Truth)
-        if self.bq_client is not None:
-            try:
-                soc_table_id = f"{self.project_id}.{self.dataset_id}.soc_tickets"
-                soc_columns = {
-                    "ticket_id",
-                    "created_at",
-                    "user_id",
-                    "device_id",
-                    "source_ip",
-                    "threat_score",
-                    "severity",
-                    "status",
-                    "agent_decision",
-                    "agent_reason",
-                    "mitre_tactics",
-                    "indicators_of_compromise",
-                    "screenshot_url",
-                    "structured_report",
-                    "human_decision",
-                    "human_comment",
-                    "adjudicated_at",
-                }
-                soc_row = {k: v for k, v in payload.items() if k in soc_columns}
-                if not isinstance(soc_row.get("mitre_tactics"), list):
-                    soc_row["mitre_tactics"] = []
-                if not isinstance(soc_row.get("indicators_of_compromise"), list):
-                    soc_row["indicators_of_compromise"] = []
-                for req_str in [
-                    "ticket_id",
-                    "created_at",
-                    "user_id",
-                    "device_id",
-                    "source_ip",
-                    "severity",
-                    "status",
-                    "agent_decision",
-                    "agent_reason",
-                    "structured_report",
-                ]:
-                    if soc_row.get(req_str) is None:
-                        soc_row[req_str] = ""
-
-                errors = self.bq_client.insert_rows_json(
-                    soc_table_id, [soc_row], ignore_unknown_values=True
-                )
-                if errors:
-                    logger.warning(
-                        "BigQuery insert errors into soc_tickets: %s", errors
-                    )
-                else:
-                    logger.info(
-                        "Persisted ticket %s to %s", ticket.ticket_id, soc_table_id
-                    )
-            except Exception as e:
-                logger.warning(
-                    "Could not persist ticket to BigQuery soc_tickets: %s", e
-                )
-
-            try:
-                assessment_table_id = (
-                    f"{self.project_id}.{self.dataset_id}.adk_threat_assessment"
-                )
-                assessment_row = {
-                    "transaction_window_end": ticket.transaction_window_end
-                    or datetime.now(UTC).isoformat(),
-                    "user_id": ticket.user_id,
-                    "device_id": ticket.device_id,
-                    "source_ip": ticket.source_ip,
-                    "total_2_min_threat_score": ticket.threat_score,
-                    "agent_decision": ticket.agent_decision or "GENUINE_THREAT",
-                    "agent_reason": ticket.agent_reason,
-                    "human_decision": None,
-                    "human_reason": None,
-                    "alert_payload": json.dumps(payload),
-                }
-                errors = self.bq_client.insert_rows_json(
-                    assessment_table_id, [assessment_row], ignore_unknown_values=True
-                )
-                if errors:
-                    logger.warning(
-                        "BigQuery insert errors into adk_threat_assessment: %s", errors
-                    )
-                else:
-                    logger.info(
-                        "Persisted assessment for user %s to %s",
-                        ticket.user_id,
-                        assessment_table_id,
-                    )
-            except Exception as e:
-                logger.warning(
-                    "Could not persist ticket to BigQuery adk_threat_assessment: %s", e
-                )
+                logger.warning("Could not upload ticket copy to GCS: %s", e)
 
         return f"Successfully dispatched ticket {ticket.ticket_id} to SOC ticketing system with severity {ticket.severity}."
+
+    def record_auto_closed_false_positive(self, ticket: SocTicket) -> str:
+        """
+        Archives an alert the agent closed as false positive on its own.
+
+        The ticket is stored as RESOLVED with no analyst verdict, so it shows up in the
+        archive (and not in the triage queue) where analysts can review the closure.
+        Fails closed like create_and_dispatch_ticket.
+        """
+        now_iso = datetime.now(UTC).isoformat()
+        ticket = ticket.model_copy(
+            update={
+                "status": "RESOLVED",
+                "agent_decision": AUTO_CLOSED_FP_DECISION,
+                "adjudicated_at": ticket.adjudicated_at or now_iso,
+            }
+        )
+        payload = ticket.model_dump()
+
+        if self._local_mode():
+            self._write_local_json(
+                os.path.join(self.history_dir, f"resolved_{ticket.ticket_id}.json"),
+                payload,
+            )
+        else:
+            self._insert_required(
+                "soc_tickets", self._soc_tickets_row(payload), ticket.ticket_id
+            )
+            self._insert_required(
+                "adk_threat_assessment",
+                self._assessment_row(ticket, agent_decision="FALSE_POSITIVE"),
+                ticket.ticket_id,
+            )
+        logger.info("Archived auto-closed false positive %s", ticket.ticket_id)
+        return f"Archived ticket {ticket.ticket_id} as a false positive closed by the agent."
 
     def fetch_new_tickets(self) -> list[dict[str, Any]]:
         """
@@ -429,44 +475,7 @@ class SocTicketingService:
             return
         try:
             soc_table_id = f"{self.project_id}.{self.dataset_id}.soc_tickets"
-            soc_columns = {
-                "ticket_id",
-                "created_at",
-                "user_id",
-                "device_id",
-                "source_ip",
-                "threat_score",
-                "severity",
-                "status",
-                "agent_decision",
-                "agent_reason",
-                "mitre_tactics",
-                "indicators_of_compromise",
-                "screenshot_url",
-                "structured_report",
-                "human_decision",
-                "human_comment",
-                "adjudicated_at",
-            }
-            soc_row = {k: v for k, v in ticket_data.items() if k in soc_columns}
-            if not isinstance(soc_row.get("mitre_tactics"), list):
-                soc_row["mitre_tactics"] = []
-            if not isinstance(soc_row.get("indicators_of_compromise"), list):
-                soc_row["indicators_of_compromise"] = []
-            for req_str in [
-                "ticket_id",
-                "created_at",
-                "user_id",
-                "device_id",
-                "source_ip",
-                "severity",
-                "status",
-                "agent_decision",
-                "agent_reason",
-                "structured_report",
-            ]:
-                if soc_row.get(req_str) is None:
-                    soc_row[req_str] = ""
+            soc_row = self._soc_tickets_row(ticket_data)
 
             errors = self.bq_client.insert_rows_json(
                 soc_table_id, [soc_row], ignore_unknown_values=True
@@ -621,50 +630,11 @@ class SocTicketingService:
         if self.bq_client is not None and ticket_data:
             try:
                 soc_table_id = f"{self.project_id}.{self.dataset_id}.soc_tickets"
-                soc_columns = {
-                    "ticket_id",
-                    "created_at",
-                    "user_id",
-                    "device_id",
-                    "source_ip",
-                    "threat_score",
-                    "severity",
-                    "status",
-                    "agent_decision",
-                    "agent_reason",
-                    "mitre_tactics",
-                    "indicators_of_compromise",
-                    "screenshot_url",
-                    "structured_report",
-                    "human_decision",
-                    "human_comment",
-                    "adjudicated_at",
-                }
-                resolved_row = {
-                    k: v for k, v in ticket_data.items() if k in soc_columns
-                }
+                resolved_row = self._soc_tickets_row(ticket_data)
                 resolved_row["status"] = "RESOLVED"
                 resolved_row["human_decision"] = human_decision
                 resolved_row["human_comment"] = human_comment
                 resolved_row["adjudicated_at"] = now_iso
-                if not isinstance(resolved_row.get("mitre_tactics"), list):
-                    resolved_row["mitre_tactics"] = []
-                if not isinstance(resolved_row.get("indicators_of_compromise"), list):
-                    resolved_row["indicators_of_compromise"] = []
-                for req_str in [
-                    "ticket_id",
-                    "created_at",
-                    "user_id",
-                    "device_id",
-                    "source_ip",
-                    "severity",
-                    "status",
-                    "agent_decision",
-                    "agent_reason",
-                    "structured_report",
-                ]:
-                    if resolved_row.get(req_str) is None:
-                        resolved_row[req_str] = ""
 
                 self.bq_client.insert_rows_json(
                     soc_table_id, [resolved_row], ignore_unknown_values=True
@@ -838,6 +808,7 @@ class SocTicketingService:
             "security_events": 0,
             "triaged_alerts": 0,
             "escalated_alerts": 0,
+            "auto_closed_alerts": 0,
             "alerts_by_severity": [],
             "alerts_by_status": [],
             "alerts_by_sla": [],
@@ -861,6 +832,9 @@ class SocTicketingService:
             ]
             metrics["escalated_alerts"] = len(new_t)
             metrics["triaged_alerts"] = len(hist_t)
+            metrics["auto_closed_alerts"] = sum(
+                1 for t in hist_t if t.get("agent_decision") == AUTO_CLOSED_FP_DECISION
+            )
             return metrics
 
         access_where, net_where, alert_where, ticket_where = self._build_time_clauses(
@@ -909,7 +883,8 @@ class SocTicketingService:
               SELECT
                 COUNT(*) AS total_tickets,
                 COUNTIF(status = 'RESOLVED' OR (human_decision IS NOT NULL AND human_decision != '')) AS triaged_alerts,
-                COUNTIF(status IN ('OPEN', 'ESCALATED', 'UNDER_INVESTIGATION') AND (human_decision IS NULL OR human_decision = '')) AS escalated_alerts
+                COUNTIF(status IN ('OPEN', 'ESCALATED', 'UNDER_INVESTIGATION') AND (human_decision IS NULL OR human_decision = '')) AS escalated_alerts,
+                COUNTIF(agent_decision = '{AUTO_CLOSED_FP_DECISION}') AS auto_closed_alerts
               FROM deduplicated_tickets
               {ticket_where}
             )
@@ -931,6 +906,7 @@ class SocTicketingService:
                 metrics["security_events"] = r.get("total_security_events") or 0
                 metrics["triaged_alerts"] = r.get("triaged_alerts") or 0
                 metrics["escalated_alerts"] = r.get("escalated_alerts") or 0
+                metrics["auto_closed_alerts"] = r.get("auto_closed_alerts") or 0
         except Exception as e:
             logger.warning("Error querying summary KPIs: %s", e)
 

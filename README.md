@@ -137,8 +137,8 @@ Agent tools are decoupled from the orchestrator into an independent MCP server, 
 | | `get_gcs_uri_for_user` | Resolves the Cloud Storage URI (`gs://...`) for a user's desktop captures. |
 | | `generate_signed_url` | Generates short-lived V4 signed URLs for analyst inspection without exposing public buckets. |
 | **SOC Operations** | `dispatch_to_soc_ticketing_system` | Formats and dispatches high-confidence incidents to BigQuery `soc_tickets`. |
-| | `log_false_positive` | Logs analyzed benign activity to BigQuery `alerts` with resolution notes. |
-| | `create_rich_ticket_id` | Generates deterministic, auditable incident identifiers (`INC-...`). |
+| | `log_false_positive` | Closes benign activity as a False Positive and archives it (status RESOLVED, "Auto-closed by agent") so analysts can review it in the Ticket Archive. |
+| | `create_rich_ticket_id` | Generates a unique ticket ID; during an investigation the security gate replaces it with the alert's deterministic ID (`SOC-TICKET-<user>-<hash of alert_id>`). |
 | | `escalate_to_human` | Writes raw forensic payloads to Cloud Storage for senior analyst escalation. |
 
 See [Cloud Security & IAM Architecture](CLOUD_SECURITY.md#3-decoupled-tool-execution-via-local-model-context-protocol-mcp-server) for the security model behind the server.

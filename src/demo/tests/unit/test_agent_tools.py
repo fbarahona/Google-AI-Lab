@@ -18,6 +18,7 @@ from adk_agent.agent import (
 )
 from adk_agent.tools import (
     _parse_alert_payload_to_row,
+    alert_id_from_payload,
     build_event_logs_query,
     create_rich_ticket_id,
     escalate_to_human,
@@ -25,9 +26,13 @@ from adk_agent.tools import (
     get_entity_behavioral_profile,
     get_visual_analysis_for_user,
     log_false_positive,
+    normalize_severity,
     read_png_text_chunks,
     sanitize_entity_value,
+    ticket_id_for_alert,
 )
+from src.demo.soc_ticketing.models import AUTO_CLOSED_FP_DECISION
+from src.demo.soc_ticketing.ticketing_service import SocTicketingService
 
 C_WILSON_PNG = (
     Path(__file__).resolve().parents[4]
@@ -344,17 +349,25 @@ def test_security_gate_permits_incident_dispatch():
     assert res is None
 
 
-@patch("adk_agent.tools.get_bq_client")
-def test_log_false_positive_failed_write_does_not_set_flag(mock_get_bq):
+def _cloud_soc_service(insert_errors):
+    """A cloud-mode ticketing service whose BigQuery client returns insert_errors."""
+    service = SocTicketingService(project_id="test-project", dataset_id="Test_Dataset")
+    service._bq_client = MagicMock()
+    service._bq_client.insert_rows_json.return_value = insert_errors
+    service._storage_client = MagicMock()
+    return service
+
+
+def test_log_false_positive_failed_write_does_not_set_flag(tmp_path, monkeypatch):
     """Verify that a failed BigQuery write does not count as resolved and sets evidence_unavailable."""
-    mock_bq = MagicMock()
-    mock_bq.insert_rows_json.return_value = [{"error": "Quota exceeded"}]
-    mock_get_bq.return_value = mock_bq
+    monkeypatch.setenv("LOCAL_QUEUE_DIR", str(tmp_path))
+    monkeypatch.setenv("LOCAL_MODE", "false")
+    service = _cloud_soc_service([{"error": "Quota exceeded"}])
 
     mock_ctx = MagicMock()
     mock_ctx.state = State({}, {})
     payload = '{"user_id": "l.taylor", "total_2_min_threat_score": 120}'
-    with patch.dict("os.environ", {"LOCAL_MODE": "false"}):
+    with patch("adk_agent.tools.get_soc_service", return_value=service):
         res = log_false_positive(payload, "Benign admin noise", tool_context=mock_ctx)
 
     assert "Failed to log false positive" in res
@@ -362,21 +375,34 @@ def test_log_false_positive_failed_write_does_not_set_flag(mock_get_bq):
     assert mock_ctx.state.get("evidence_unavailable") is True
 
 
-@patch("adk_agent.tools.get_bq_client")
-def test_log_false_positive_successful_write_sets_flag(mock_get_bq):
-    """Verify that a successful BigQuery write sets false_positive_logged in state."""
-    mock_bq = MagicMock()
-    mock_bq.insert_rows_json.return_value = []
-    mock_get_bq.return_value = mock_bq
+def test_log_false_positive_archives_auto_closed_ticket(tmp_path, monkeypatch):
+    """A successful closure sets the flag and archives a RESOLVED ticket marked as auto-closed."""
+    monkeypatch.setenv("LOCAL_QUEUE_DIR", str(tmp_path))
+    monkeypatch.setenv("LOCAL_MODE", "false")
+    service = _cloud_soc_service([])
 
     mock_ctx = MagicMock()
     mock_ctx.state = State({}, {})
     payload = '{"user_id": "l.taylor", "total_2_min_threat_score": 120}'
-    with patch.dict("os.environ", {"LOCAL_MODE": "false"}):
-        res = log_false_positive(payload, "Benign admin noise", tool_context=mock_ctx)
+    with patch("adk_agent.tools.get_soc_service", return_value=service):
+        res = log_false_positive(
+            payload,
+            "Benign admin noise",
+            ticket_id="SOC-TICKET-l.taylor-abc",
+            tool_context=mock_ctx,
+        )
 
     assert "Successfully logged alert as a False Positive" in res
     assert mock_ctx.state.get("false_positive_logged") is True
+    rows = {
+        c.args[0].rsplit(".", 1)[-1]: c.args[1][0]
+        for c in service._bq_client.insert_rows_json.call_args_list
+    }
+    assert rows["soc_tickets"]["ticket_id"] == "SOC-TICKET-l.taylor-abc"
+    assert rows["soc_tickets"]["status"] == "RESOLVED"
+    assert rows["soc_tickets"]["agent_decision"] == AUTO_CLOSED_FP_DECISION
+    assert not rows["soc_tickets"].get("human_decision")
+    assert rows["adk_threat_assessment"]["agent_decision"] == "FALSE_POSITIVE"
 
 
 def test_before_orchestrator_starts_resets_flags_and_seeds_state():
@@ -423,6 +449,7 @@ def test_before_orchestrator_starts_resets_flags_and_seeds_state():
 def test_default_deny_callback_escalates_when_unresolved(tmp_path, monkeypatch):
     """Verify that default_deny_soc_callback escalates unresolved alerts using seeded user metadata."""
     monkeypatch.setenv("LOCAL_QUEUE_DIR", str(tmp_path))
+    monkeypatch.setenv("LOCAL_MODE", "true")
     callback_ctx = MagicMock()
     state_obj = State({}, {})
     state_obj["prompt_injection_detected"] = True
@@ -519,3 +546,91 @@ def test_escalate_to_human_non_blocking():
     test_file = f"./local_demo_data/escalations/human_escalation_information_{test_ticket_id}.json"
     if os.path.exists(test_file):
         os.remove(test_file)
+
+
+def test_ticket_id_for_alert_is_deterministic_per_alert():
+    """The same alert always maps to one ticket; two alerts for one user never collide."""
+    first = ticket_id_for_alert("u.lewis", "alert-1")
+    assert first == ticket_id_for_alert("u.lewis", "alert-1")
+    assert first != ticket_id_for_alert("u.lewis", "alert-2")
+    assert first.startswith("SOC-TICKET-u.lewis-")
+    assert ticket_id_for_alert("u.lewis", None) != ticket_id_for_alert("u.lewis", None)
+    assert ticket_id_for_alert(
+        "u.lewis", "alert-1", prefix="SOC-TICKET-AUTO-ESCALATED"
+    ).startswith("SOC-TICKET-AUTO-ESCALATED-u.lewis-")
+
+
+def test_create_rich_ticket_id_unique_within_one_second():
+    assert create_rich_ticket_id("u.lewis") != create_rich_ticket_id("u.lewis")
+
+
+def test_alert_id_from_payload_falls_back_to_user_and_window():
+    assert alert_id_from_payload({"alert_id": "abc"}) == "abc"
+    assert (
+        alert_id_from_payload({"user_id": "u.lewis", "window_end": "2026-10-14T10:02"})
+        == "u.lewis|2026-10-14T10:02"
+    )
+    assert alert_id_from_payload({"user_id": "u.lewis"}) is None
+
+
+def test_normalize_severity():
+    assert normalize_severity("critical") == "CRITICAL"
+    assert normalize_severity(" Low ") == "LOW"
+    assert normalize_severity("severe") == "HIGH"
+    assert normalize_severity(None) == "HIGH"
+
+
+def test_orchestrator_seeds_alert_and_ticket_ids():
+    callback_ctx = MagicMock()
+    callback_ctx.state = State({"ticket_id": "stale", "alert_id": "stale"}, {})
+    part = MagicMock()
+    part.text = 'Investigate alert: {"alert_id": "a-77", "user_id": "u.lewis", "total_2_min_threat_score": 900}'
+    callback_ctx.user_content = MagicMock(parts=[part])
+    callback_ctx.agent_name = "SecurityInvestigationOrchestrator"
+
+    before_orchestrator_starts(callback_ctx)
+    assert callback_ctx.state["alert_id"] == "a-77"
+    assert callback_ctx.state["ticket_id"] == ticket_id_for_alert("u.lewis", "a-77")
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    ["dispatch_to_soc_ticketing_system", "escalate_to_human", "log_false_positive"],
+)
+def test_security_gate_assigns_alert_ticket_id(tool_name):
+    """The model's ticket_id is replaced with the one seeded for the alert."""
+    tool = MagicMock()
+    tool.name = tool_name
+    ctx = MagicMock()
+    ctx.state = State(
+        {
+            "ticket_id": "SOC-TICKET-u.lewis-abc",
+            "telemetry_evidence_collected": True,
+            "visual_evidence_collected": True,
+        },
+        {},
+    )
+    args = {"ticket_id": "SOC-TICKET-u.lewis-1718000000"}
+    assert security_gate_callback(tool, args, ctx) is None
+    assert args["ticket_id"] == "SOC-TICKET-u.lewis-abc"
+
+
+def test_security_gate_raises_escalation_severity_when_flagged():
+    tool = MagicMock()
+    tool.name = "escalate_to_human"
+    ctx = MagicMock()
+    ctx.state = State({"prompt_injection_detected": True}, {})
+    args = {"ticket_id": "T", "severity": "MEDIUM", "context_data": "x"}
+    security_gate_callback(tool, args, ctx)
+    assert args["severity"] == "CRITICAL"
+
+
+def test_local_visual_analysis_fails_closed_without_screenshot(monkeypatch):
+    """No screenshot in LOCAL_MODE is missing evidence, never a benign verdict."""
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    ctx = MagicMock()
+    ctx.state = State({}, {})
+    res = get_visual_analysis_for_user("gs://bucket/no.such.user.png", tool_context=ctx)
+    assert "Visual evidence unavailable" in str(res)
+    assert ctx.state.get("evidence_unavailable") is True
+    assert ctx.state.get("visual_evidence_collected") is not True

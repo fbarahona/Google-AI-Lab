@@ -36,6 +36,12 @@ jobs:
           LOCAL_MODE: "true"
         run: uv run pytest src/demo/tests/unit/
 
+      - name: Run end-to-end pipeline test
+        # Real agents, security gate and MCP servers with a scripted model; no GCP access.
+        env:
+          LOCAL_MODE: "true"
+        run: uv run pytest src/demo/tests/e2e/
+
   terraform:
     name: Terraform Validation & Linting
     runs-on: ubuntu-latest
