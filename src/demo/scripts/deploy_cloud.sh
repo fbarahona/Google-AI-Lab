@@ -186,12 +186,25 @@ elif command -v docker >/dev/null 2>&1; then
   docker push "${IMAGE_TAG}"
 elif command -v gcloud >/dev/null 2>&1; then
   echo "Submitting container image build to Cloud Build (--async)..."
-  BUILD_ID=$(gcloud builds submit \
+  # IAM granted in step 1 can take a minute or more to propagate, so the first submit
+  # may fail with storage.objects.get denied on the source tarball. Retry before failing.
+  BUILD_SUBMIT_MAX_ATTEMPTS=4
+  BUILD_SUBMIT_ATTEMPT=1
+  until BUILD_ID=$(gcloud builds submit \
     --project="${PROJECT_ID}" \
     --tag="${IMAGE_TAG}" \
     --async \
     --format="value(id)" \
-    "${REPO_ROOT}" | tr -d '[:space:]')
+    "${REPO_ROOT}" | tr -d '[:space:]') && [ -n "${BUILD_ID}" ]; do
+    if [ "${BUILD_SUBMIT_ATTEMPT}" -ge "${BUILD_SUBMIT_MAX_ATTEMPTS}" ]; then
+      echo "Error: Cloud Build submit failed after ${BUILD_SUBMIT_MAX_ATTEMPTS} attempts."
+      exit 1
+    fi
+    echo "Cloud Build submit failed (commonly IAM propagation delay for the build service account)."
+    echo "Waiting 60 seconds before retry (${BUILD_SUBMIT_ATTEMPT}/${BUILD_SUBMIT_MAX_ATTEMPTS})..."
+    sleep 60
+    BUILD_SUBMIT_ATTEMPT=$((BUILD_SUBMIT_ATTEMPT + 1))
+  done
   echo "Cloud Build job submitted: ${BUILD_ID}. Polling status..."
   while true; do
     BUILD_STATUS=$(gcloud builds describe "${BUILD_ID}" --project="${PROJECT_ID}" --format="value(status)" 2>/dev/null || echo "UNKNOWN")
