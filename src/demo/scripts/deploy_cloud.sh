@@ -291,12 +291,23 @@ if command -v terraform >/dev/null 2>&1 && [ -d "${TERRAFORM_DIR}" ]; then
     fi
   fi
 
-  terraform -chdir="${TERRAFORM_DIR}" apply -auto-approve \
+  TF_APPLY_MAX_ATTEMPTS=3
+  TF_APPLY_ATTEMPT=1
+  until terraform -chdir="${TERRAFORM_DIR}" apply -auto-approve \
     -var="project_id=${PROJECT_ID}" \
     -var="region=${REGION}" \
     -var="agent_image=${IMAGE_TAG}" \
     -var="gemini_api_key=${GEMINI_API_KEY:-}" \
-    "${DEPLOYER_VAR[@]}"
+    "${DEPLOYER_VAR[@]}"; do
+    if [ "${TF_APPLY_ATTEMPT}" -ge "${TF_APPLY_MAX_ATTEMPTS}" ]; then
+      echo "Error: Terraform apply failed after ${TF_APPLY_MAX_ATTEMPTS} attempts."
+      exit 1
+    fi
+    echo "Terraform apply encountered a transient error (commonly GCP IAM propagation delay for newly minted BigQuery connection service accounts)."
+    echo "Waiting 25 seconds for IAM global consistency before retry (${TF_APPLY_ATTEMPT}/${TF_APPLY_MAX_ATTEMPTS})..."
+    sleep 25
+    TF_APPLY_ATTEMPT=$((TF_APPLY_ATTEMPT + 1))
+  done
 fi
 
 # 3. Direct update of Cloud Run Service & Job (ensures active revision rollout)

@@ -1,6 +1,6 @@
 # Real-Time Cyber Security AI & Google ADK Multi-Agent Sandbox
 
-A reference demo with production-style patterns demonstrating real-time cybersecurity threat detection, autonomous multi-agent AI forensic investigation, and human-in-the-loop Security Operations Center (SOC) triage built on **Google Cloud Platform (project `<project_name>`)**, **Google Agent Development Kit (ADK)**, and **Google Agents CLI (`agents-cli`)**.
+A reference demo with production-style patterns demonstrating real-time cybersecurity threat detection, autonomous multi-agent AI forensic investigation, and human-in-the-loop Security Operations Center (SOC) triage built on **Google Cloud Platform (project `<project_id>`)**, **Google Agent Development Kit (ADK)**, and **Google Agents CLI (`agents-cli`)**.
 
 ---
 
@@ -197,8 +197,8 @@ cp .env.example .env
 |---|---|---|
 | `GEMINI_MODEL` | Active Gemini model for agents and vision | `gemini-3.8-flash` |
 | `GOOGLE_GENAI_USE_ENTERPRISE` | Route requests through Vertex AI | `true` |
-| `GOOGLE_CLOUD_PROJECT` | GCP Project ID | `<project_name>` |
-| `GOOGLE_CLOUD_LOCATION` | GCP location / region | `us-east1` (or `global`) |
+| `GOOGLE_CLOUD_PROJECT` | GCP Project ID | `<project_id>` |
+| `GOOGLE_CLOUD_LOCATION` | GCP location / region | `us-east1` (or `<region>`) |
 | `BIGQUERY_DATASET` | Target BigQuery dataset | `Cymbal_Cyber` |
 | `GEMINI_API_KEY` | Optional: Gemini Developer API key (if not using ADC) | `""` |
 
