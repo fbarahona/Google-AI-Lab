@@ -68,6 +68,22 @@ setup_logging()
 os.environ["ADK_ALLOW_CONFIG_STDIO_MCP_SERVERS"] = "true"
 
 
+# Flags that only tighten the security gate; any MCP tool may raise them.
+_EVIDENCE_FLAGS = (
+    "prompt_injection_detected",
+    "malicious_indicators",
+    "evidence_unavailable",
+)
+
+# Lifecycle flags that suppress default-deny escalation; each may only be set
+# by the tool that performs that resolution action.
+_LIFECYCLE_FLAG_BY_TOOL = {
+    "dispatch_to_soc_ticketing_system": "ticket_dispatched",
+    "escalate_to_human": "escalation_dispatched",
+    "log_false_positive": "false_positive_logged",
+}
+
+
 def sync_mcp_security_state_callback(
     tool: BaseTool,
     args: dict[str, Any],
@@ -125,50 +141,39 @@ def sync_mcp_security_state_callback(
             except Exception:
                 pass
 
-    # 1. Update state from structured security_flags
+    tool_name = getattr(tool, "name", "")
+
+    # 1. Update state from structured security_flags. Evidence flags only ever
+    #    tighten the security gate, so any tool may raise them; lifecycle flags
+    #    are accepted only from the tool that owns that resolution action.
     sec_flags = payload.get("security_flags", {})
     if isinstance(sec_flags, dict):
-        if sec_flags.get("prompt_injection_detected"):
-            log_agent_event(
-                f"MCP state sync: prompt_injection_detected=True (from {tool.name})"
-            )
-            state["prompt_injection_detected"] = True
-        if sec_flags.get("malicious_indicators"):
-            log_agent_event(
-                f"MCP state sync: malicious_indicators=True (from {tool.name})"
-            )
-            state["malicious_indicators"] = True
-        if sec_flags.get("evidence_unavailable"):
-            log_agent_event(
-                f"MCP state sync: evidence_unavailable=True (from {tool.name})"
-            )
-            state["evidence_unavailable"] = True
-        if sec_flags.get("ticket_dispatched"):
-            log_agent_event(
-                f"MCP state sync: ticket_dispatched=True (from {tool.name})"
-            )
-            state["ticket_dispatched"] = True
-        if sec_flags.get("escalation_dispatched"):
-            log_agent_event(
-                f"MCP state sync: escalation_dispatched=True (from {tool.name})"
-            )
-            state["escalation_dispatched"] = True
-        if sec_flags.get("false_positive_logged"):
-            log_agent_event(
-                f"MCP state sync: false_positive_logged=True (from {tool.name})"
-            )
-            state["false_positive_logged"] = True
+        for flag in _EVIDENCE_FLAGS:
+            if sec_flags.get(flag):
+                log_agent_event(f"MCP state sync: {flag}=True (from {tool_name})")
+                state[flag] = True
+        owned_flag = _LIFECYCLE_FLAG_BY_TOOL.get(tool_name)
+        if owned_flag and sec_flags.get(owned_flag):
+            log_agent_event(f"MCP state sync: {owned_flag}=True (from {tool_name})")
+            state[owned_flag] = True
 
-    # 2. Update state from lifecycle status
+    # 2. Update state from lifecycle status, again only from the owning tool
     status = str(payload.get("status", "")).upper()
-    if status == "DISPATCHED":
+    if tool_name == "dispatch_to_soc_ticketing_system" and status == "DISPATCHED":
         state["ticket_dispatched"] = True
-    elif status in {"ESCALATED", "ESCALATED_PENDING_REVIEW"}:
+    elif tool_name == "escalate_to_human" and status in {
+        "ESCALATED",
+        "ESCALATED_PENDING_REVIEW",
+    }:
         state["escalation_dispatched"] = True
-    elif status == "RESOLVED_FALSE_POSITIVE":
+    elif tool_name == "log_false_positive" and status == "RESOLVED_FALSE_POSITIVE":
         state["false_positive_logged"] = True
 
-    # 3. Fallback text inspection in case output was formatted as raw string
+    # 3. Fallback text inspection, only when no structured payload was returned.
+    #    Tool output can embed attacker-controlled text (e.g. screenshot OCR), so
+    #    it must never override the structured contract.
+    if payload:
+        return None
     text_lower = raw_text.lower()
     if (
         "prompt injection detected" in text_lower
@@ -180,14 +185,20 @@ def sync_mcp_security_state_callback(
         or "critical infrastructure failure" in text_lower
     ):
         state["evidence_unavailable"] = True
-    if (
+    if tool_name == "dispatch_to_soc_ticketing_system" and (
         "ticket created and dispatched" in text_lower
         or "dispatched to soc ticketing system" in text_lower
     ):
         state["ticket_dispatched"] = True
-    if "successfully escalated to human soc analyst" in text_lower:
+    if (
+        tool_name == "escalate_to_human"
+        and "successfully escalated to human soc analyst" in text_lower
+    ):
         state["escalation_dispatched"] = True
-    if "successfully logged alert as a false positive" in text_lower:
+    if (
+        tool_name == "log_false_positive"
+        and "successfully logged alert as a false positive" in text_lower
+    ):
         state["false_positive_logged"] = True
 
     return None
