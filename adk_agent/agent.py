@@ -106,6 +106,47 @@ _LIFECYCLE_FLAG_BY_TOOL = {
     "log_false_positive": "false_positive_logged",
 }
 
+# Report argument of each ticket-creating tool, so the raw sub-agent findings can be
+# attached to the ticket the analyst reviews instead of only the model's summary.
+_REPORT_ARG_BY_TOOL = {
+    "dispatch_to_soc_ticketing_system": "structured_report",
+    "escalate_to_human": "context_data",
+}
+
+# Must match soc_ticketing.report_parser.EVIDENCE_APPENDIX_HEADING.
+EVIDENCE_APPENDIX_HEADING = "## Investigation Evidence"
+_EVIDENCE_SOURCES = (
+    ("google_search_results", "OSINT & Threat Intelligence"),
+    ("bigquery_investigation_results", "Behavioral Telemetry (BigQuery)"),
+    ("visual_analysis_results", "Visual Forensics"),
+)
+
+
+def append_investigation_evidence(report: str, state: Any) -> str:
+    """
+    Appends each investigation sub-agent's full output to a ticket report.
+
+    Headings inside the sub-agent text are demoted to level 4 so the console can
+    split the appendix on its own level-3 headings. Idempotent.
+    """
+    report = report or ""
+    if state is None or EVIDENCE_APPENDIX_HEADING in report:
+        return report
+    blocks = []
+    for key, title in _EVIDENCE_SOURCES:
+        text = str(state.get(key) or "").strip()
+        if text:
+            text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "#### ", text)
+            blocks.append(f"### {title}\n{text}")
+    if not blocks:
+        return report
+    return (
+        f"{report.rstrip()}\n\n---\n"
+        f"{EVIDENCE_APPENDIX_HEADING} (captured from the agent session)\n\n"
+        + "\n\n".join(blocks)
+        + "\n"
+    )
+
 
 def sync_mcp_security_state_callback(
     tool: BaseTool,
@@ -390,7 +431,17 @@ def security_gate_callback(
     2. High-risk behavioral indicators were recorded in telemetry, OR
     3. Essential forensic evidence was unavailable, OR
     4. Telemetry or visual evidence was never successfully gathered.
+
+    For ticket-creating tools it also attaches the sub-agents' full findings to the
+    report argument, so the analyst sees the evidence behind the summary.
     """
+    report_arg = _REPORT_ARG_BY_TOOL.get(tool.name)
+    if report_arg is not None:
+        args[report_arg] = append_investigation_evidence(
+            args.get(report_arg, ""), getattr(tool_context, "state", None)
+        )
+        return None
+
     if tool.name == "log_false_positive":
         state = getattr(tool_context, "state", None)
         if state is not None:
@@ -576,7 +627,9 @@ def default_deny_soc_callback(callback_context: CallbackContext):
             status="ESCALATED",
             agent_decision="AUTO_ESCALATED_DEFAULT_DENY",
             agent_reason="Deterministic Default-Deny: Model terminated turn without resolving alert through a permitted tool action.",
-            structured_report="Auto-escalated by security platform default-deny guardrail.",
+            structured_report=append_investigation_evidence(
+                "Auto-escalated by security platform default-deny guardrail.", state
+            ),
         )
         soc_service.create_and_dispatch_ticket(ticket)
         state["escalation_dispatched"] = True
@@ -722,7 +775,13 @@ soc_ticketing_agent = Agent(
          **2. Behavioral Findings:** BigQuery correlated access and network metrics
          **3. Visual Forensics:** Screenshot observations and signed image URL
          **4. External Threat Intelligence:** IP reputation and geolocation
+         **5. MITRE ATT&CK Mapping:** Tactics and techniques observed, with the evidence for each
+         **6. Recommended Response Actions:** A numbered list of concrete containment, eradication
+            and recovery steps for the analyst (e.g. isolate host X, reset credentials for user Y,
+            block IP Z at the perimeter), most urgent first
        - Call `dispatch_to_soc_ticketing_system` with the ticket_id, alert payload, agent reason, structured report, and severity.
+       - When you call `escalate_to_human` instead, pass the same report structure as `context_data`
+         and state in the recommendations what the analyst must verify.
 
     3. **IF FALSE POSITIVE:**
        - Call `log_false_positive` explaining why the alert represents benign activity (e.g. normal user, no foreign IP, benign commands).

@@ -1,0 +1,10 @@
+# SOC console theme (dark), read by `streamlit run` from the repository root.
+[theme]
+base = "dark"
+primaryColor = "#f44336"
+backgroundColor = "#0b111e"
+secondaryBackgroundColor = "#111a2d"
+textColor = "#f1f5f9"
+
+[client]
+toolbarMode = "minimal"
