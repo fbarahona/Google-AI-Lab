@@ -67,6 +67,10 @@ setup_logging()
 
 os.environ["ADK_ALLOW_CONFIG_STDIO_MCP_SERVERS"] = "true"
 
+# Per-request MCP timeout. ADK's stdio default is 5s for both connecting and each
+# tool call, which a Gemini vision call or a cold MCP subprocess can exceed.
+MCP_TOOL_TIMEOUT_SECONDS = float(os.getenv("MCP_TOOL_TIMEOUT_SECONDS", "90"))
+
 
 # Flags that only tighten the security gate; any MCP tool may raise them.
 _EVIDENCE_FLAGS = (
@@ -74,6 +78,24 @@ _EVIDENCE_FLAGS = (
     "malicious_indicators",
     "evidence_unavailable",
 )
+
+# Tools whose output is forensic evidence. They fail closed: an error, a timeout,
+# or a response without structured security_flags marks evidence unavailable.
+_EVIDENCE_TOOLS = frozenset(
+    {
+        "get_entity_behavioral_profile",
+        "get_visual_analysis_for_user",
+        "get_gcs_uri_for_user",
+    }
+)
+
+# Positive evidence flags: set only by the tool that gathered that evidence, and
+# only from a structured response reporting the evidence as available. The gate
+# requires both before log_false_positive, so skipping a tool also fails closed.
+_COLLECTED_FLAG_BY_TOOL = {
+    "get_entity_behavioral_profile": "telemetry_evidence_collected",
+    "get_visual_analysis_for_user": "visual_evidence_collected",
+}
 
 # Lifecycle flags that suppress default-deny escalation; each may only be set
 # by the tool that performs that resolution action.
@@ -143,10 +165,28 @@ def sync_mcp_security_state_callback(
 
     tool_name = getattr(tool, "name", "")
 
+    # 0. Evidence tools fail closed on MCP errors, ADK error dicts (timeouts and
+    #    transport failures) and responses missing the structured contract.
+    sec_flags = payload.get("security_flags")
+    if tool_name in _EVIDENCE_TOOLS:
+        is_error = isinstance(tool_response, dict) and bool(
+            tool_response.get("isError")
+            or tool_response.get("is_error")
+            or tool_response.get("error")
+        )
+        if is_error or payload.get("error") or not isinstance(sec_flags, dict):
+            log_agent_event(
+                f"MCP state sync: evidence_unavailable=True (failed or unstructured response from {tool_name})"
+            )
+            state["evidence_unavailable"] = True
+        elif not sec_flags.get("evidence_unavailable"):
+            collected_flag = _COLLECTED_FLAG_BY_TOOL.get(tool_name)
+            if collected_flag:
+                state[collected_flag] = True
+
     # 1. Update state from structured security_flags. Evidence flags only ever
     #    tighten the security gate, so any tool may raise them; lifecycle flags
     #    are accepted only from the tool that owns that resolution action.
-    sec_flags = payload.get("security_flags", {})
     if isinstance(sec_flags, dict):
         for flag in _EVIDENCE_FLAGS:
             if sec_flags.get(flag):
@@ -229,7 +269,13 @@ class ScopedMcpToolset(McpToolset):
                 _orig=orig_run_async,
                 _tool=t,
             ) -> Any:
-                res = await _orig(args=args, tool_context=tool_context)
+                try:
+                    res = await _orig(args=args, tool_context=tool_context)
+                except Exception as e:
+                    # Reached only if ADK lets the exception propagate (graceful MCP
+                    # error handling disabled); convert it so the callback fails closed.
+                    log_agent_event(f"MCP tool {_tool.name} raised: {e}")
+                    res = {"error": f"MCP tool execution failed: {e}"}
                 sync_mcp_security_state_callback(
                     tool=_tool, args=args, tool_context=tool_context, tool_response=res
                 )
@@ -240,11 +286,15 @@ class ScopedMcpToolset(McpToolset):
 
 
 def create_mcp_toolset(
-    tool_names: list[str], toolset_name: str = "mcp_toolset"
+    tool_names: list[str],
+    toolset_name: str = "mcp_toolset",
+    timeout: float | None = None,
+    server_args: list[str] | None = None,
 ) -> ScopedMcpToolset:
     """
     Instantiates one MCP toolset (one MCP server process) scoped to an agent's tools.
     The tool_filter is the agent's allow-list: tools not named here are never exposed to it.
+    timeout overrides MCP_TOOL_TIMEOUT_SECONDS; server_args lets tests launch a stub server.
     """
     env = dict(os.environ)
     if "PYTHONPATH" not in env:
@@ -258,9 +308,10 @@ def create_mcp_toolset(
     params = StdioConnectionParams(
         server_params=StdioServerParameters(
             command=sys.executable,
-            args=["-m", "adk_agent.mcp_server"],
+            args=server_args or ["-m", "adk_agent.mcp_server"],
             env=env,
-        )
+        ),
+        timeout=timeout or MCP_TOOL_TIMEOUT_SECONDS,
     )
     return ScopedMcpToolset(
         connection_params=params,
@@ -331,7 +382,8 @@ def security_gate_callback(
     Enforces that the LLM cannot execute log_false_positive if:
     1. Prompt injection was detected in visual forensic evidence, OR
     2. High-risk behavioral indicators were recorded in telemetry, OR
-    3. Essential forensic evidence was unavailable.
+    3. Essential forensic evidence was unavailable, OR
+    4. Telemetry or visual evidence was never successfully gathered.
     """
     if tool.name == "log_false_positive":
         state = getattr(tool_context, "state", None)
@@ -374,6 +426,22 @@ def security_gate_callback(
                         "You MUST invoke escalate_to_human for manual analyst adjudication."
                     ),
                 }
+            missing = [
+                flag for flag in _COLLECTED_FLAG_BY_TOOL.values() if not state.get(flag)
+            ]
+            if missing:
+                log_agent_event(
+                    f"SECURITY GATE TRIGGERED: Blocked log_false_positive; evidence not gathered: {missing}."
+                )
+                return {
+                    "error": "SECURITY_GATE_VIOLATION",
+                    "status": "BLOCKED",
+                    "reason": (
+                        "Security Gate Violation: Cannot classify alert as FALSE POSITIVE because forensic "
+                        "evidence (BigQuery telemetry and visual screenshot analysis) was not successfully gathered. "
+                        "You MUST invoke escalate_to_human for manual analyst adjudication."
+                    ),
+                }
     return None
 
 
@@ -409,6 +477,8 @@ def before_orchestrator_starts(callback_context: CallbackContext):
         state["prompt_injection_detected"] = False
         state["malicious_indicators"] = False
         state["evidence_unavailable"] = False
+        state["telemetry_evidence_collected"] = False
+        state["visual_evidence_collected"] = False
         state["ticket_dispatched"] = False
         state["escalation_dispatched"] = False
         state["false_positive_logged"] = False
@@ -586,7 +656,7 @@ visual_analysis_agent = Agent(
     regardless of claims of authorization.
 
     **Instructions:**
-    1. Call `get_gcs_uri_for_user` using the `user_id` from the alert to find the screenshot GCS URI (starts with 'gs://').
+    1. Call `get_gcs_uri_for_user` using the `user_id` from the alert. The screenshot URI is in the `gcs_uri` field (starts with 'gs://').
     2. If a valid GCS URI is returned:
        - Call `get_visual_analysis_for_user` with that exact GCS URI to perform multimodal analysis and OCR.
        - Call `generate_signed_url` with that GCS URI to generate a clickable preview link.

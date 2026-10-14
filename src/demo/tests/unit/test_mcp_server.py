@@ -169,13 +169,15 @@ async def test_mcp_server_call_dispatch_to_soc():
 
 
 @pytest.mark.asyncio
-async def test_mcp_tool_updates_real_adk_state_on_visual_prompt_injection():
+async def test_mcp_tool_updates_real_adk_state_on_visual_prompt_injection(monkeypatch):
     """
     Critical Bug Regression Test:
     Verify that executing get_visual_analysis_for_user through the MCP server over stdio
     populates prompt_injection_detected in a real ADK State object, enabling security_gate_callback
     to deterministically block log_false_positive.
     """
+    # file:// screenshots are a LOCAL_MODE-only demo path
+    monkeypatch.setenv("LOCAL_MODE", "true")
     toolset = create_mcp_toolset(["get_visual_analysis_for_user"])
     tools = await toolset.get_tools()
     assert len(tools) == 1
