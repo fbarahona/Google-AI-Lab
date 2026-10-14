@@ -220,5 +220,9 @@ credentials*.json
 output_logs/
 local_demo_data/logs/
 local_demo_data/escalations/*.json
+local_demo_data/escalations/*.jsonl
 local_demo_data/escalations/history/*.json
 src/demo/scripts/fernando.sh
+
+# Streamlit
+.agents/skills/developing-with-streamlit
