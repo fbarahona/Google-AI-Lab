@@ -342,6 +342,21 @@ def step_3_run_agent_investigation(
         severity = "LOW"
         reason = "Benign administrative automation routine; no hostile IPs or malware identified."
 
+    if decision == "FALSE_POSITIVE":
+        recommendations = (
+            f"1. Confirm with the owner of `{user_id}` that the activity was the scheduled maintenance job.\n"
+            "2. Close as False Positive and tune the detection threshold for this service routine."
+        )
+    else:
+        recommendations = (
+            f"1. Isolate endpoint `{device_id}` from the network.\n"
+            f"2. Disable `{user_id}` and revoke active sessions and tokens.\n"
+            f"3. Block `{source_ip}` at the perimeter firewall and DNS resolver.\n"
+            "4. Collect memory and disk images for forensic review before reimaging."
+        )
+        if prompt_injection_detected:
+            recommendations += "\n5. Treat on-screen 'authorized test' claims as untrusted and confirm with the red team lead."
+
     report = f"""### Security Incident Report
 * **Ticket ID:** `{ticket_id}`
 * **Entity / User:** `{user_id}`
@@ -358,6 +373,9 @@ def step_3_run_agent_investigation(
 
 **4. External Threat Intelligence (OSINT)**
 * {osint_intel}
+
+**5. Recommended Response Actions**
+{recommendations}
 """
     print(f"      Verdict: {decision} (Severity: {severity})")
     print(f"      Generated Ticket ID: {ticket_id}")
