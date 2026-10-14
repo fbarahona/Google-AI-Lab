@@ -56,3 +56,48 @@ def test_orchestrator_subagents():
     assert root_agent.name in ["SecurityInvestigationOrchestrator", "WorkflowAgent"]
     # Check that root agent has sub-agents
     assert len(root_agent.sub_agents) >= 2
+
+
+def test_analytics_plugin_does_not_create_views():
+    """The agent SA has no dataset-level create, so the plugin must not try to create views."""
+    import pytest
+
+    from adk_agent.agent import bq_analytics_plugin
+
+    if bq_analytics_plugin is None:
+        pytest.skip("BigQuery analytics plugin not available")
+    assert bq_analytics_plugin.config.create_views is False
+
+
+def test_agent_sa_has_no_dataset_level_bigquery_write():
+    """iam.tf: agent SA gets dataset READER plus table-level dataEditor on its four tables only."""
+    import re
+    from pathlib import Path
+
+    iam_tf = (Path(__file__).resolve().parents[2] / "terraform" / "iam.tf").read_text()
+    assert "google_bigquery_dataset_iam_member" not in iam_tf
+    assert "google_bigquery_dataset_iam_binding" not in iam_tf
+
+    reader = re.search(
+        r'resource "google_bigquery_dataset_access" "agent_dataset_reader" \{(.*?)\n\}',
+        iam_tf,
+        re.DOTALL,
+    )
+    assert reader is not None
+    assert 'role          = "READER"' in reader.group(1)
+    assert "agent_sa.email" in reader.group(1)
+
+    agent_tables = set(
+        re.findall(
+            r'resource "google_bigquery_table_iam_member" "agent_\w+" \{[^}]*?'
+            r"google_bigquery_table\.(\w+)\.table_id[^}]*?agent_sa\.email",
+            iam_tf,
+            re.DOTALL,
+        )
+    )
+    assert agent_tables == {
+        "soc_tickets",
+        "alerts",
+        "adk_threat_assessment",
+        "agent_events",
+    }

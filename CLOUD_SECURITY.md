@@ -28,8 +28,10 @@ In enterprise security engineering, granting broad administrative roles across a
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ 4. ADK Agent Runtime Workload Identity (`cymbal-adk-agent-sa`)              │
 │    - Multi-agent forensic investigations, threat scanner, and SOC dispatch  │
-│    - Scoped execution: BigQuery jobUser, dataset WRITER, bucket-level read  │
-│      on screenshots, bucket-level write on escalations, aiplatform.user     │
+│    - Scoped execution: BigQuery jobUser, dataset READER, table-level        │
+│      dataEditor on soc_tickets, alerts, adk_threat_assessment and           │
+│      agent_events, bucket-level read on screenshots, bucket-level write     │
+│      on escalations, aiplatform.user                                        │
 │    - Keyless V4 signed URL self-impersonation (scoped to itself only)       │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ 5. Pub/Sub Push Invoker Identity (`pubsub-invoker-sa`)                      │
@@ -196,9 +198,10 @@ To enforce the principle of least privilege, background automation is split into
 
 ### 4B. ADK Multi-Agent Runtime Identity (`cymbal-adk-agent-sa`)
 - **Purpose:** Executes the ADK multi-agent team, background threat scanner daemon, visual inspection, and SOC ticket dispatch.
-- **Project Roles:** `roles/bigquery.jobUser`, `roles/aiplatform.user`, `roles/logging.logWriter`, `roles/serviceusage.serviceUsageConsumer`.
+- **Project Roles:** `roles/bigquery.jobUser`, `roles/bigquery.connectionUser`, `roles/aiplatform.user`, `roles/logging.logWriter`, `roles/serviceusage.serviceUsageConsumer`.
 - **Resource Bindings (Least-Privilege Scoped):**
-  - `WRITER` access on BigQuery dataset `Cymbal_Cyber` (inserts incident tickets into `soc_tickets` and `adk_threat_assessment`).
+  - `READER` access on BigQuery dataset `Cymbal_Cyber` (reads event tables, views and UDFs for investigations). No dataset-level write: the agent cannot modify the raw event tables it investigates.
+  - Table-level `roles/bigquery.dataEditor` on `soc_tickets` and `adk_threat_assessment` (incident tickets and triage decisions), `alerts` (status updates), and `agent_events` (ADK analytics plugin rows; its per-event views are disabled because they would need dataset-level create).
   - `roles/storage.objectViewer` on `screenshots` bucket (read-only for multimodal vision OCR).
   - `roles/storage.objectUser` on `escalations` bucket (uploading escalation tickets).
   - `roles/storage.objectUser` on `adk_staging` bucket.
@@ -228,6 +231,14 @@ AGENT_SA="cymbal-adk-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com"
 AGENT_ROLES=("roles/bigquery.jobUser" "roles/aiplatform.user" "roles/logging.logWriter")
 for role in "${AGENT_ROLES[@]}"; do
   gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${AGENT_SA}" --role="$role"
+done
+
+# BigQuery: dataset READER plus table-level dataEditor on the four tables the agent writes
+bq show --format=prettyjson "${PROJECT_ID}:Cymbal_Cyber" > /tmp/cymbal_dataset.json
+jq --arg sa "${AGENT_SA}" '.access += [{"role": "READER", "userByEmail": $sa}]' /tmp/cymbal_dataset.json > /tmp/cymbal_dataset_new.json
+bq update --source /tmp/cymbal_dataset_new.json "${PROJECT_ID}:Cymbal_Cyber"
+for table in soc_tickets alerts adk_threat_assessment agent_events; do
+  bq add-iam-policy-binding --member="serviceAccount:${AGENT_SA}" --role="roles/bigquery.dataEditor" "${PROJECT_ID}:Cymbal_Cyber.${table}"
 done
 
 # Resource-level bucket bindings for Agent SA
