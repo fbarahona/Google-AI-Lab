@@ -93,8 +93,15 @@ done
 The automated script handles API enablement, Terraform provisioning, Cloud Build container compilation, Cloud Run service deployment, and Cloud Scheduler configuration:
 
 ```bash
+gcloud auth application-default login                      # once per machine or devcontainer rebuild
+gcloud auth application-default set-quota-project ${PROJECT_ID}
 ./src/demo/scripts/deploy_cloud.sh ${PROJECT_ID} ${REGION}
 ```
+
+- **Credentials:** Terraform uses Application Default Credentials, which refresh themselves, so long applies don't fail when a token expires. The script stops early if ADC is missing.
+- **State:** Terraform state lives in `gs://${PROJECT_ID}-tfstate` (versioned; created by the script). Rebuilding the devcontainer loses nothing, so there are no import steps and no 409 conflicts. If an older local `terraform.tfstate` still exists, the script stops and prints the one-time `terraform init -migrate-state` command.
+- **Images:** Tagged with the git commit (`cymbal-cyber-agent:<sha>`). A clean checkout reuses the image already built for that commit; set `FORCE_BUILD=true` to rebuild. Uncommitted changes get a `<sha>-dirty-<timestamp>` tag and always build. `:latest` points at the newest image but nothing deploys from it.
+- **Lost state before migrating:** run `./src/demo/scripts/tf_adopt_existing.sh ${PROJECT_ID} ${REGION}` once, then `terraform plan`.
 
 ---
 
@@ -117,14 +124,17 @@ gcloud services enable \
     cloudscheduler.googleapis.com \
     --project="${PROJECT_ID}"
 
-# 2. Provision Infrastructure via Terraform
+# 2. Provision Infrastructure via Terraform (state in a versioned GCS bucket)
+gcloud storage buckets create gs://${PROJECT_ID}-tfstate --project=${PROJECT_ID} --location=${REGION} \
+    --uniform-bucket-level-access --public-access-prevention
+gcloud storage buckets update gs://${PROJECT_ID}-tfstate --versioning
 cd src/demo/terraform
-terraform init
+terraform init -backend-config="bucket=${PROJECT_ID}-tfstate"
 terraform apply -var="project_id=${PROJECT_ID}" -var="region=${REGION}" -auto-approve
 cd ../../..
 
 # 3. Build & Push Unified Container Image
-IMAGE_TAG="${REGION}-docker.pkg.dev/${PROJECT_ID}/cymbal-cyber/cymbal-cyber-agent:latest"
+IMAGE_TAG="${REGION}-docker.pkg.dev/${PROJECT_ID}/cymbal-cyber/cymbal-cyber-agent:$(git rev-parse --short=12 HEAD)"
 gcloud builds submit --project="${PROJECT_ID}" --tag="${IMAGE_TAG}" .
 
 # 4. Deploy Cloud Run Service (ADK Multi-Agent Webhook)
