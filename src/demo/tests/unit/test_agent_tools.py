@@ -344,7 +344,8 @@ def test_log_false_positive_failed_write_does_not_set_flag(mock_get_bq):
     mock_ctx = MagicMock()
     mock_ctx.state = State({}, {})
     payload = '{"user_id": "l.taylor", "total_2_min_threat_score": 120}'
-    res = log_false_positive(payload, "Benign admin noise", tool_context=mock_ctx)
+    with patch.dict("os.environ", {"LOCAL_MODE": "false"}):
+        res = log_false_positive(payload, "Benign admin noise", tool_context=mock_ctx)
 
     assert "Failed to log false positive" in res
     assert mock_ctx.state.get("false_positive_logged") is not True
@@ -361,7 +362,8 @@ def test_log_false_positive_successful_write_sets_flag(mock_get_bq):
     mock_ctx = MagicMock()
     mock_ctx.state = State({}, {})
     payload = '{"user_id": "l.taylor", "total_2_min_threat_score": 120}'
-    res = log_false_positive(payload, "Benign admin noise", tool_context=mock_ctx)
+    with patch.dict("os.environ", {"LOCAL_MODE": "false"}):
+        res = log_false_positive(payload, "Benign admin noise", tool_context=mock_ctx)
 
     assert "Successfully logged alert as a False Positive" in res
     assert mock_ctx.state.get("false_positive_logged") is True
