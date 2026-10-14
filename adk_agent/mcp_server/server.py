@@ -4,6 +4,10 @@ Cymbal Cyber Local MCP Server
 Implements a standards-compliant Model Context Protocol (MCP) server
 exposing BigQuery behavioral telemetry investigation, multimodal
 visual forensics, and SOC incident ticketing tools over stdio and SSE.
+
+The server deliberately exposes no free-form SQL or schema-discovery tools: any MCP
+client that connects without a tool_filter only gets the fixed, parameterized
+investigation and ticketing operations below.
 """
 
 import logging
@@ -25,9 +29,6 @@ from adk_agent.tools import (
     escalate_to_human as soc_escalate_to_human,
 )
 from adk_agent.tools import (
-    execute_sql as bq_execute_sql,
-)
-from adk_agent.tools import (
     generate_signed_url as vis_generate_signed_url,
 )
 from adk_agent.tools import (
@@ -35,9 +36,6 @@ from adk_agent.tools import (
 )
 from adk_agent.tools import (
     get_gcs_uri_for_user as vis_get_gcs_uri_for_user,
-)
-from adk_agent.tools import (
-    get_table_schema as bq_get_table_schema,
 )
 from adk_agent.tools import (
     get_visual_analysis_for_user as vis_get_visual_analysis_for_user,
@@ -70,52 +68,49 @@ def get_entity_behavioral_profile(
     )
 
 
-# Tool 2: Analyst SQL Execution
+# Tool 2: Visual Screenshot Analysis
 @mcp_server.tool()
-def execute_sql(query: str) -> str:
-    """Executes a read-only SQL query against the BigQuery security dataset."""
-    try:
-        return bq_execute_sql(query=query)
-    except Exception as e:
-        return f"Tool execution was blocked: {e}"
-
-
-# Tool 3: BigQuery Table Schema
-@mcp_server.tool()
-def get_table_schema(dataset_id: str, table_id: str) -> str:
-    """Retrieves the column schema of a specified BigQuery table."""
-    return bq_get_table_schema(dataset_id=dataset_id, table_id=table_id)
-
-
-# Tool 4: Visual Screenshot Analysis
-@mcp_server.tool()
-def get_visual_analysis_for_user(gcs_uri: str) -> str:
+def get_visual_analysis_for_user(gcs_uri: str) -> dict[str, Any]:
     """Performs multimodal inspection of a desktop screenshot using Gemini or local OCR."""
-    return vis_get_visual_analysis_for_user(gcs_uri=gcs_uri)
+    res = vis_get_visual_analysis_for_user(gcs_uri=gcs_uri)
+    if isinstance(res, dict):
+        return res
+    is_injection = (
+        "prompt injection detected" in res.lower()
+        or "security alert: prompt injection" in res.lower()
+    )
+    is_unavailable = "evidence unavailable" in res.lower()
+    return {
+        "analysis": res,
+        "security_flags": {
+            "prompt_injection_detected": is_injection,
+            "evidence_unavailable": is_unavailable,
+        },
+    }
 
 
-# Tool 5: GCS URI Resolution
+# Tool 3: GCS URI Resolution
 @mcp_server.tool()
 def get_gcs_uri_for_user(user: str) -> str:
     """Queries BigQuery user_screenshots_view to retrieve the GCS URI of a user's desktop screenshot."""
     return vis_get_gcs_uri_for_user(user=user)
 
 
-# Tool 6: Signed URL Generation
+# Tool 4: Signed URL Generation
 @mcp_server.tool()
 def generate_signed_url(gcs_uri: str) -> str:
     """Generates a secure signed URL for a GCS object to allow human SOC analyst viewing."""
     return vis_generate_signed_url(gcs_uri=gcs_uri)
 
 
-# Tool 7: Rich Ticket ID Generation
+# Tool 5: Rich Ticket ID Generation
 @mcp_server.tool()
 def create_rich_ticket_id(user_id: str) -> str:
     """Generates a standardized, readable ticket ID."""
     return soc_create_rich_ticket_id(user_id=user_id)
 
 
-# Tool 8: SOC Ticket Dispatch
+# Tool 6: SOC Ticket Dispatch
 @mcp_server.tool()
 def dispatch_to_soc_ticketing_system(
     ticket_id: str,
@@ -124,9 +119,9 @@ def dispatch_to_soc_ticketing_system(
     structured_report: str,
     severity: str = "HIGH",
     screenshot_url: str = "",
-) -> str:
+) -> dict[str, Any]:
     """Passes a confirmed or suspected threat incident ticket directly to the SOC Ticketing System."""
-    return soc_dispatch_to_soc_ticketing_system(
+    res = soc_dispatch_to_soc_ticketing_system(
         ticket_id=ticket_id,
         alert_payload=alert_payload,
         agent_reason=agent_reason,
@@ -134,33 +129,60 @@ def dispatch_to_soc_ticketing_system(
         severity=severity,
         screenshot_url=screenshot_url,
     )
+    if isinstance(res, dict):
+        return res
+    return {
+        "status": "DISPATCHED",
+        "ticket_id": ticket_id,
+        "message": res,
+        "security_flags": {"ticket_dispatched": True},
+    }
 
 
-# Tool 9: False Positive Logging
+# Tool 7: False Positive Logging
 @mcp_server.tool()
-def log_false_positive(alert_payload: str, agent_comment: str) -> str:
+def log_false_positive(alert_payload: str, agent_comment: str) -> dict[str, Any]:
     """Logs the alert as an autonomously resolved False Positive in BigQuery."""
-    return soc_log_false_positive(
+    res = soc_log_false_positive(
         alert_payload=alert_payload,
         agent_comment=agent_comment,
     )
+    if isinstance(res, dict):
+        return res
+    is_success = "successfully logged" in res.lower()
+    return {
+        "status": "RESOLVED_FALSE_POSITIVE" if is_success else "ERROR",
+        "message": res,
+        "security_flags": {
+            "false_positive_logged": is_success,
+            "evidence_unavailable": not is_success,
+        },
+    }
 
 
-# Tool 10: Human Escalation
+# Tool 8: Human Escalation
 @mcp_server.tool()
 def escalate_to_human(
     ticket_id: str,
     alert_payload: str,
     agent_reason_for_escalation: str,
     context_data: str,
-) -> str:
+) -> dict[str, Any]:
     """Dispatches an incident ticket to the SOC ticketing queue for human analyst adjudication."""
-    return soc_escalate_to_human(
+    res = soc_escalate_to_human(
         ticket_id=ticket_id,
         alert_payload=alert_payload,
         agent_reason_for_escalation=agent_reason_for_escalation,
         context_data=context_data,
     )
+    if isinstance(res, dict):
+        return res
+    return {
+        "status": "ESCALATED_PENDING_REVIEW",
+        "ticket_id": ticket_id,
+        "message": res,
+        "security_flags": {"escalation_dispatched": True},
+    }
 
 
 def main():

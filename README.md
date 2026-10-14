@@ -16,7 +16,7 @@ An enterprise reference architecture for real-time cybersecurity threat detectio
 | :--- | :--- |
 | **Alert Fatigue:** Security analysts are bombarded with hundreds of daily alerts, 70%+ of which turn out to be benign administrative false positives. | **Automated Forensic Synthesis:** Autonomous agents triage alerts instantly, separating genuine APT attacks from benign scripts without human delay. |
 | **Fragmented Evidence:** Investigating a single incident requires querying historical logs, checking external OSINT IP reputation, and examining desktop artifacts across disparate systems, taking **30 to 45 minutes per alert**. | **Multi-Specialist Agent Team:** Specialized ADK agents gather OSINT intelligence, profile 24-hour behavioral baselines in BigQuery, and perform multimodal OCR on desktop evidence in parallel, in **under 30 seconds**. |
-| **Monolithic, Fragile Tooling:** Legacy AI tooling binds database connections and heavy dependencies directly into prompt loops, risking crashes and prompt injection. | **Decoupled Local MCP Server:** Tools run in an independent MCP server over `stdio`, with read-only SQL guardrails, BigQuery scan ceilings, and least-privilege tool access per agent. |
+| **Monolithic, Fragile Tooling:** Legacy AI tooling binds database connections and heavy dependencies directly into prompt loops, risking crashes and prompt injection. | **Decoupled Local MCP Server:** Tools run in an independent MCP server over `stdio`, with fixed parameterized queries (no free-form SQL), BigQuery scan ceilings, and least-privilege tool access per agent. |
 
 ---
 
@@ -123,18 +123,16 @@ Agent tools are decoupled from the orchestrator into an independent MCP server, 
 
 ### Why MCP?
 
-- **Subprocess isolation:** Database SDKs, image processors, and network clients run in a separate process, so crashes or memory leaks cannot destabilize the orchestrator.
-- **Least-privilege tool scoping:** Each sub-agent connects only to the tools its role needs, via `ScopedMcpToolset` (e.g., the BigQuery agent cannot generate signed URLs, and the vision agent cannot modify ticket queues).
-- **SQL safety gates:** `execute_sql` rejects destructive statements (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `TRUNCATE`, and similar), blocks `INFORMATION_SCHEMA` access, sandboxes queries to the security dataset, and enforces a 1 GB `maximum_bytes_billed` scan ceiling (configurable with `BQ_MAX_BYTES_BILLED`).
+- **Subprocess isolation:** Database SDKs, image processors, and network clients run in a separate process, so crashes or memory leaks cannot destabilize the orchestrator. Each MCP-backed sub-agent gets one server process (three in total), not one per tool.
+- **Least-privilege tool scoping:** Each sub-agent connects through one `ScopedMcpToolset` whose `tool_filter` lists only the tools its role needs (e.g., the BigQuery agent cannot generate signed URLs, and the vision agent cannot modify ticket queues).
+- **No free-form SQL:** The server exposes only fixed, parameterized operations. There is no `execute_sql` or schema-discovery tool, so a client that connects without a `tool_filter` still cannot run arbitrary queries. Every BigQuery job the tools run carries a `maximum_bytes_billed` ceiling (1 GB default, configurable with `BQ_MAX_BYTES_BILLED`).
 - **Cross-client interoperability:** Because the server speaks standard MCP, other AI clients (Cursor, Windsurf, Claude Desktop, Gemini Enterprise) can use the same security tool catalog.
 
-### Registered tools (10)
+### Registered tools (8)
 
 | Domain | Tool | Purpose & security enforcement |
 | :--- | :--- | :--- |
 | **BigQuery Telemetry** | `get_entity_behavioral_profile` | Aggregates a 24-hour behavioral baseline for a user or IP. |
-| | `execute_sql` | Read-only SQL executor with the safety gates above. |
-| | `get_table_schema` | Inspects schema, partition columns, and types for incident tables. |
 | **Multimodal Vision** | `get_visual_analysis_for_user` | Runs Gemini multimodal OCR on desktop screenshot evidence. |
 | | `get_gcs_uri_for_user` | Resolves the Cloud Storage URI (`gs://...`) for a user's desktop captures. |
 | | `generate_signed_url` | Generates short-lived V4 signed URLs for analyst inspection without exposing public buckets. |
@@ -231,7 +229,7 @@ A rendered diagram is also available at [`src/demo/system_architecture.png`](src
 │   ├── tools.py                    # Tool implementations & compatibility facade
 │   ├── mcp_server/                 # Local MCP server ("cymbal-cyber-mcp")
 │   │   ├── __main__.py             # stdio/SSE CLI entrypoint
-│   │   ├── server.py               # Server definition & 10 registered tools
+│   │   ├── server.py               # Server definition & 8 registered tools
 │   │   └── tools/                  # Tool providers (BigQuery, Vision, SOC)
 │   ├── threat_detector.py          # Scheduled micro-batch detector (Cloud Run Job)
 │   ├── threat_scanner.py           # Legacy standalone threat scanner
