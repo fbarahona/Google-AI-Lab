@@ -6,62 +6,83 @@
 [![Model Context Protocol](https://img.shields.io/badge/MCP-Local_Tool_Server-7B1FA2?style=for-the-badge&logo=protocol&logoColor=white)](https://modelcontextprotocol.io/)
 [![BigQuery](https://img.shields.io/badge/BigQuery-Single_Source_of_Truth-673AB7?style=for-the-badge&logo=google-bigquery&logoColor=white)](https://cloud.google.com/bigquery)
 
-An enterprise reference architecture demonstrating real-time cybersecurity threat detection, autonomous multi-agent forensic investigation, and human-in-the-loop Security Operations Center (SOC) triage built with the **Google Agent Development Kit (ADK)**, **Gemini 3.8 Flash**, **Model Context Protocol (MCP)**, and **Google Cloud Platform**.
+An enterprise reference architecture for real-time cybersecurity threat detection, autonomous multi-agent forensic investigation, and human-in-the-loop Security Operations Center (SOC) triage, built with the **Google Agent Development Kit (ADK)**, **Gemini 3.8 Flash**, the **Model Context Protocol (MCP)**, and **Google Cloud Platform**.
 
 ---
 
-## 🎯 The Core Problem & Solution
+## 🎯 The Problem & the Solution
 
 | The Challenge in Modern SOCs | The Autonomous Multi-Agent Solution |
 | :--- | :--- |
 | **Alert Fatigue:** Security analysts are bombarded with hundreds of daily alerts, 70%+ of which turn out to be benign administrative false positives. | **Automated Forensic Synthesis:** Autonomous agents triage alerts instantly, separating genuine APT attacks from benign scripts without human delay. |
-| **Fragmented Evidence:** Investigating a single incident requires querying historical logs, checking external OSINT IP reputation, and examining desktop artifacts across disparate systems—taking **30 to 45 minutes per alert**. | **Multi-Specialist Agent Swarm:** Specialized ADK agents simultaneously gather OSINT intelligence, profile 24-hour behavioral baselines in BigQuery, and perform multimodal OCR on desktop evidence in **under 30 seconds**. |
-| **Monolithic, Fragile Tooling:** Legacy AI tooling binds database connections and heavy dependencies directly into prompt loops, risking crashes and prompt injection. | **Decoupled Local MCP Server:** Tools are isolated in an independent Model Context Protocol server over `stdio`, enforcing AST-level SQL guardrails, query scan ceilings, and least-privilege tool access. |
+| **Fragmented Evidence:** Investigating a single incident requires querying historical logs, checking external OSINT IP reputation, and examining desktop artifacts across disparate systems, taking **30 to 45 minutes per alert**. | **Multi-Specialist Agent Team:** Specialized ADK agents gather OSINT intelligence, profile 24-hour behavioral baselines in BigQuery, and perform multimodal OCR on desktop evidence in parallel, in **under 30 seconds**. |
+| **Monolithic, Fragile Tooling:** Legacy AI tooling binds database connections and heavy dependencies directly into prompt loops, risking crashes and prompt injection. | **Decoupled Local MCP Server:** Tools run in an independent MCP server over `stdio`, with read-only SQL guardrails, BigQuery scan ceilings, and least-privilege tool access per agent. |
 
 ---
 
-## ⚡ 60-Second Quickstart (Zero-Cloud Simulation)
+## 🚀 Getting Started
 
-Experience the full cybersecurity pipeline locally without deploying any cloud infrastructure or incurring cloud costs.
+The local quickstart runs the full pipeline as a **zero-cloud simulation**: no infrastructure is deployed and no cloud costs are incurred. For a real Google Cloud deployment, see the [Cloud Deployment Runbook](DEPLOYMENT.md).
 
-### 1. Run the End-to-End Forensic Simulation
-Execute the automated pipeline locally (generates synthetic access and network logs, detects an anomaly, triggers the ADK multi-agent investigation, and writes the adjudicated ticket):
+### Prerequisites
 
-```bash
-# Scenario A: Malicious APT Attack (Lazarus Group IP, Mimikatz in memory)
-python -m src.demo.local_runner --threat malicious
+- **Python 3.12** (the project requires `>=3.12,<3.13`)
+- **[uv](https://docs.astral.sh/uv/)** for dependency management
+- **`agents-cli`** (optional, for the ADK playground)
+- **Google Cloud SDK** with Application Default Credentials (only for cloud mode and integration tests)
 
-# Scenario B: Benign False Positive (Admin running scheduled backup scripts)
-python -m src.demo.local_runner --threat false_positive
-```
-
-### 2. Launch the Interactive SOC Analyst Console
-Launch the Streamlit console to inspect the incident queue, view desktop screenshot evidence, review the multi-agent investigative report, and adjudicate tickets:
+### 1. Install dependencies and configure the environment
 
 ```bash
-LOCAL_MODE=true streamlit run src/demo/soc_ticketing/streamlit_soc_console.py
+uv sync
+cp .env.example .env   # set GOOGLE_CLOUD_PROJECT, or GEMINI_API_KEY for Google AI Studio
 ```
-*Open **`http://localhost:8501`** in your browser.*
 
-### 3. Launch the ADK Agent Playground
-Inspect and interactively chat with the multi-agent team via the built-in web playground:
+`.env.example` documents the supported variables, including `GEMINI_MODEL` (default `gemini-3.8-flash`) and `ADK_ALLOW_CONFIG_STDIO_MCP_SERVERS=true`, which the ADK needs to launch the local MCP server.
+
+### 2. Run the end-to-end forensic simulation
+
+The local runner generates synthetic access and network logs, detects an anomaly, runs the multi-agent investigation, and writes the adjudicated ticket:
+
+```bash
+# Scenario A: Malicious APT attack (user u.lewis, Lazarus Group IP, Mimikatz in memory)
+uv run python -m src.demo.local_runner --threat malicious
+
+# Scenario B: Benign false positive (user l.taylor, admin running scheduled backup scripts)
+uv run python -m src.demo.local_runner --threat false_positive
+
+# Scenario C: Prompt injection (user c.wilson, screenshot text trying to coerce a false-positive closure)
+uv run python -m src.demo.local_runner --threat injection
+```
+
+Use `--user <id>` to target a different user.
+
+### 3. Launch the SOC Analyst Console
+
+Inspect the incident queue, view desktop screenshot evidence, review the multi-agent investigative report, and adjudicate tickets:
+
+```bash
+LOCAL_MODE=true uv run streamlit run src/demo/soc_ticketing/streamlit_soc_console.py
+```
+
+Then open **http://localhost:8501** in your browser.
+
+### 4. Launch the ADK Agent Playground
+
+Chat interactively with the multi-agent team in the built-in web playground:
 
 ```bash
 LOCAL_MODE=true agents-cli playground
-```
-
-### 4. Run Automated Test Suite
-Run the comprehensive unit test suite with `uv`:
-
-```bash
-uv run pytest src/demo/tests/unit/
 ```
 
 ---
 
 ## 🕵️ How the Multi-Agent Forensic Team Works
 
-When an anomaly triggers, the **ADK Orchestrator** assigns the investigation to four specialized sub-agents working in concert:
+When an anomaly triggers, the ADK orchestrator (**`SecurityInvestigationOrchestrator`**, in [`adk_agent/agent.py`](adk_agent/agent.py)) runs the investigation in two phases:
+
+1. **Parallel investigation:** the `InvestigationTeam` runs three specialist agents at the same time.
+2. **Adjudication:** the `soc_ticketing_agent` synthesizes their findings and resolves or dispatches the incident.
 
 ```
                                 ┌─────────────────────────────────┐
@@ -69,67 +90,66 @@ When an anomaly triggers, the **ADK Orchestrator** assigns the investigation to 
                                 │   (Cloud Run Webhook: FastAPI)  │
                                 └────────────────┬────────────────┘
                                                  │
-         ┌──────────────────────────────┬────────┴──────────────────────┬──────────────────────────────┐
-         ▼                              ▼                               ▼                              ▼
-┌──────────────────┐           ┌──────────────────┐           ┌──────────────────┐           ┌──────────────────┐
-│google_search_    │           │bq_investigation_ │           │visual_analysis_  │           │soc_ticketing_    │
-│agent             │           │agent             │           │agent             │           │agent             │
-│                  │           │                  │           │                  │           │                  │
-│Native Grounding: │           │Local MCP stdio:  │           │Local MCP stdio:  │           │Local MCP stdio:  │
-│google_search     │           │Behavioral Query  │           │Vision OCR & URLs │           │Ticket Dispatch   │
-└──────────────────┘           └──────────────────┘           └──────────────────┘           └─────────┬────────┘
-                                                                                                       │
-                                                                                                       ▼
-                                                                                       ┌─────────────────────────────────┐
-                                                                                       │      SOC Analyst Console        │
-                                                                                       │   (Streamlit + BigQuery SSOT)   │
-                                                                                       └─────────────────────────────────┘
+                                ┌────────────────┴─────────────────────────┐
+                                ▼                                          ▼
+   ┌──────────────────────────────────────────────────────────┐   ┌──────────────────┐
+   │        InvestigationTeam (Phase 1: run in parallel)      │   │soc_ticketing_    │
+   │                                                          │──▶│agent             │
+   │ ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │   │(Phase 2)         │
+   │ │google_search_│  │bq_investiga- │  │visual_analy- │     │   │Local MCP stdio:  │
+   │ │agent         │  │tion_agent    │  │sis_agent     │     │   │Ticket Dispatch   │
+   │ │Native search │  │Local MCP:    │  │Local MCP:    │     │   └────────┬─────────┘
+   │ │grounding     │  │Behavior query│  │Vision OCR    │     │            │
+   │ └──────────────┘  └──────────────┘  └──────────────┘     │            ▼
+   └──────────────────────────────────────────────────────────┘   ┌──────────────────┐
+                                                                  │SOC Analyst       │
+                                                                  │Console (Streamlit│
+                                                                  │+ BigQuery SSOT)  │
+                                                                  └──────────────────┘
 ```
 
-1. **`google_search_agent` (External OSINT Intelligence):**
-   - Investigates external public IPs flagged in network telemetry.
-   - Utilizes native ADK search grounding to correlate addresses against known threat actors (e.g., Lazarus Group, APT29) and Tor exit nodes.
-2. **`bq_investigation_agent` (Behavioral Telemetry Profiling):**
-   - Queries historical access and network logs in BigQuery via the Local MCP server.
-   - Constructs a 24-hour baseline for the user and device to evaluate login frequency, authentication failures, and privilege anomalies.
-3. **`visual_analysis_agent` (Multimodal Desktop Forensic OCR):**
-   - Retrieves forensic desktop screenshots stored in Cloud Storage.
-   - Performs multimodal Gemini vision inspection and OCR to extract active terminal commands, detecting malicious utilities (e.g., Mimikatz, PowerShell obfuscation, Netcat reverse shells).
-4. **`soc_ticketing_agent` (Synthesis & Incident Dispatch):**
-   - Synthesizes findings from all agents into a structured **Security Incident Report**.
-   - If indicators are benign, automatically resolves the alert with audit notes (`log_false_positive`).
-   - If malicious activity is confirmed, generates an immutable ticket ID and dispatches the incident to BigQuery and the SOC queue.
+| Agent | Role | What it does |
+| :--- | :--- | :--- |
+| `google_search_agent` | External OSINT intelligence | Investigates external public IPs flagged in network telemetry, using native ADK Google Search grounding to correlate them with known threat actors (e.g., Lazarus Group, APT29) and Tor/VPN exit nodes. |
+| `bq_investigation_agent` | Behavioral telemetry profiling | Queries historical access and network logs in BigQuery through the local MCP server, building a 24-hour baseline of login frequency, authentication failures, and privilege anomalies for the user and device. |
+| `visual_analysis_agent` | Multimodal desktop forensics | Retrieves desktop screenshots from Cloud Storage and runs Gemini vision inspection and OCR to extract terminal commands, detecting malicious utilities (e.g., Mimikatz, PowerShell obfuscation, Netcat reverse shells) and prompt injection attempts. |
+| `soc_ticketing_agent` | Synthesis & incident dispatch | Combines all findings into a structured **Security Incident Report**. Benign activity is resolved with audit notes (`log_false_positive`); confirmed malicious activity gets a ticket ID and is dispatched to BigQuery and the SOC queue. |
 
 ---
 
-## 🔌 Decoupled Local Model Context Protocol (MCP) Server
+## 🔌 Local MCP Tool Server
 
-The agent tooling layer is decoupled from the core orchestrator into an independent **Local Model Context Protocol (MCP)** server ([`adk_agent/mcp_server/`](file:///workspaces/Google/adk_agent/mcp_server/)). 
+Agent tools are decoupled from the orchestrator into an independent MCP server, `cymbal-cyber-mcp`, in [`adk_agent/mcp_server/`](adk_agent/mcp_server/). It runs over `stdio` by default and supports SSE with `--sse`.
 
 ### Why MCP?
-- **Subprocess Isolation:** Heavy database SDKs, image processors, and network clients run in an isolated process over standard I/O (`stdio`), preventing crashes or memory leaks from destabilizing the orchestrator.
-- **Least-Privilege Tool Scoping:** Sub-agents only connect to tools explicitly authorized for their role via `ScopedMcpToolset` (e.g., the BigQuery agent cannot access signed URL generators; the Vision agent cannot modify ticket queues).
-- **AST SQL Safety Gates:** The `execute_sql` tool parses queries via SQLGlot AST analysis to strictly enforce read-only execution (blocking `INSERT`, `UPDATE`, `DROP`, `DELETE`, `ALTER`) and enforces a 1 GB dry-run scan limit.
-- **Cross-Client Interoperability:** Because the server implements standard MCP, external AI environments (Cursor, Windsurf, Claude Desktop, Gemini Enterprise) can query the exact same security tool catalog directly.
 
-### Registered Tool Domains (10 Tools)
+- **Subprocess isolation:** Database SDKs, image processors, and network clients run in a separate process, so crashes or memory leaks cannot destabilize the orchestrator.
+- **Least-privilege tool scoping:** Each sub-agent connects only to the tools its role needs, via `ScopedMcpToolset` (e.g., the BigQuery agent cannot generate signed URLs, and the vision agent cannot modify ticket queues).
+- **SQL safety gates:** `execute_sql` rejects destructive statements (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `TRUNCATE`, and similar), blocks `INFORMATION_SCHEMA` access, sandboxes queries to the security dataset, and enforces a 1 GB `maximum_bytes_billed` scan ceiling (configurable with `BQ_MAX_BYTES_BILLED`).
+- **Cross-client interoperability:** Because the server speaks standard MCP, other AI clients (Cursor, Windsurf, Claude Desktop, Gemini Enterprise) can use the same security tool catalog.
 
-| Domain | Tool Name | Purpose & Security Enforcement |
+### Registered tools (10)
+
+| Domain | Tool | Purpose & security enforcement |
 | :--- | :--- | :--- |
-| **BigQuery Telemetry** | `get_entity_behavioral_profile` | Aggregates 24-hour behavioral baseline for user/IP. |
-| | `execute_sql` | Read-only SQL executor with AST parser validation & 1 GB dry-run ceiling. |
+| **BigQuery Telemetry** | `get_entity_behavioral_profile` | Aggregates a 24-hour behavioral baseline for a user or IP. |
+| | `execute_sql` | Read-only SQL executor with the safety gates above. |
 | | `get_table_schema` | Inspects schema, partition columns, and types for incident tables. |
 | **Multimodal Vision** | `get_visual_analysis_for_user` | Runs Gemini multimodal OCR on desktop screenshot evidence. |
-| | `get_gcs_uri_for_user` | Resolves Cloud Storage URI (`gs://...`) for user desktop captures. |
+| | `get_gcs_uri_for_user` | Resolves the Cloud Storage URI (`gs://...`) for a user's desktop captures. |
 | | `generate_signed_url` | Generates short-lived V4 signed URLs for analyst inspection without exposing public buckets. |
-| **SOC Operations** | `dispatch_to_soc_ticketing_system` | Formats and dispatches high-confidence security incidents to BigQuery `soc_tickets`. |
-| | `log_false_positive` | Logs analyzed benign activities to BigQuery `alerts` with resolution notes. |
+| **SOC Operations** | `dispatch_to_soc_ticketing_system` | Formats and dispatches high-confidence incidents to BigQuery `soc_tickets`. |
+| | `log_false_positive` | Logs analyzed benign activity to BigQuery `alerts` with resolution notes. |
 | | `create_rich_ticket_id` | Generates deterministic, auditable incident identifiers (`INC-...`). |
 | | `escalate_to_human` | Writes raw forensic payloads to Cloud Storage for senior analyst escalation. |
+
+See [Cloud Security & IAM Architecture](CLOUD_SECURITY.md#3-decoupled-tool-execution-via-local-model-context-protocol-mcp-server) for the security model behind the server.
 
 ---
 
 ## 🏛️ End-to-End System Architecture
+
+A rendered diagram is also available at [`src/demo/system_architecture.png`](src/demo/system_architecture.png).
 
 ```
                                   ┌───────────────────────────┐
@@ -181,7 +201,7 @@ The agent tooling layer is decoupled from the core orchestrator into an independ
                                                  ▼
                                 ┌─────────────────────────────────┐
                                 │   Local MCP Server (`cymbal`)   │
-                                │   (adk_agent/mcp_server)        │
+                                │   (adk_agent/mcp_server/)       │
                                 └────────────────┬────────────────┘
                                                  │
                                                  ▼
@@ -192,63 +212,89 @@ The agent tooling layer is decoupled from the core orchestrator into an independ
                                 └─────────────────────────────────┘
 ```
 
-### Architectural Highlights
-- **Serverless Event Bus:** Telemetry flows from Pub/Sub directly into day-partitioned BigQuery event tables via streaming write subscriptions.
-- **Zero-Continuous-Cost Threat Detector:** Runs as a scheduled micro-batch Cloud Run Job every 5 minutes. Evaluates 2-minute tumbling windows via idempotent BigQuery MERGE queries ($0 continuous slot cost).
-- **Native Pub/Sub Push Webhook:** Deployed to Cloud Run with native OpenID Connect (OIDC) token validation (`roles/run.invoker`), requiring zero proxy relays.
-- **BigQuery as Single Source of Truth (SSOT):** Both the ADK agent team and the Streamlit SOC analyst console read and write to the same BigQuery dataset (`Cymbal_Cyber`), ensuring complete auditability.
+### Architectural highlights
+
+- **Serverless event bus:** Telemetry flows from Pub/Sub directly into day-partitioned BigQuery event tables through BigQuery subscriptions.
+- **Zero-continuous-cost threat detector:** [`adk_agent/threat_detector.py`](adk_agent/threat_detector.py) runs as a Cloud Run Job every 5 minutes, evaluating 2-minute tumbling windows with idempotent BigQuery `MERGE` queries ($0 continuous slot cost).
+- **Native Pub/Sub push webhook:** The orchestrator runs on Cloud Run with native OpenID Connect (OIDC) token validation (`roles/run.invoker`), with no proxy relays.
+- **Dead-letter auto-escalation:** Alerts that fail 5 delivery attempts go to `cymbal_cyber_alerts_dlq`, are recorded in `alerts_dead_letter`, and are escalated to SOC tickets.
+- **BigQuery as single source of truth (SSOT):** The ADK agent team and the Streamlit SOC console read and write the same dataset (`Cymbal_Cyber`), so every decision is auditable.
 
 ---
 
 ## 📂 Project Structure
 
 ```text
-/workspaces/Google/
-├── adk_agent/                      # Canonical ADK Multi-Agent package
-│   ├── agent.py                    # Multi-agent orchestrator & 4 sub-agents
-│   ├── tools.py                    # Legacy tool implementations & compatibility facade
-│   ├── mcp_server/                 # Local Model Context Protocol (MCP) Server
-│   │   ├── __init__.py             # Package initialization & factory
-│   │   ├── __main__.py             # stdio/SSE CLI execution entrypoint
-│   │   ├── server.py               # MCPServer("cymbal-cyber-mcp") & 10 security tools
-│   │   └── tools/                  # Modular tool providers (BigQuery, Vision, SOC)
+.
+├── adk_agent/                      # ADK multi-agent package (agents-cli agent_directory)
+│   ├── agent.py                    # Orchestrator, parallel investigation team & 4 sub-agents
+│   ├── tools.py                    # Tool implementations & compatibility facade
+│   ├── mcp_server/                 # Local MCP server ("cymbal-cyber-mcp")
+│   │   ├── __main__.py             # stdio/SSE CLI entrypoint
+│   │   ├── server.py               # Server definition & 10 registered tools
+│   │   └── tools/                  # Tool providers (BigQuery, Vision, SOC)
 │   ├── threat_detector.py          # Scheduled micro-batch detector (Cloud Run Job)
+│   ├── threat_scanner.py           # Legacy standalone threat scanner
+│   ├── fast_api_app.py             # FastAPI backend (Pub/Sub webhook + A2A)
 │   ├── logging_utils.py            # Structured logging utilities
-│   ├── fast_api_app.py             # FastAPI backend server (webhook + A2A)
 │   └── app_utils/                  # Service & A2A helpers
-├── src/
-│   └── demo/                       # Cybersecurity AI & Cloud Architecture demo
-│       ├── data_generator/         # Synthetic log generator & threat scenarios
-│       ├── data_pipeline/          # BigQuery Continuous Queries & Dataflow pipelines
-│       ├── scripts/                # Deployment, Continuous Query, & Dataflow launcher scripts
-│       ├── soc_ticketing/          # SOC ticketing service & Streamlit analyst console
-│       ├── terraform/              # GCP Terraform IaC modules (zero-cost baseline)
-│       ├── tests/                  # Consolidated test suites (unit, integration, eval datasets)
-│       │   ├── unit/               # Unit tests (agent structure, tools, logs, security, detector)
-│       │   ├── integration/        # Agent and server integration tests
-│       │   └── eval/               # agents-cli evaluation datasets and configs
-│       ├── user_screenshots/       # Forensic desktop screenshots for vision agent
-│       ├── local_runner.py         # Zero-cloud end-to-end demo runner
-│       └── other_code/             # Supporting SQL queries and analyst scripts
-├── agents-cli-manifest.yaml        # agents-cli configuration (agent_directory: adk_agent)
-├── pyproject.toml                  # Python package configuration & dependencies
-├── pytest.ini                      # Pytest runner configuration
+├── src/demo/                       # Cybersecurity AI & cloud architecture demo
+│   ├── data_generator/             # Synthetic log generator & threat scenarios
+│   ├── data_pipeline/              # Continuous Query, Dataflow & GCS loader pipelines
+│   ├── scripts/                    # Deployment, Continuous Query & Dataflow launchers
+│   ├── soc_ticketing/              # SOC ticketing service & Streamlit analyst console
+│   ├── terraform/                  # GCP Terraform IaC modules (zero-cost baseline)
+│   ├── tests/                      # unit/, integration/ and eval/ suites
+│   ├── other_code/                 # Supporting SQL queries & analyst scripts
+│   ├── local_runner.py             # Zero-cloud end-to-end demo runner
+│   └── README.md                   # Demo deep dive (pipeline, detection, agents)
+├── local_demo_data/
+│   ├── user_screenshots/           # Forensic desktop screenshots for the vision agent
+│   └── escalations/                # Local escalation output
+├── .github/workflows/ci.yml        # CI: ruff, unit tests, Terraform validation & Checkov
+├── Dockerfile                      # Container image for Cloud Run / Agent Runtime
+├── agents-cli-manifest.yaml        # agents-cli configuration
+├── pyproject.toml / uv.lock        # Python package configuration & locked dependencies
+├── pytest.ini                      # Pytest configuration
 ├── .env.example                    # Template environment variables
-├── .env                            # Local environment variables (not committed)
-├── DEPLOYMENT.md                   # Cloud Deployment, Operations, and FinOps Runbook
-├── CLOUD_SECURITY.md               # IAM Architecture, Identity Tiers, and Least-Privilege Baseline
-├── GEMINI.md                       # Comprehensive Agent Engineering & Lifecycle Guide
-└── README.md                       # Main project introduction & overview
+├── DEPLOYMENT.md                   # Cloud deployment, operations & FinOps runbook
+├── CLOUD_SECURITY.md               # IAM architecture & least-privilege baseline
+├── SCAFFOLD.md                     # Vertex AI Agent Runtime scaffolding & deployment
+└── GEMINI.md                       # Agent engineering & lifecycle guide
 ```
+
+---
+
+## 🧪 Testing & CI
+
+```bash
+# Unit tests (default pytest target, no cloud access needed)
+uv run pytest src/demo/tests/unit/
+
+# Integration tests (require Application Default Credentials)
+uv run pytest src/demo/tests/integration/
+
+# Lint
+uv run --extra lint ruff check .
+```
+
+The [CI workflow](.github/workflows/ci.yml) runs on pushes and pull requests to `main`: Ruff linting and unit tests with `LOCAL_MODE=true`, plus Terraform format, validation, and Checkov static security analysis on `src/demo/terraform`.
 
 ---
 
 ## 📚 Documentation & Deep Dives
 
-To keep this overview focused and accessible, in-depth architectural and operational guides have been organized into specialized reference documents:
-
-| Guide | Description | Target Audience |
+| Guide | Description | Target audience |
 | :--- | :--- | :--- |
-| 🚀 **[Cloud Deployment Runbook](file:///workspaces/Google/DEPLOYMENT.md)** | Step-by-step Terraform provisioning, container compilation, Cloud Run deployment, `gcloud` proxy console access, and FinOps teardown. | Cloud Engineers, DevOps, SREs |
-| 🛡️ **[Cloud Security & IAM Architecture](file:///workspaces/Google/CLOUD_SECURITY.md)** | Least-privilege identity tiers, service account bindings, Workload Identity, automated role assignment scripts, and security audit commands. | Security Architects, CISOs, IAM Admins |
-| 🤖 **[Agent Engineering & Lifecycle Guide](file:///workspaces/Google/GEMINI.md)** | ADK multi-agent architecture, `agents-cli` evaluation flywheel, prompt optimization, coding conventions, and automated testing commands. | AI Engineers, Agent Developers |
+| 🚀 **[Cloud Deployment Runbook](DEPLOYMENT.md)** | Terraform provisioning, container builds, Cloud Run deployment, `gcloud` proxy console access, and FinOps teardown. | Cloud Engineers, DevOps, SREs |
+| 🛡️ **[Cloud Security & IAM Architecture](CLOUD_SECURITY.md)** | Least-privilege identity tiers, service account bindings, Workload Identity, role assignment scripts, and security audit commands. | Security Architects, CISOs, IAM Admins |
+| 🤖 **[Agent Engineering & Lifecycle Guide](GEMINI.md)** | ADK multi-agent architecture, `agents-cli` evaluation flywheel, prompt optimization, coding conventions, and test commands. | AI Engineers, Agent Developers |
+| 🧱 **[Agent Runtime Scaffolding Guide](SCAFFOLD.md)** | Scaffolding and deploying the agent to Vertex AI Agent Runtime with `agents-cli`. | AI Engineers, Cloud Engineers |
+| 🧭 **[Demo Deep Dive](src/demo/README.md)** | Data generation, ingestion, detection engines, alert contract, and the SOC console in detail. | Everyone exploring the demo |
+| 🏗️ **[Terraform Modules](src/demo/terraform/README.md)** | Infrastructure-as-code modules and variables. | Cloud Engineers |
+
+---
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).
