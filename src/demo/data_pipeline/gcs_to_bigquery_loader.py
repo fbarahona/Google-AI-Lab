@@ -27,7 +27,7 @@ class GcsToBigQueryLoader:
         self,
         gcs_uri_pattern: str,
         table_name: str,
-        source_format: bigquery.SourceFormat = bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
+        source_format: str = bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
     ) -> bool:
         """Executes a BigQuery load job from GCS."""
         table_ref = f"{self.project_id}.{self.dataset_id}.{table_name}"

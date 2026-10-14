@@ -649,9 +649,7 @@ class SocTicketingService:
                 resolved_row["adjudicated_at"] = now_iso
                 if not isinstance(resolved_row.get("mitre_tactics"), list):
                     resolved_row["mitre_tactics"] = []
-                if not isinstance(
-                    resolved_row.get("indicators_of_compromise"), list
-                ):
+                if not isinstance(resolved_row.get("indicators_of_compromise"), list):
                     resolved_row["indicators_of_compromise"] = []
                 for req_str in [
                     "ticket_id",
@@ -692,7 +690,8 @@ class SocTicketingService:
                     "device_id": ticket_data.get("device_id"),
                     "source_ip": ticket_data.get("source_ip"),
                     "total_2_min_threat_score": ticket_data.get("threat_score") or 0,
-                    "agent_decision": ticket_data.get("agent_decision") or "GENUINE_THREAT",
+                    "agent_decision": ticket_data.get("agent_decision")
+                    or "GENUINE_THREAT",
                     "agent_reason": ticket_data.get("agent_reason"),
                     "human_decision": human_decision,
                     "human_reason": human_comment,
@@ -706,9 +705,7 @@ class SocTicketingService:
                     ticket_data.get("user_id"),
                 )
             except Exception as assess_err:
-                logger.debug(
-                    "adk_threat_assessment append notice: %s", assess_err
-                )
+                logger.debug("adk_threat_assessment append notice: %s", assess_err)
 
         return True
 
