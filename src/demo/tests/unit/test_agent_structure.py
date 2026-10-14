@@ -40,6 +40,7 @@ def test_visual_analysis_agent_specification():
     assert visual_analysis_agent.name == "visual_analysis_agent"
     assert "visual" in visual_analysis_agent.description.lower()
     tool_filter = visual_analysis_agent.tools[0].tool_filter
+    assert isinstance(tool_filter, list)
     assert "get_visual_analysis_for_user" in tool_filter
 
 
@@ -48,6 +49,7 @@ def test_soc_ticketing_agent_specification():
     assert soc_ticketing_agent.name == "soc_ticketing_agent"
     assert "SOC ticketing system" in soc_ticketing_agent.description
     tool_filter = soc_ticketing_agent.tools[0].tool_filter
+    assert isinstance(tool_filter, list)
     assert "dispatch_to_soc_ticketing_system" in tool_filter
 
 
