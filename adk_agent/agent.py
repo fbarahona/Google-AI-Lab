@@ -13,7 +13,6 @@ import json
 import os
 import re
 import sys
-import time
 import warnings
 from pathlib import Path
 from typing import Any
@@ -51,8 +50,10 @@ for _p in [str(_CURRENT_DIR), str(_SRC_DIR), str(_CURRENT_DIR.parent)]:
 # --- Local Imports ---
 try:
     from .logging_utils import log_agent_event, setup_logging
+    from .tools import alert_id_from_payload, ticket_id_for_alert
 except ImportError:
     from logging_utils import log_agent_event, setup_logging
+    from tools import alert_id_from_payload, ticket_id_for_alert
 
 # --- Configuration ---
 load_dotenv()
@@ -105,6 +106,12 @@ _LIFECYCLE_FLAG_BY_TOOL = {
     "escalate_to_human": "escalation_dispatched",
     "log_false_positive": "false_positive_logged",
 }
+
+# Tools whose ticket_id argument the gate replaces with the alert's own ticket ID, so
+# the model cannot reuse or collide IDs and a redelivered alert maps to the same ticket.
+_TICKET_ID_TOOLS = frozenset(
+    {"dispatch_to_soc_ticketing_system", "escalate_to_human", "log_false_positive"}
+)
 
 # Report argument of each ticket-creating tool, so the raw sub-agent findings can be
 # attached to the ticket the analyst reviews instead of only the model's summary.
@@ -425,15 +432,21 @@ def security_gate_callback(
     For ticket-creating tools it also attaches the sub-agents' full findings to the
     report argument, so the analyst sees the evidence behind the summary.
     """
+    state = getattr(tool_context, "state", None)
     report_arg = _REPORT_ARG_BY_TOOL.get(tool.name)
     if report_arg is not None:
+        _assign_ticket_id(tool.name, args, state)
+        if tool.name == "escalate_to_human" and state is not None:
+            if state.get("prompt_injection_detected") or state.get(
+                "malicious_indicators"
+            ):
+                args["severity"] = "CRITICAL"
         args[report_arg] = append_investigation_evidence(
-            args.get(report_arg, ""), getattr(tool_context, "state", None)
+            args.get(report_arg, ""), state
         )
         return None
 
     if tool.name == "log_false_positive":
-        state = getattr(tool_context, "state", None)
         if state is not None:
             if state.get("prompt_injection_detected"):
                 log_agent_event(
@@ -489,7 +502,14 @@ def security_gate_callback(
                         "You MUST invoke escalate_to_human for manual analyst adjudication."
                     ),
                 }
+        _assign_ticket_id(tool.name, args, state)
     return None
+
+
+def _assign_ticket_id(tool_name: str, args: dict[str, Any], state: Any) -> None:
+    """Replaces the model's ticket_id with the one seeded for this alert."""
+    if tool_name in _TICKET_ID_TOOLS and state is not None and state.get("ticket_id"):
+        args["ticket_id"] = state["ticket_id"]
 
 
 def before_sub_agent_starts(callback_context: CallbackContext):
@@ -535,7 +555,9 @@ def before_orchestrator_starts(callback_context: CallbackContext):
         state["device_id"] = None
         state["source_ip"] = None
         state["threat_score"] = None
+        state["window_end"] = None
         state["ticket_id"] = None
+        state["alert_id"] = None
 
         # Seed alert fields from user_content
         user_content = getattr(callback_context, "user_content", None)
@@ -567,9 +589,12 @@ def before_orchestrator_starts(callback_context: CallbackContext):
                             state["threat_score"] = data["total_2_min_threat_score"]
                         elif "threat_score" in data:
                             state["threat_score"] = data["threat_score"]
+                        if "window_end" in data:
+                            state["window_end"] = data["window_end"]
                         if state.get("user_id"):
-                            state["ticket_id"] = (
-                                f"SOC-TICKET-{state['user_id']}-{int(time.time())}"
+                            state["alert_id"] = alert_id_from_payload(data)
+                            state["ticket_id"] = ticket_id_for_alert(
+                                state["user_id"], state["alert_id"]
                             )
             except Exception:
                 pass
@@ -604,7 +629,9 @@ def default_deny_soc_callback(callback_context: CallbackContext):
 
         soc_service = get_soc_service()
         user_id = state.get("user_id") or "unresolved_user"
-        ticket_id = f"SOC-TICKET-AUTO-ESCALATED-{user_id}-{int(time.time())}"
+        ticket_id = ticket_id_for_alert(
+            user_id, state.get("alert_id"), prefix="SOC-TICKET-AUTO-ESCALATED"
+        )
         ticket = SocTicket(
             ticket_id=ticket_id,
             transaction_window_end=state.get("window_end")
@@ -613,7 +640,10 @@ def default_deny_soc_callback(callback_context: CallbackContext):
             device_id=state.get("device_id") or "unknown_device",
             source_ip=state.get("source_ip") or "unknown_ip",
             threat_score=state.get("threat_score") or 100,
-            severity="HIGH",
+            severity="CRITICAL"
+            if state.get("prompt_injection_detected")
+            or state.get("malicious_indicators")
+            else "HIGH",
             status="ESCALATED",
             agent_decision="AUTO_ESCALATED_DEFAULT_DENY",
             agent_reason="Deterministic Default-Deny: Model terminated turn without resolving alert through a permitted tool action.",
@@ -621,6 +651,8 @@ def default_deny_soc_callback(callback_context: CallbackContext):
                 "Auto-escalated by security platform default-deny guardrail.", state
             ),
         )
+        # Raises if the ticket cannot be stored: the investigation then fails and the
+        # webhook returns 500, so Pub/Sub redelivers the alert instead of dropping it.
         soc_service.create_and_dispatch_ticket(ticket)
         state["escalation_dispatched"] = True
 
@@ -771,7 +803,8 @@ soc_ticketing_agent = Agent(
          **6. Recommended Response Actions:** A numbered list of concrete containment, eradication
             and recovery steps for the analyst (e.g. isolate host X, reset credentials for user Y,
             block IP Z at the perimeter), most urgent first
-       - Call `dispatch_to_soc_ticketing_system` with the ticket_id, alert payload, agent reason, structured report, and severity.
+       - Call `dispatch_to_soc_ticketing_system` with the ticket_id, alert payload, agent reason, structured report,
+         severity, and the `mitre_tactics` and `indicators_of_compromise` (IPs, domains, hashes) the evidence supports.
        - When you call `escalate_to_human` instead, pass the same report structure as `context_data`
          and state in the recommendations what the analyst must verify.
 

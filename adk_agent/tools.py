@@ -5,11 +5,13 @@ and SOC ticketing dispatch.
 """
 
 import glob
+import hashlib
 import json
 import logging
 import os
 import re
 import time
+import uuid
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -43,6 +45,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 
 # Project configuration
 PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("PROJECT_ID", "local-demo")
@@ -336,22 +340,52 @@ def sanitize_entity_value(value: str, field_name: str = "entity_id") -> str:
     return trimmed
 
 
+def _clean_ticket_user(user_id: str | None) -> str:
+    """Sanitizes user_id for use in a ticket ID, preventing JSON object bleed."""
+    if not user_id:
+        return "unknown_user"
+    try:
+        return sanitize_entity_value(user_id, field_name="user_id")
+    except ValueError:
+        match = re.match(r"^[a-zA-Z0-9\._-]+", str(user_id))
+        return match.group(0) if match else "invalid_id"
+
+
+def ticket_id_for_alert(
+    user_id: str | None, alert_id: str | None, prefix: str = "SOC-TICKET"
+) -> str:
+    """
+    Ticket ID for one detection alert: the same alert always maps to the same ticket,
+    so Pub/Sub redeliveries overwrite rather than duplicate, and two alerts for one
+    user never collide. Without an alert_id the suffix is random.
+    """
+    if alert_id:
+        suffix = hashlib.sha256(alert_id.encode("utf-8")).hexdigest()[:10]
+    else:
+        suffix = uuid.uuid4().hex[:10]
+    return f"{prefix}-{_clean_ticket_user(user_id)}-{suffix}"
+
+
+def alert_id_from_payload(data: dict[str, Any]) -> str | None:
+    """The alert contract's alert_id, or user_id|window_end when it is missing."""
+    if data.get("alert_id"):
+        return str(data["alert_id"])
+    user = data.get("user_id") or data.get("user")
+    window_end = data.get("window_end") or data.get("transaction_window_end")
+    return f"{user}|{window_end}" if user and window_end else None
+
+
+def normalize_severity(severity: str | None, default: str = "HIGH") -> str:
+    sev = str(severity or "").strip().upper()
+    return sev if sev in SEVERITIES else default
+
+
 def create_rich_ticket_id(user_id: str) -> str:
     """
-    Generates a standardized, readable ticket ID.
-    Sanitizes user_id to prevent JSON object bleed.
+    Generates a standardized, readable ticket ID that is unique per call.
+    During an investigation the security gate replaces it with the alert's own ticket ID.
     """
-    if not user_id:
-        clean_user = "unknown_user"
-    else:
-        try:
-            clean_user = sanitize_entity_value(user_id, field_name="user_id")
-        except ValueError:
-            match = re.match(r"^[a-zA-Z0-9\._-]+", str(user_id))
-            clean_user = match.group(0) if match else "invalid_id"
-
-    timestamp = int(time.time())
-    return f"SOC-TICKET-{clean_user}-{timestamp}"
+    return f"SOC-TICKET-{_clean_ticket_user(user_id)}-{int(time.time())}-{uuid.uuid4().hex[:6]}"
 
 
 def build_event_logs_query(
@@ -912,17 +946,13 @@ def get_visual_analysis_for_user(
             local_path = file_path_candidate
         elif repo_screenshot.exists():
             local_path = str(repo_screenshot)
-        elif os.path.exists(
-            os.path.join(
-                os.getcwd(), "local_demo_data", "user_screenshots", f"{filename}.png"
-            )
-        ):
-            local_path = os.path.join(
-                os.getcwd(), "local_demo_data", "user_screenshots", f"{filename}.png"
-            )
         else:
-            local_path = os.path.join(
-                os.getcwd(), "src", "demo", "user_screenshots", f"{filename}.png"
+            # Same as the cloud path, where a missing object fails the vision call:
+            # no screenshot is missing evidence, never a benign verdict.
+            logger.error("No local screenshot found for %s", gcs_uri)
+            return _visual_evidence_unavailable(
+                f"Error: No desktop screenshot found for {gcs_uri}. Visual evidence unavailable.",
+                tool_context,
             )
         ocr_chunks = read_png_text_chunks(local_path)
         if "forensic_ocr_text" in ocr_chunks:
@@ -1095,6 +1125,15 @@ def generate_signed_url(gcs_uri: str) -> str:
         return f"Error: Failed to generate signed URL: {e}"
 
 
+def _set_state(tool_context: ToolContext | None, key: str, value: Any) -> None:
+    if tool_context is not None and getattr(tool_context, "state", None) is not None:
+        tool_context.state[key] = value
+
+
+def _clean_list(values: list[str] | None) -> list[str]:
+    return [str(v).strip() for v in values or [] if v and str(v).strip()]
+
+
 def dispatch_to_soc_ticketing_system(
     ticket_id: str,
     alert_payload: str,
@@ -1102,45 +1141,45 @@ def dispatch_to_soc_ticketing_system(
     structured_report: str,
     severity: str = "HIGH",
     screenshot_url: str = "",
+    mitre_tactics: list[str] | None = None,
+    indicators_of_compromise: list[str] | None = None,
     tool_context: ToolContext | None = None,
 ) -> str | dict[str, Any]:
     """
     Passes a confirmed or suspected threat incident ticket directly to the SOC Ticketing System.
     Stores the ticket in BigQuery and the GCS escalation queue for SOC analysts to review.
+    Raises if the ticket could not be stored, so a lost ticket is never reported as dispatched.
+
+    Args:
+        mitre_tactics: MITRE ATT&CK tactics supported by the evidence.
+        indicators_of_compromise: IPs, domains and hashes observed in the evidence.
     """
     row = _parse_alert_payload_to_row(alert_payload)
     user_id = row.get("user_id") or "unknown_user"
-    device_id = row.get("device_id") or "unknown_device"
-    source_ip = row.get("source_ip") or "unknown_ip"
-    threat_score = row.get("total_2_min_threat_score") or 100
+    source_ip = row.get("source_ip")
+    iocs = _clean_list(indicators_of_compromise)
+    if source_ip and source_ip not in iocs:
+        iocs.insert(0, source_ip)
 
     ticket = SocTicket(
         ticket_id=ticket_id,
         transaction_window_end=row.get("transaction_window_end"),
         user_id=user_id,
-        device_id=device_id,
-        source_ip=source_ip,
-        threat_score=threat_score,
-        severity=severity.upper()
-        if severity in ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
-        else "HIGH",
+        device_id=row.get("device_id") or "unknown_device",
+        source_ip=source_ip or "unknown_ip",
+        threat_score=row.get("total_2_min_threat_score") or 100,
+        severity=normalize_severity(severity),
         status="ESCALATED",
         agent_decision="PERCEIVED_THREAT",
         agent_reason=agent_reason,
         screenshot_url=screenshot_url or None,
         structured_report=structured_report,
-        mitre_tactics=["Initial Access", "Command and Control", "Privilege Escalation"],
-        indicators_of_compromise=[source_ip],
+        mitre_tactics=_clean_list(mitre_tactics),
+        indicators_of_compromise=iocs,
     )
 
-    soc_service = get_soc_service()
-    res = soc_service.create_and_dispatch_ticket(ticket)
-    if (
-        tool_context
-        and hasattr(tool_context, "state")
-        and tool_context.state is not None
-    ):
-        tool_context.state["ticket_dispatched"] = True
+    res = get_soc_service().create_and_dispatch_ticket(ticket)
+    _set_state(tool_context, "ticket_dispatched", True)
     if tool_context is None:
         return {
             "status": "DISPATCHED",
@@ -1154,86 +1193,48 @@ def dispatch_to_soc_ticketing_system(
 
 
 def log_false_positive(
-    alert_payload: str, agent_comment: str, tool_context: ToolContext | None = None
+    alert_payload: str,
+    agent_comment: str,
+    ticket_id: str = "",
+    tool_context: ToolContext | None = None,
 ) -> str | dict[str, Any]:
-    """Logs the alert as an autonomously resolved False Positive in BigQuery."""
+    """
+    Closes the alert as a False Positive. The closure is archived as a resolved ticket
+    marked as closed by the agent, so analysts can review it in the console archive.
+    """
     logger.info("Logging false positive: %s", agent_comment)
     try:
-        is_local_mode = os.getenv("LOCAL_MODE", "false").lower() == "true"
-        if is_local_mode:
-            logger.info("Local mode simulation: Successfully logged false positive.")
-            if (
-                tool_context
-                and hasattr(tool_context, "state")
-                and tool_context.state is not None
-            ):
-                tool_context.state["false_positive_logged"] = True
-            msg = "Successfully logged alert as a False Positive in BigQuery."
-            if tool_context is None:
-                return {
-                    "status": "RESOLVED_FALSE_POSITIVE",
-                    "message": msg,
-                    "security_flags": {
-                        "false_positive_logged": True,
-                        "evidence_unavailable": False,
-                    },
-                }
-            return msg
-
-        row_data = _parse_alert_payload_to_row(alert_payload)
-        row_data["agent_decision"] = "FALSE_POSITIVE"
-        row_data["agent_reason"] = agent_comment
-        row_data["human_decision"] = None
-        row_data["human_reason"] = None
-
-        bq = get_bq_client()
-        errors = bq.insert_rows_json(BIGQUERY_ADK_THREAT_ASSESSMENT, [row_data])
-        if errors:
-            logger.error("Failed to insert false positive to BigQuery: %s", errors)
-            if (
-                tool_context
-                and hasattr(tool_context, "state")
-                and tool_context.state is not None
-            ):
-                tool_context.state["evidence_unavailable"] = True
-            msg = f"Failed to log false positive in BigQuery. Errors: {errors}"
-            if tool_context is None:
-                return {
-                    "status": "ERROR",
-                    "error": msg,
-                    "security_flags": {
-                        "evidence_unavailable": True,
-                        "false_positive_logged": False,
-                    },
-                }
-            return msg
-
-        if (
-            tool_context
-            and hasattr(tool_context, "state")
-            and tool_context.state is not None
-        ):
-            tool_context.state["false_positive_logged"] = True
-        msg = "Successfully logged alert as a False Positive in BigQuery."
-        if tool_context is None:
-            return {
-                "status": "RESOLVED_FALSE_POSITIVE",
-                "message": msg,
-                "security_flags": {
-                    "false_positive_logged": True,
-                    "evidence_unavailable": False,
-                },
-            }
-        return msg
+        row = _parse_alert_payload_to_row(alert_payload)
+        user_id = row.get("user_id") or "unknown_user"
+        try:
+            data = json.loads(alert_payload) if isinstance(alert_payload, str) else {}
+        except Exception:
+            data = {}
+        ticket = SocTicket(
+            ticket_id=ticket_id
+            or ticket_id_for_alert(
+                user_id, alert_id_from_payload(data if isinstance(data, dict) else {})
+            ),
+            transaction_window_end=row.get("transaction_window_end"),
+            user_id=user_id,
+            device_id=row.get("device_id") or "unknown_device",
+            source_ip=row.get("source_ip") or "unknown_ip",
+            threat_score=row.get("total_2_min_threat_score") or 0,
+            severity="LOW",
+            status="RESOLVED",
+            agent_decision="FALSE_POSITIVE",
+            agent_reason=agent_comment,
+            structured_report=(
+                "### Closed as False Positive by the agent\n"
+                "No analyst has reviewed this closure.\n\n"
+                f"**Agent rationale:** {agent_comment}"
+            ),
+        )
+        get_soc_service().record_auto_closed_false_positive(ticket)
     except Exception as e:
         logger.error("Exception during false positive logging: %s", e)
-        if (
-            tool_context
-            and hasattr(tool_context, "state")
-            and tool_context.state is not None
-        ):
-            tool_context.state["evidence_unavailable"] = True
-        msg = f"Error logging false positive: {e}"
+        _set_state(tool_context, "evidence_unavailable", True)
+        msg = f"Failed to log false positive: {e}"
         if tool_context is None:
             return {
                 "status": "ERROR",
@@ -1245,19 +1246,34 @@ def log_false_positive(
             }
         return msg
 
+    _set_state(tool_context, "false_positive_logged", True)
+    msg = f"Successfully logged alert as a False Positive (ticket {ticket.ticket_id} archived for analyst review)."
+    if tool_context is None:
+        return {
+            "status": "RESOLVED_FALSE_POSITIVE",
+            "ticket_id": ticket.ticket_id,
+            "message": msg,
+            "security_flags": {
+                "false_positive_logged": True,
+                "evidence_unavailable": False,
+            },
+        }
+    return msg
+
 
 def escalate_to_human(
     ticket_id: str,
     alert_payload: str,
     agent_reason_for_escalation: str,
     context_data: str,
+    severity: str = "HIGH",
     tool_context: ToolContext | None = None,
 ) -> str | dict[str, Any]:
     """
     Dispatches the incident ticket to the SOC ticketing queue for human analyst adjudication.
     Returns immediately with escalation confirmation without blocking the agent runner.
+    Raises if the ticket could not be stored.
     """
-    soc_service = get_soc_service()
     row = _parse_alert_payload_to_row(alert_payload)
 
     user_id = row.get("user_id") or "unknown_user"
@@ -1276,20 +1292,15 @@ def escalate_to_human(
         device_id=row.get("device_id") or "unknown_device",
         source_ip=row.get("source_ip") or "unknown_ip",
         threat_score=row.get("total_2_min_threat_score") or 100,
-        severity="HIGH",
+        severity=normalize_severity(severity),
         status="ESCALATED",
         agent_decision="PERCEIVED_THREAT",
         agent_reason=agent_reason_for_escalation,
         screenshot_url=screenshot_url,
         structured_report=context_data,
     )
-    result = soc_service.create_and_dispatch_ticket(ticket)
-    if (
-        tool_context
-        and hasattr(tool_context, "state")
-        and tool_context.state is not None
-    ):
-        tool_context.state["escalation_dispatched"] = True
+    result = get_soc_service().create_and_dispatch_ticket(ticket)
+    _set_state(tool_context, "escalation_dispatched", True)
     logger.info(
         "Escalated ticket %s to human analyst: %s",
         ticket_id,

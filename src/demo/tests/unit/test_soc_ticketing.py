@@ -4,10 +4,15 @@ Unit tests for SOC Ticketing System models and operations.
 
 import os
 import shutil
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, PropertyMock, patch
 
-from src.demo.soc_ticketing.models import SocTicket
-from src.demo.soc_ticketing.ticketing_service import SocTicketingService
+import pytest
+
+from src.demo.soc_ticketing.models import AUTO_CLOSED_FP_DECISION, SocTicket
+from src.demo.soc_ticketing.ticketing_service import (
+    SocTicketingService,
+    TicketPersistenceError,
+)
 
 
 def test_soc_ticket_validation():
@@ -77,6 +82,8 @@ def test_soc_ticketing_fetch_historic_and_verdict(tmp_path, monkeypatch):
     hist_dir = queue_dir / "history"
     hist_dir.mkdir(parents=True)
     monkeypatch.setenv("LOCAL_QUEUE_DIR", str(queue_dir))
+    # Local archive flow; cloud mode stores tickets in BigQuery only.
+    monkeypatch.setenv("LOCAL_MODE", "true")
     src_history = "./local_demo_data/escalations/history"
     if os.path.exists(src_history):
         shutil.copytree(src_history, str(hist_dir), dirs_exist_ok=True)
@@ -116,3 +123,107 @@ def test_soc_ticketing_fetch_historic_and_verdict(tmp_path, monkeypatch):
         t.get("ticket_id") == test_id and t.get("human_decision") == "False Positive"
         for t in updated_hist
     )
+
+
+def _ticket(ticket_id="SOC-TICKET-u.lewis-abc"):
+    return SocTicket(
+        ticket_id=ticket_id,
+        user_id="u.lewis",
+        device_id="ws-hr-05",
+        source_ip="175.45.177.32",
+        threat_score=1500,
+        severity="HIGH",
+        status="ESCALATED",
+        agent_decision="PERCEIVED_THREAT",
+        agent_reason="Detected malicious commands.",
+        structured_report="Report content.",
+    )
+
+
+def test_cloud_dispatch_fails_closed_on_bigquery_insert_errors(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCAL_QUEUE_DIR", str(tmp_path))
+    monkeypatch.setenv("LOCAL_MODE", "false")
+    service = SocTicketingService(project_id="test-project", dataset_id="Test_Dataset")
+    service._bq_client = MagicMock()
+    service._bq_client.insert_rows_json.return_value = [{"errors": ["denied"]}]
+    service._storage_client = MagicMock()
+
+    with pytest.raises(TicketPersistenceError):
+        service.create_and_dispatch_ticket(_ticket())
+    # Nothing is reported or copied once the system of record rejected the ticket.
+    assert not service._storage_client.bucket.called
+    assert list(tmp_path.glob("*.json")) == []
+
+
+def test_cloud_dispatch_fails_closed_without_bigquery_client(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCAL_QUEUE_DIR", str(tmp_path))
+    monkeypatch.setenv("LOCAL_MODE", "false")
+    service = SocTicketingService(project_id="test-project", dataset_id="Test_Dataset")
+    with patch.object(
+        SocTicketingService, "bq_client", new_callable=PropertyMock, return_value=None
+    ):
+        with pytest.raises(TicketPersistenceError, match="no BigQuery client"):
+            service.create_and_dispatch_ticket(_ticket())
+
+
+def test_cloud_dispatch_tolerates_gcs_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCAL_QUEUE_DIR", str(tmp_path))
+    monkeypatch.setenv("LOCAL_MODE", "false")
+    service = SocTicketingService(project_id="test-project", dataset_id="Test_Dataset")
+    service._bq_client = MagicMock()
+    service._bq_client.insert_rows_json.return_value = []
+    service._storage_client = MagicMock()
+    service._storage_client.bucket.side_effect = RuntimeError("bucket missing")
+
+    assert "Successfully dispatched" in service.create_and_dispatch_ticket(_ticket())
+
+
+def test_local_dispatch_fails_closed_when_queue_unwritable(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCAL_QUEUE_DIR", str(tmp_path))
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    service = SocTicketingService(project_id="test-project", dataset_id="Test_Dataset")
+    # A directory where the ticket file should go makes the write fail.
+    (tmp_path / "human_escalation_information_SOC-TICKET-u.lewis-abc.json").mkdir()
+    with pytest.raises(TicketPersistenceError):
+        service.create_and_dispatch_ticket(_ticket())
+
+
+def test_redispatching_same_ticket_overwrites_local_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCAL_QUEUE_DIR", str(tmp_path))
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    service = SocTicketingService(project_id="test-project", dataset_id="Test_Dataset")
+    service.create_and_dispatch_ticket(_ticket())
+    service.create_and_dispatch_ticket(_ticket())
+    assert len(list(tmp_path.glob("human_escalation_information_*.json"))) == 1
+
+
+def test_auto_closed_false_positive_is_archived_and_counted(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCAL_QUEUE_DIR", str(tmp_path))
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    service = SocTicketingService(project_id="test-project", dataset_id="Test_Dataset")
+    service.record_auto_closed_false_positive(_ticket("SOC-TICKET-l.taylor-fp1"))
+
+    archived = [
+        t
+        for t in service.fetch_historic_tickets()
+        if t.get("ticket_id") == "SOC-TICKET-l.taylor-fp1"
+    ]
+    assert len(archived) == 1
+    assert archived[0]["status"] == "RESOLVED"
+    assert archived[0]["agent_decision"] == AUTO_CLOSED_FP_DECISION
+    assert not archived[0].get("human_decision")
+    assert service.fetch_dashboard_metrics()["auto_closed_alerts"] == 1
+    assert all(
+        t.get("ticket_id") != "SOC-TICKET-l.taylor-fp1"
+        for t in service.fetch_new_tickets()
+    )
+
+
+def test_cloud_auto_closed_false_positive_fails_closed(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCAL_QUEUE_DIR", str(tmp_path))
+    monkeypatch.setenv("LOCAL_MODE", "false")
+    service = SocTicketingService(project_id="test-project", dataset_id="Test_Dataset")
+    service._bq_client = MagicMock()
+    service._bq_client.insert_rows_json.side_effect = RuntimeError("403")
+    with pytest.raises(TicketPersistenceError):
+        service.record_auto_closed_false_positive(_ticket())

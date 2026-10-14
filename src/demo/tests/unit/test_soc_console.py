@@ -247,3 +247,45 @@ def test_console_demo_action_failure_shows_error_toast(tmp_path, monkeypatch):
     toasts = [t.value for t in at.toast]
     assert any("failed: publish denied" in t for t in toasts), toasts
     assert not any("done" in t for t in toasts)
+
+
+def test_console_archive_shows_auto_closed_false_positives(tmp_path, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    monkeypatch.setenv("LOCAL_QUEUE_DIR", str(tmp_path))
+    from src.demo.soc_ticketing.models import SocTicket
+    from src.demo.soc_ticketing.ticketing_service import SocTicketingService
+
+    SocTicketingService(project_id="local-demo").record_auto_closed_false_positive(
+        SocTicket(
+            ticket_id="SOC-TICKET-l.taylor-fp1",
+            user_id="l.taylor",
+            device_id="ws-admin",
+            source_ip="10.0.0.15",
+            threat_score=120,
+            severity="LOW",
+            status="ESCALATED",
+            agent_decision="FALSE_POSITIVE",
+            agent_reason="Verified benign backup script.",
+            structured_report="Benign.",
+        )
+    )
+
+    import streamlit as st
+
+    st.cache_data.clear()  # earlier console tests cache other ticket lists
+    at = AppTest.from_file(str(CONSOLE), default_timeout=60)
+    at.run()
+    at._page_hash = next(
+        h for h, p in at._registered_pages.items() if p.get("url_pathname") == "archive"
+    )
+    at.run()
+    assert not at.exception, at.exception
+    metrics = {m.label: m.value for m in at.metric}
+    assert metrics["Auto-closed by Agent"] == "1"
+
+    at.selectbox[0].select("Auto-closed").run()
+    rows = at.dataframe[0].value.to_dict("records")
+    assert [r["Ticket ID"] for r in rows] == ["SOC-TICKET-l.taylor-fp1"]
+    assert rows[0]["Resolution Notes"] == "Not reviewed by an analyst"

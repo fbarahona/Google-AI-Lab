@@ -129,8 +129,14 @@ def dispatch_to_soc_ticketing_system(
     structured_report: str,
     severity: str = "HIGH",
     screenshot_url: str = "",
+    mitre_tactics: list[str] | None = None,
+    indicators_of_compromise: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Passes a confirmed or suspected threat incident ticket directly to the SOC Ticketing System."""
+    """Passes a confirmed or suspected threat incident ticket directly to the SOC Ticketing System.
+
+    mitre_tactics: MITRE ATT&CK tactics supported by the evidence.
+    indicators_of_compromise: IPs, domains and file hashes observed in the evidence.
+    """
     res = soc_dispatch_to_soc_ticketing_system(
         ticket_id=ticket_id,
         alert_payload=alert_payload,
@@ -138,6 +144,8 @@ def dispatch_to_soc_ticketing_system(
         structured_report=structured_report,
         severity=severity,
         screenshot_url=screenshot_url,
+        mitre_tactics=mitre_tactics,
+        indicators_of_compromise=indicators_of_compromise,
     )
     if isinstance(res, dict):
         return res
@@ -151,11 +159,14 @@ def dispatch_to_soc_ticketing_system(
 
 # Tool 7: False Positive Logging
 @mcp_server.tool()
-def log_false_positive(alert_payload: str, agent_comment: str) -> dict[str, Any]:
-    """Logs the alert as an autonomously resolved False Positive in BigQuery."""
+def log_false_positive(
+    alert_payload: str, agent_comment: str, ticket_id: str = ""
+) -> dict[str, Any]:
+    """Closes the alert as a False Positive and archives it for analyst review."""
     res = soc_log_false_positive(
         alert_payload=alert_payload,
         agent_comment=agent_comment,
+        ticket_id=ticket_id,
     )
     if isinstance(res, dict):
         return res
@@ -177,6 +188,7 @@ def escalate_to_human(
     alert_payload: str,
     agent_reason_for_escalation: str,
     context_data: str,
+    severity: str = "HIGH",
 ) -> dict[str, Any]:
     """Dispatches an incident ticket to the SOC ticketing queue for human analyst adjudication."""
     res = soc_escalate_to_human(
@@ -184,6 +196,7 @@ def escalate_to_human(
         alert_payload=alert_payload,
         agent_reason_for_escalation=agent_reason_for_escalation,
         context_data=context_data,
+        severity=severity,
     )
     if isinstance(res, dict):
         return res

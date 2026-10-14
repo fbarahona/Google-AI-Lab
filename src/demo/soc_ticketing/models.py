@@ -11,6 +11,10 @@ from pydantic import BaseModel, Field
 # badges them and every dashboard metric leaves them out.
 SIMULATED_DECISION = "SIMULATED"
 
+# agent_decision for alerts the agent closed as false positive on its own. They are
+# archived as RESOLVED with no analyst verdict, so analysts can review the closure.
+AUTO_CLOSED_FP_DECISION = "FALSE_POSITIVE_AUTO_CLOSED"
+
 
 class SocTicket(BaseModel):
     """Schema for incident tickets passed to the SOC Ticketing System."""

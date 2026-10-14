@@ -42,7 +42,7 @@ try:
         create_threat_trend_chart,
     )
     from .demo_actions import inject_threat_scenario, stream_benign_logs
-    from .models import SIMULATED_DECISION
+    from .models import AUTO_CLOSED_FP_DECISION, SIMULATED_DECISION
     from .report_parser import parse_report
     from .ticket_assistant import TicketAssistant
     from .ticketing_service import SocTicketingService
@@ -56,7 +56,7 @@ except ImportError:
         create_threat_trend_chart,
     )
     from demo_actions import inject_threat_scenario, stream_benign_logs
-    from models import SIMULATED_DECISION
+    from models import AUTO_CLOSED_FP_DECISION, SIMULATED_DECISION
     from report_parser import parse_report
     from ticket_assistant import TicketAssistant
     from ticketing_service import SocTicketingService
@@ -229,6 +229,19 @@ def is_simulated(ticket: dict[str, Any]) -> bool:
     return ticket.get("agent_decision") == SIMULATED_DECISION
 
 
+def is_auto_closed(ticket: dict[str, Any]) -> bool:
+    """Closed as false positive by the agent itself, with no analyst verdict."""
+    return ticket.get("agent_decision") == AUTO_CLOSED_FP_DECISION and not ticket.get(
+        "human_decision"
+    )
+
+
+def archive_verdict(ticket: dict[str, Any]) -> str:
+    if is_auto_closed(ticket):
+        return "Auto-closed"
+    return ticket.get("human_decision") or "Adjudicated"
+
+
 def run_demo_action(label: str, action) -> None:
     try:
         with st.spinner(f"{label}..."):
@@ -392,8 +405,12 @@ def render_ticket_detail(ticket: dict[str, Any], archived: bool) -> None:
                     color="violet",
                     icon=":material/smart_toy:",
                 )
-            if archived:
-                verdict = ticket.get("human_decision") or "Adjudicated"
+            if archived and is_auto_closed(ticket):
+                badges.badge(
+                    "Auto-closed by agent", color="blue", icon=":material/smart_toy:"
+                )
+            elif archived:
+                verdict = archive_verdict(ticket)
                 badges.badge(
                     verdict,
                     color="red" if verdict == "Genuine Threat" else "green",
@@ -406,6 +423,11 @@ def render_ticket_detail(ticket: dict[str, Any], archived: bool) -> None:
             st.caption(
                 "Scripted by the demo controls, not produced by the agent. "
                 "Left out of every dashboard metric."
+            )
+        elif is_auto_closed(ticket):
+            st.caption(
+                "The agent closed this alert as a false positive on its own. "
+                "No analyst has reviewed it."
             )
 
         m1, m2, m3, m4 = st.columns(4)
@@ -523,11 +545,18 @@ def render_ticket_detail(ticket: dict[str, Any], archived: bool) -> None:
                 '<div class="panel-title">Analyst resolution</div>',
                 unsafe_allow_html=True,
             )
-            st.markdown(f"**Verdict:** {ticket.get('human_decision') or 'N/A'}")
-            st.markdown(
-                f"**Notes:** {ticket.get('human_comment') or 'No notes entered.'}"
-            )
-            st.caption(f"Adjudicated {short_ts(ticket.get('adjudicated_at'))} UTC")
+            if is_auto_closed(ticket):
+                st.markdown(
+                    "**Verdict:** Closed automatically by the agent as False Positive; "
+                    "not reviewed by an analyst."
+                )
+                st.caption(f"Closed {short_ts(ticket.get('adjudicated_at'))} UTC")
+            else:
+                st.markdown(f"**Verdict:** {ticket.get('human_decision') or 'N/A'}")
+                st.markdown(
+                    f"**Notes:** {ticket.get('human_comment') or 'No notes entered.'}"
+                )
+                st.caption(f"Adjudicated {short_ts(ticket.get('adjudicated_at'))} UTC")
         return
 
     with st.form(key=f"adjudicate_{tid}", border=True):
@@ -887,7 +916,7 @@ def triage_page() -> None:
 def archive_page() -> None:
     st.markdown('<p class="page-title">Ticket Archive</p>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="page-sub">Adjudicated incidents: approved genuine threats and dismissed false positives.</div>',
+        '<div class="page-sub">Closed incidents: approved genuine threats, dismissed false positives, and false positives the agent closed on its own.</div>',
         unsafe_allow_html=True,
     )
     historic = load_historic_tickets()
@@ -897,7 +926,8 @@ def archive_page() -> None:
     total = len(counted)
     threats = sum(1 for t in counted if t.get("human_decision") == "Genuine Threat")
     fps = sum(1 for t in counted if t.get("human_decision") == "False Positive")
-    k1, k2, k3, k4 = st.columns(4)
+    auto_closed = sum(1 for t in counted if is_auto_closed(t))
+    k1, k2, k3, k5, k4 = st.columns(5)
     k1.metric("Archived Incidents", total)
     k2.metric(
         "Approved Threats",
@@ -910,6 +940,7 @@ def archive_page() -> None:
         fps,
         delta=f"{fps / total * 100:.1f}% filtered" if total else None,
     )
+    k5.metric("Auto-closed by Agent", auto_closed)
     k4.metric("Avg Resolution Time (MTTR)", "18 mins" if total else "0 mins")
 
     f1, f2, f3 = st.columns([2, 1, 1])
@@ -920,7 +951,7 @@ def archive_page() -> None:
     )
     verdict_filter = f2.selectbox(
         "Verdict",
-        ["All Verdicts", "Genuine Threat", "False Positive"],
+        ["All Verdicts", "Genuine Threat", "False Positive", "Auto-closed"],
         label_visibility="collapsed",
     )
     severity_filter = f3.selectbox(
@@ -931,7 +962,7 @@ def archive_page() -> None:
 
     filtered = historic
     if verdict_filter != "All Verdicts":
-        filtered = [t for t in filtered if t.get("human_decision") == verdict_filter]
+        filtered = [t for t in filtered if archive_verdict(t) == verdict_filter]
     if severity_filter != "All Severities":
         filtered = [t for t in filtered if t.get("severity") == severity_filter]
     if query:
@@ -953,10 +984,12 @@ def archive_page() -> None:
             "Origin IP": t.get("source_ip"),
             "Score": t.get("threat_score"),
             "Severity": t.get("severity"),
-            "Verdict": "🔴 Genuine Threat"
-            if t.get("human_decision") == "Genuine Threat"
-            else "🟢 False Positive",
-            "Resolution Notes": t.get("human_comment") or "N/A",
+            "Verdict": {
+                "Genuine Threat": "🔴 Genuine Threat",
+                "Auto-closed": "🤖 Auto-closed FP",
+            }.get(archive_verdict(t), "🟢 False Positive"),
+            "Resolution Notes": t.get("human_comment")
+            or ("Not reviewed by an analyst" if is_auto_closed(t) else "N/A"),
             "Adjudicated At": short_ts(t.get("adjudicated_at") or t.get("created_at")),
         }
         for t in filtered
