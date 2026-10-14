@@ -53,6 +53,9 @@ BIGQUERY_ADK_THREAT_ASSESSMENT = f"{PROJECT_ID}.{DATASET_ID}.adk_threat_assessme
 GCS_ESCALATION_BUCKET = os.getenv(
     "ESCALATION_BUCKET", f"cymbal-cyber-adk-escalations-bucket_{PROJECT_ID}"
 )
+SCREENSHOTS_BUCKET = os.getenv(
+    "SCREENSHOTS_BUCKET", f"cymbal-cyber-screenshots_{PROJECT_ID}"
+)
 AGENT_SERVICE_ACCOUNT_NAME = os.getenv("AGENT_SERVICE_ACCOUNT", "cymbal-adk-agent-sa")
 GCS_SIGNER_SERVICE_ACCOUNT = os.getenv(
     "GCS_SIGNER_SA",
@@ -725,6 +728,12 @@ def get_entity_behavioral_profile(
             and tool_context.state is not None
         ):
             tool_context.state["malicious_indicators"] = True
+    if (
+        tool_context
+        and hasattr(tool_context, "state")
+        and tool_context.state is not None
+    ):
+        tool_context.state["telemetry_evidence_collected"] = True
 
     res["security_flags"] = {
         "malicious_indicators": bool(has_malicious),
@@ -823,6 +832,36 @@ def get_table_schema(dataset_id: str, table_id: str) -> str:
     return json.dumps(fields)
 
 
+def _is_allowed_screenshot_uri(uri: str) -> bool:
+    """True only for an object inside the screenshots bucket, with no path traversal."""
+    prefix = f"gs://{SCREENSHOTS_BUCKET}/"
+    if not uri or not uri.startswith(prefix):
+        return False
+    object_name = uri[len(prefix) :]
+    return bool(object_name) and ".." not in object_name
+
+
+def _visual_evidence_unavailable(
+    err_msg: str, tool_context: ToolContext | None
+) -> str | dict[str, Any]:
+    """Fail-closed visual analysis result: marks evidence unavailable, returns no analysis."""
+    if (
+        tool_context
+        and hasattr(tool_context, "state")
+        and tool_context.state is not None
+    ):
+        tool_context.state["evidence_unavailable"] = True
+    if tool_context is None:
+        return {
+            "error": err_msg,
+            "security_flags": {
+                "evidence_unavailable": True,
+                "prompt_injection_detected": False,
+            },
+        }
+    return err_msg
+
+
 def get_visual_analysis_for_user(
     gcs_uri: str, tool_context: ToolContext | None = None
 ) -> str | dict[str, Any]:
@@ -830,26 +869,22 @@ def get_visual_analysis_for_user(
     Performs multimodal inspection of a desktop screenshot using Gemini.
     Performs OCR on terminals, identifies command prompts, and evaluates suspicious UI activity.
     Detects adversarial prompt injection attempts and sets state['prompt_injection_detected'].
+
+    The URI is model-chosen, so in cloud mode only gs:// objects in SCREENSHOTS_BUCKET are
+    accepted. file:// URIs and the local OCR fallback are LOCAL_MODE-only.
     """
-    if not gcs_uri or (
-        not gcs_uri.startswith("gs://") and not gcs_uri.startswith("file://")
-    ):
-        if (
-            tool_context
-            and hasattr(tool_context, "state")
-            and tool_context.state is not None
-        ):
-            tool_context.state["evidence_unavailable"] = True
-        err_msg = f"Cannot perform visual analysis. Invalid or missing GCS URI: {gcs_uri}. Visual evidence unavailable."
-        if tool_context is None:
-            return {
-                "error": err_msg,
-                "security_flags": {
-                    "evidence_unavailable": True,
-                    "prompt_injection_detected": False,
-                },
-            }
-        return err_msg
+    is_local_mode = os.getenv("LOCAL_MODE", "false").lower() == "true"
+    if is_local_mode:
+        uri_ok = bool(gcs_uri) and (
+            gcs_uri.startswith("gs://") or gcs_uri.startswith("file://")
+        )
+    else:
+        uri_ok = _is_allowed_screenshot_uri(gcs_uri)
+    if not uri_ok:
+        return _visual_evidence_unavailable(
+            f"Cannot perform visual analysis. Invalid or disallowed screenshot URI: {gcs_uri}. Visual evidence unavailable.",
+            tool_context,
+        )
 
     logger.info("Sending screenshot %s to visual analysis...", gcs_uri)
     prompt_text = """
@@ -862,9 +897,8 @@ def get_visual_analysis_for_user(
     """
 
     visual_text = ""
-    is_local_mode = os.getenv("LOCAL_MODE", "false").lower() == "true"
 
-    if is_local_mode or "file://" in gcs_uri:
+    if is_local_mode:
         # Local forensic inspection: Extract OCR metadata from local screenshot file
         filename = gcs_uri.split("/")[-1].replace(".png", "")
         file_path_candidate = (
@@ -912,22 +946,16 @@ def get_visual_analysis_for_user(
             logger.error(
                 "Error during multimodal visual analysis for %s: %s", gcs_uri, e
             )
-            if (
-                tool_context
-                and hasattr(tool_context, "state")
-                and tool_context.state is not None
-            ):
-                tool_context.state["evidence_unavailable"] = True
-            err_msg = f"Error: Multimodal visual analysis service unavailable for {gcs_uri}: {e}. Visual evidence unavailable."
-            if tool_context is None:
-                return {
-                    "error": err_msg,
-                    "security_flags": {
-                        "evidence_unavailable": True,
-                        "prompt_injection_detected": False,
-                    },
-                }
-            return err_msg
+            return _visual_evidence_unavailable(
+                f"Error: Multimodal visual analysis service unavailable for {gcs_uri}: {e}. Visual evidence unavailable.",
+                tool_context,
+            )
+        if not visual_text:
+            logger.error("Multimodal visual analysis returned no text for %s", gcs_uri)
+            return _visual_evidence_unavailable(
+                f"Error: Multimodal visual analysis returned an empty result for {gcs_uri}. Visual evidence unavailable.",
+                tool_context,
+            )
 
     # Deterministic Prompt Injection Keyword Scanner
     INJECTION_KEYWORDS = [
@@ -952,6 +980,12 @@ def get_visual_analysis_for_user(
         ):
             tool_context.state["prompt_injection_detected"] = True
         visual_text = f"[SECURITY ALERT: PROMPT INJECTION DETECTED IN DESKTOP SCREENSHOT]\n{visual_text}"
+    if (
+        tool_context
+        and hasattr(tool_context, "state")
+        and tool_context.state is not None
+    ):
+        tool_context.state["visual_evidence_collected"] = True
 
     if tool_context is None:
         return {
@@ -965,13 +999,22 @@ def get_visual_analysis_for_user(
     return visual_text
 
 
-def get_gcs_uri_for_user(user: str) -> str:
+def get_gcs_uri_for_user(user: str) -> dict[str, Any]:
     """
     Queries BigQuery user_screenshots_view to retrieve the GCS URI of the user's desktop screenshot.
     Uses parameterized query and strict sanitization to prevent SQL injection.
+
+    Returns {"gcs_uri": ..., "security_flags": {...}}. In cloud mode a BigQuery failure fails
+    closed with evidence_unavailable; LOCAL_MODE skips BigQuery and uses the bucket path.
     """
     logger.info("Searching for screenshot GCS URI for user: %s", user)
     clean_user = sanitize_entity_value(user, field_name="user")
+    default_uri = f"gs://{SCREENSHOTS_BUCKET}/{clean_user}.png"
+    if os.getenv("LOCAL_MODE", "false").lower() == "true":
+        return {
+            "gcs_uri": default_uri,
+            "security_flags": {"evidence_unavailable": False},
+        }
     sql = f"""
         SELECT gcs_uri
         FROM `{PROJECT_ID}.{DATASET_ID}.user_screenshots_view`
@@ -990,16 +1033,23 @@ def get_gcs_uri_for_user(user: str) -> str:
         )
         bq = get_bq_client()
         results = list(bq.query(sql, job_config=job_config).result())
-        if not results:
-            fallback_uri = (
-                f"gs://cymbal-cyber-screenshots_{PROJECT_ID}/{clean_user}.png"
-            )
-            logger.info("No join match in view, using default URI: %s", fallback_uri)
-            return fallback_uri
-        return results[0].gcs_uri
     except Exception as e:
         logger.error("Error querying GCS URI: %s", e)
-        return f"gs://cymbal-cyber-screenshots_{PROJECT_ID}/{clean_user}.png"
+        return {
+            "error": f"Screenshot lookup failed: {e}. Visual evidence unavailable.",
+            "security_flags": {"evidence_unavailable": True},
+        }
+    if not results:
+        # A missing object makes the vision call fail closed, so the default path is safe.
+        logger.info("No join match in view, using default URI: %s", default_uri)
+        return {
+            "gcs_uri": default_uri,
+            "security_flags": {"evidence_unavailable": False},
+        }
+    return {
+        "gcs_uri": results[0].gcs_uri,
+        "security_flags": {"evidence_unavailable": False},
+    }
 
 
 def generate_signed_url(gcs_uri: str) -> str:

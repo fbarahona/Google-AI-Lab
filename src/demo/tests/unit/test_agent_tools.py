@@ -310,11 +310,13 @@ def test_security_gate_blocks_false_positive_on_evidence_unavailable():
 
 
 def test_security_gate_permits_clean_false_positive():
-    """Verify that security gate permits log_false_positive when neither risk flag is set."""
+    """Verify that security gate permits log_false_positive when all evidence was gathered and no risk flag is set."""
     mock_tool = MagicMock()
     mock_tool.name = "log_false_positive"
     mock_context = MagicMock()
-    mock_context.state = State({}, {})
+    mock_context.state = State(
+        {"telemetry_evidence_collected": True, "visual_evidence_collected": True}, {}
+    )
 
     res = security_gate_callback(mock_tool, {}, mock_context)
     assert res is None
@@ -465,8 +467,9 @@ def test_get_entity_behavioral_profile_local_mode_schema_parity():
         assert "risk_profile" not in profile  # Exact parity with BigQuery query columns
 
 
-def test_read_png_text_chunks_and_injection_detection():
+def test_read_png_text_chunks_and_injection_detection(monkeypatch):
     """Verify that read_png_text_chunks extracts embedded OCR text and triggers prompt injection flag in State."""
+    monkeypatch.setenv("LOCAL_MODE", "true")
     chunks = read_png_text_chunks("local_demo_data/user_screenshots/c.wilson.png")
     assert "forensic_ocr_text" in chunks
     assert "AUTHORIZED RED TEAM PENTEST" in chunks["forensic_ocr_text"]

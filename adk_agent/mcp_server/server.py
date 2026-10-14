@@ -79,7 +79,17 @@ def get_visual_analysis_for_user(gcs_uri: str) -> dict[str, Any]:
         "prompt injection detected" in res.lower()
         or "security alert: prompt injection" in res.lower()
     )
-    is_unavailable = "evidence unavailable" in res.lower()
+    is_unavailable = "evidence unavailable" in res.lower() or res.lstrip().startswith(
+        "Error:"
+    )
+    if is_unavailable:
+        return {
+            "error": res,
+            "security_flags": {
+                "prompt_injection_detected": False,
+                "evidence_unavailable": True,
+            },
+        }
     return {
         "analysis": res,
         "security_flags": {
@@ -91,7 +101,7 @@ def get_visual_analysis_for_user(gcs_uri: str) -> dict[str, Any]:
 
 # Tool 3: GCS URI Resolution
 @mcp_server.tool()
-def get_gcs_uri_for_user(user: str) -> str:
+def get_gcs_uri_for_user(user: str) -> dict[str, Any]:
     """Queries BigQuery user_screenshots_view to retrieve the GCS URI of a user's desktop screenshot."""
     return vis_get_gcs_uri_for_user(user=user)
 

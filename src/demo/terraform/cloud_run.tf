@@ -50,6 +50,14 @@ resource "google_cloud_run_v2_service" "adk_agent_service" {
         value = "false"
       }
       env {
+        name  = "SCREENSHOTS_BUCKET"
+        value = google_storage_bucket.screenshots.name
+      }
+      env {
+        name  = "MCP_TOOL_TIMEOUT_SECONDS"
+        value = "90"
+      }
+      env {
         name  = "GCS_SIGNER_SA"
         value = google_service_account.agent_sa.email
       }
