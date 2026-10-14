@@ -4,6 +4,7 @@ Includes BigQuery queries, GCS signed URLs, multimodal visual analysis with Gemi
 and SOC ticketing dispatch.
 """
 
+import glob
 import json
 import logging
 import os
@@ -503,8 +504,19 @@ def _compute_profile_from_local_logs(
 ) -> dict[str, Any]:
     """Computes exact behavioral profile metrics dynamically from local synthetic log files."""
     logs_dir = os.path.join(os.getcwd(), "local_demo_data", "logs")
-    access_file = os.path.join(logs_dir, "user_access_events.jsonl")
-    network_file = os.path.join(logs_dir, "network_events.jsonl")
+    access_files = [os.path.join(logs_dir, "user_access_events.jsonl")]
+    if not os.path.exists(access_files[0]) and os.path.exists(logs_dir):
+        access_files = sorted(
+            glob.glob(os.path.join(logs_dir, "access_events*.jsonl")),
+            reverse=True,
+        )
+
+    network_files = [os.path.join(logs_dir, "network_events.jsonl")]
+    if not os.path.exists(network_files[0]) and os.path.exists(logs_dir):
+        network_files = sorted(
+            glob.glob(os.path.join(logs_dir, "network_events*.jsonl")),
+            reverse=True,
+        )
 
     total_access = 0
     login_failures = 0
@@ -522,79 +534,84 @@ def _compute_profile_from_local_logs(
 
     clean_id = (entity_id or "").strip().lower()
 
-    if os.path.exists(access_file):
-        try:
-            with open(access_file, encoding="utf-8") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    ev = json.loads(line)
-                    ev_user = str(ev.get("user_id") or "").lower()
-                    ev_dev = str(ev.get("device_id") or "").lower()
-                    ev_ip = str(ev.get("source_ip") or "").lower()
+    for access_file in access_files:
+        if os.path.exists(access_file):
+            try:
+                with open(access_file, encoding="utf-8") as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
+                        ev = json.loads(line)
+                        ev_user = str(ev.get("user_id") or "").lower()
+                        ev_dev = str(ev.get("device_id") or "").lower()
+                        ev_ip = str(ev.get("source_ip") or "").lower()
 
-                    matches = (
-                        (entity_type == "user" and ev_user == clean_id)
-                        or (entity_type == "device" and ev_dev == clean_id)
-                        or (entity_type == "ip" and ev_ip == clean_id)
-                    )
-                    if matches:
-                        total_access += 1
-                        if ev.get("event_type") == "login_failure":
-                            login_failures += 1
-                        if ev.get("source_ip"):
-                            source_ips.add(ev["source_ip"])
-                        ua = str(ev.get("user_agent") or "")
-                        if ua:
-                            user_agents.add(ua)
-                            if re.search(
-                                r"^(python-requests|curl|Go-http-client)",
-                                ua,
-                                re.IGNORECASE,
+                        matches = (
+                            (entity_type == "user" and ev_user == clean_id)
+                            or (entity_type == "device" and ev_dev == clean_id)
+                            or (entity_type == "ip" and ev_ip == clean_id)
+                        )
+                        if matches:
+                            total_access += 1
+                            if ev.get("event_type") == "login_failure":
+                                login_failures += 1
+                            if ev.get("source_ip"):
+                                source_ips.add(ev["source_ip"])
+                            ua = str(ev.get("user_agent") or "")
+                            if ua:
+                                user_agents.add(ua)
+                                if re.search(
+                                    r"^(python-requests|curl|Go-http-client)",
+                                    ua,
+                                    re.IGNORECASE,
+                                ):
+                                    suspicious_ua += 1
+            except Exception as e:
+                logger.warning("Error reading local access logs: %s", e)
+
+    for network_file in network_files:
+        if os.path.exists(network_file):
+            try:
+                with open(network_file, encoding="utf-8") as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
+                        ev = json.loads(line)
+                        ev_user = str(ev.get("user_id") or "").lower()
+                        ev_ip = str(ev.get("source_ip") or "").lower()
+
+                        matches = (entity_type == "user" and ev_user == clean_id) or (
+                            entity_type == "ip" and ev_ip == clean_id
+                        )
+                        if matches:
+                            total_network += 1
+                            if ev.get("permission_level_requested") in (
+                                "root",
+                                "admin",
                             ):
-                                suspicious_ua += 1
-        except Exception as e:
-            logger.warning("Error reading local access logs: %s", e)
-
-    if os.path.exists(network_file):
-        try:
-            with open(network_file, encoding="utf-8") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    ev = json.loads(line)
-                    ev_user = str(ev.get("user_id") or "").lower()
-                    ev_ip = str(ev.get("source_ip") or "").lower()
-
-                    matches = (entity_type == "user" and ev_user == clean_id) or (
-                        entity_type == "ip" and ev_ip == clean_id
-                    )
-                    if matches:
-                        total_network += 1
-                        if ev.get("permission_level_requested") in ("root", "admin"):
-                            high_priv += 1
-                        ft = str(ev.get("file_type") or "").lower()
-                        if ft in ("exe", "dll", "ps1", "bat", "vbs"):
-                            risky_files += 1
-                        cmd = str(ev.get("command_line") or "")
-                        if re.search(
-                            r"(?i)(powershell -enc|IEX|DownloadString|mimikatz|payload)",
-                            cmd,
-                        ):
-                            mal_cmds += 1
-                        domain = str(ev.get("network_domain") or "")
-                        if re.search(
-                            r"(\.ru|\.xyz|bad-domain|payload-downloader|c2-server)",
-                            domain,
-                        ):
-                            mal_dns += 1
-                        if ev.get("destination_ip"):
-                            dest_ips.add(ev["destination_ip"])
-                        fh = ev.get("file_hash_sha256")
-                        if fh:
-                            files_transferred.add(fh)
-        except Exception as e:
-            logger.warning("Error reading local network logs: %s", e)
+                                high_priv += 1
+                            ft = str(ev.get("file_type") or "").lower()
+                            if ft in ("exe", "dll", "ps1", "bat", "vbs"):
+                                risky_files += 1
+                            cmd = str(ev.get("command_line") or "")
+                            if re.search(
+                                r"(?i)(powershell -enc|IEX|DownloadString|mimikatz|payload)",
+                                cmd,
+                            ):
+                                mal_cmds += 1
+                            domain = str(ev.get("network_domain") or "")
+                            if re.search(
+                                r"(\.ru|\.xyz|bad-domain|payload-downloader|c2-server)",
+                                domain,
+                            ):
+                                mal_dns += 1
+                            if ev.get("destination_ip"):
+                                dest_ips.add(ev["destination_ip"])
+                            fh = ev.get("file_hash_sha256")
+                            if fh:
+                                files_transferred.add(fh)
+            except Exception as e:
+                logger.warning("Error reading local network logs: %s", e)
 
     return {
         "total_access_events_24h": total_access,
@@ -685,15 +702,20 @@ def get_entity_behavioral_profile(
                     "Evidence cannot be verified. Security policy prohibits closing alert as FALSE POSITIVE. "
                     "You MUST invoke escalate_to_human immediately."
                 ),
+                "security_flags": {
+                    "evidence_unavailable": True,
+                    "malicious_indicators": False,
+                },
             }
 
     # Update state flag on malicious indicators to enforce deterministic security gate
-    if (
+    has_malicious = (
         res.get("total_login_failures_24h", 0) > 5
         or res.get("malicious_commands_24h", 0) > 0
         or res.get("risky_file_transfers_24h", 0) > 0
         or res.get("malicious_dns_queries_24h", 0) > 0
-    ):
+    )
+    if has_malicious:
         logger.info(
             "Setting state['malicious_indicators'] = True for entity: %s", entity_id
         )
@@ -703,6 +725,11 @@ def get_entity_behavioral_profile(
             and tool_context.state is not None
         ):
             tool_context.state["malicious_indicators"] = True
+
+    res["security_flags"] = {
+        "malicious_indicators": bool(has_malicious),
+        "evidence_unavailable": False,
+    }
 
     return res
 
@@ -798,7 +825,7 @@ def get_table_schema(dataset_id: str, table_id: str) -> str:
 
 def get_visual_analysis_for_user(
     gcs_uri: str, tool_context: ToolContext | None = None
-) -> str:
+) -> str | dict[str, Any]:
     """
     Performs multimodal inspection of a desktop screenshot using Gemini.
     Performs OCR on terminals, identifies command prompts, and evaluates suspicious UI activity.
@@ -813,7 +840,16 @@ def get_visual_analysis_for_user(
             and tool_context.state is not None
         ):
             tool_context.state["evidence_unavailable"] = True
-        return f"Cannot perform visual analysis. Invalid or missing GCS URI: {gcs_uri}. Visual evidence unavailable."
+        err_msg = f"Cannot perform visual analysis. Invalid or missing GCS URI: {gcs_uri}. Visual evidence unavailable."
+        if tool_context is None:
+            return {
+                "error": err_msg,
+                "security_flags": {
+                    "evidence_unavailable": True,
+                    "prompt_injection_detected": False,
+                },
+            }
+        return err_msg
 
     logger.info("Sending screenshot %s to visual analysis...", gcs_uri)
     prompt_text = """
@@ -882,7 +918,16 @@ def get_visual_analysis_for_user(
                 and tool_context.state is not None
             ):
                 tool_context.state["evidence_unavailable"] = True
-            return f"Error: Multimodal visual analysis service unavailable for {gcs_uri}: {e}. Visual evidence unavailable."
+            err_msg = f"Error: Multimodal visual analysis service unavailable for {gcs_uri}: {e}. Visual evidence unavailable."
+            if tool_context is None:
+                return {
+                    "error": err_msg,
+                    "security_flags": {
+                        "evidence_unavailable": True,
+                        "prompt_injection_detected": False,
+                    },
+                }
+            return err_msg
 
     # Deterministic Prompt Injection Keyword Scanner
     INJECTION_KEYWORDS = [
@@ -897,7 +942,8 @@ def get_visual_analysis_for_user(
         "do not dispatch",
         "do not alert",
     ]
-    if any(kw in visual_text.lower() for kw in INJECTION_KEYWORDS):
+    is_injection = any(kw in visual_text.lower() for kw in INJECTION_KEYWORDS)
+    if is_injection:
         logger.warning("PROMPT INJECTION DETECTED in visual evidence for %s", gcs_uri)
         if (
             tool_context
@@ -906,6 +952,15 @@ def get_visual_analysis_for_user(
         ):
             tool_context.state["prompt_injection_detected"] = True
         visual_text = f"[SECURITY ALERT: PROMPT INJECTION DETECTED IN DESKTOP SCREENSHOT]\n{visual_text}"
+
+    if tool_context is None:
+        return {
+            "analysis": visual_text,
+            "security_flags": {
+                "prompt_injection_detected": bool(is_injection),
+                "evidence_unavailable": False,
+            },
+        }
 
     return visual_text
 
@@ -998,7 +1053,7 @@ def dispatch_to_soc_ticketing_system(
     severity: str = "HIGH",
     screenshot_url: str = "",
     tool_context: ToolContext | None = None,
-) -> str:
+) -> str | dict[str, Any]:
     """
     Passes a confirmed or suspected threat incident ticket directly to the SOC Ticketing System.
     Stores the ticket in BigQuery and the GCS escalation queue for SOC analysts to review.
@@ -1036,15 +1091,45 @@ def dispatch_to_soc_ticketing_system(
         and tool_context.state is not None
     ):
         tool_context.state["ticket_dispatched"] = True
+    if tool_context is None:
+        return {
+            "status": "DISPATCHED",
+            "ticket_id": ticket.ticket_id,
+            "message": res,
+            "security_flags": {
+                "ticket_dispatched": True,
+            },
+        }
     return res
 
 
 def log_false_positive(
     alert_payload: str, agent_comment: str, tool_context: ToolContext | None = None
-) -> str:
+) -> str | dict[str, Any]:
     """Logs the alert as an autonomously resolved False Positive in BigQuery."""
     logger.info("Logging false positive: %s", agent_comment)
     try:
+        is_local_mode = os.getenv("LOCAL_MODE", "false").lower() == "true"
+        if is_local_mode:
+            logger.info("Local mode simulation: Successfully logged false positive.")
+            if (
+                tool_context
+                and hasattr(tool_context, "state")
+                and tool_context.state is not None
+            ):
+                tool_context.state["false_positive_logged"] = True
+            msg = "Successfully logged alert as a False Positive in BigQuery."
+            if tool_context is None:
+                return {
+                    "status": "RESOLVED_FALSE_POSITIVE",
+                    "message": msg,
+                    "security_flags": {
+                        "false_positive_logged": True,
+                        "evidence_unavailable": False,
+                    },
+                }
+            return msg
+
         row_data = _parse_alert_payload_to_row(alert_payload)
         row_data["agent_decision"] = "FALSE_POSITIVE"
         row_data["agent_reason"] = agent_comment
@@ -1061,7 +1146,17 @@ def log_false_positive(
                 and tool_context.state is not None
             ):
                 tool_context.state["evidence_unavailable"] = True
-            return f"Failed to log false positive in BigQuery. Errors: {errors}"
+            msg = f"Failed to log false positive in BigQuery. Errors: {errors}"
+            if tool_context is None:
+                return {
+                    "status": "ERROR",
+                    "error": msg,
+                    "security_flags": {
+                        "evidence_unavailable": True,
+                        "false_positive_logged": False,
+                    },
+                }
+            return msg
 
         if (
             tool_context
@@ -1069,7 +1164,17 @@ def log_false_positive(
             and tool_context.state is not None
         ):
             tool_context.state["false_positive_logged"] = True
-        return "Successfully logged alert as a False Positive in BigQuery."
+        msg = "Successfully logged alert as a False Positive in BigQuery."
+        if tool_context is None:
+            return {
+                "status": "RESOLVED_FALSE_POSITIVE",
+                "message": msg,
+                "security_flags": {
+                    "false_positive_logged": True,
+                    "evidence_unavailable": False,
+                },
+            }
+        return msg
     except Exception as e:
         logger.error("Exception during false positive logging: %s", e)
         if (
@@ -1078,7 +1183,17 @@ def log_false_positive(
             and tool_context.state is not None
         ):
             tool_context.state["evidence_unavailable"] = True
-        return f"Error logging false positive: {e}"
+        msg = f"Error logging false positive: {e}"
+        if tool_context is None:
+            return {
+                "status": "ERROR",
+                "error": msg,
+                "security_flags": {
+                    "evidence_unavailable": True,
+                    "false_positive_logged": False,
+                },
+            }
+        return msg
 
 
 def escalate_to_human(
@@ -1087,7 +1202,7 @@ def escalate_to_human(
     agent_reason_for_escalation: str,
     context_data: str,
     tool_context: ToolContext | None = None,
-) -> str:
+) -> str | dict[str, Any]:
     """
     Dispatches the incident ticket to the SOC ticketing queue for human analyst adjudication.
     Returns immediately with escalation confirmation without blocking the agent runner.
@@ -1130,7 +1245,17 @@ def escalate_to_human(
         ticket_id,
         agent_reason_for_escalation,
     )
-    return (
+    msg = (
         f"Incident successfully escalated to Human SOC Analyst: Ticket ID '{ticket_id}'. "
         f"Status: ESCALATED_PENDING_REVIEW. Queue Result: {result}"
     )
+    if tool_context is None:
+        return {
+            "status": "ESCALATED_PENDING_REVIEW",
+            "ticket_id": ticket_id,
+            "message": msg,
+            "security_flags": {
+                "escalation_dispatched": True,
+            },
+        }
+    return msg

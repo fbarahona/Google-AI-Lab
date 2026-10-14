@@ -68,6 +68,142 @@ setup_logging()
 os.environ["ADK_ALLOW_CONFIG_STDIO_MCP_SERVERS"] = "true"
 
 
+# Flags that only tighten the security gate; any MCP tool may raise them.
+_EVIDENCE_FLAGS = (
+    "prompt_injection_detected",
+    "malicious_indicators",
+    "evidence_unavailable",
+)
+
+# Lifecycle flags that suppress default-deny escalation; each may only be set
+# by the tool that performs that resolution action.
+_LIFECYCLE_FLAG_BY_TOOL = {
+    "dispatch_to_soc_ticketing_system": "ticket_dispatched",
+    "escalate_to_human": "escalation_dispatched",
+    "log_false_positive": "false_positive_logged",
+}
+
+
+def sync_mcp_security_state_callback(
+    tool: BaseTool,
+    args: dict[str, Any],
+    tool_context: ToolContext,
+    tool_response: Any,
+) -> None:
+    """
+    Synchronizes security and lifecycle flags from MCP tool responses back into ADK session state.
+
+    MCP tools execute out-of-process in a separate MCP server without direct access to ADK session state.
+    This callback parses structured fields (security_flags, status) and fallback indicators returned
+    by MCP tools and deterministically sets the ADK session state flags:
+    - prompt_injection_detected
+    - malicious_indicators
+    - evidence_unavailable
+    - ticket_dispatched
+    - escalation_dispatched
+    - false_positive_logged
+    """
+    state = getattr(tool_context, "state", None)
+    if state is None:
+        return None
+
+    payload: dict[str, Any] = {}
+    raw_text = ""
+
+    if isinstance(tool_response, dict):
+        if "security_flags" in tool_response or "status" in tool_response:
+            payload = tool_response
+        elif "structuredContent" in tool_response and isinstance(
+            tool_response["structuredContent"], dict
+        ):
+            payload = tool_response["structuredContent"]
+
+        content_list = tool_response.get("content")
+        if isinstance(content_list, list):
+            for item in content_list:
+                if isinstance(item, dict) and "text" in item:
+                    item_text = str(item["text"])
+                    raw_text += item_text
+                    if not payload and item_text.strip().startswith("{"):
+                        try:
+                            data = json.loads(item_text)
+                            if isinstance(data, dict):
+                                payload = data
+                        except Exception:
+                            pass
+    elif isinstance(tool_response, str):
+        raw_text = tool_response
+        if raw_text.strip().startswith("{"):
+            try:
+                data = json.loads(raw_text)
+                if isinstance(data, dict):
+                    payload = data
+            except Exception:
+                pass
+
+    tool_name = getattr(tool, "name", "")
+
+    # 1. Update state from structured security_flags. Evidence flags only ever
+    #    tighten the security gate, so any tool may raise them; lifecycle flags
+    #    are accepted only from the tool that owns that resolution action.
+    sec_flags = payload.get("security_flags", {})
+    if isinstance(sec_flags, dict):
+        for flag in _EVIDENCE_FLAGS:
+            if sec_flags.get(flag):
+                log_agent_event(f"MCP state sync: {flag}=True (from {tool_name})")
+                state[flag] = True
+        owned_flag = _LIFECYCLE_FLAG_BY_TOOL.get(tool_name)
+        if owned_flag and sec_flags.get(owned_flag):
+            log_agent_event(f"MCP state sync: {owned_flag}=True (from {tool_name})")
+            state[owned_flag] = True
+
+    # 2. Update state from lifecycle status, again only from the owning tool
+    status = str(payload.get("status", "")).upper()
+    if tool_name == "dispatch_to_soc_ticketing_system" and status == "DISPATCHED":
+        state["ticket_dispatched"] = True
+    elif tool_name == "escalate_to_human" and status in {
+        "ESCALATED",
+        "ESCALATED_PENDING_REVIEW",
+    }:
+        state["escalation_dispatched"] = True
+    elif tool_name == "log_false_positive" and status == "RESOLVED_FALSE_POSITIVE":
+        state["false_positive_logged"] = True
+
+    # 3. Fallback text inspection, only when no structured payload was returned.
+    #    Tool output can embed attacker-controlled text (e.g. screenshot OCR), so
+    #    it must never override the structured contract.
+    if payload:
+        return None
+    text_lower = raw_text.lower()
+    if (
+        "prompt injection detected" in text_lower
+        or "instruction override" in text_lower
+    ):
+        state["prompt_injection_detected"] = True
+    if (
+        "evidence unavailable" in text_lower
+        or "critical infrastructure failure" in text_lower
+    ):
+        state["evidence_unavailable"] = True
+    if tool_name == "dispatch_to_soc_ticketing_system" and (
+        "ticket created and dispatched" in text_lower
+        or "dispatched to soc ticketing system" in text_lower
+    ):
+        state["ticket_dispatched"] = True
+    if (
+        tool_name == "escalate_to_human"
+        and "successfully escalated to human soc analyst" in text_lower
+    ):
+        state["escalation_dispatched"] = True
+    if (
+        tool_name == "log_false_positive"
+        and "successfully logged alert as a false positive" in text_lower
+    ):
+        state["false_positive_logged"] = True
+
+    return None
+
+
 class ScopedMcpToolset(McpToolset):
     """Scoped MCP toolset exposing designated tools over stdio JSON-RPC."""
 
@@ -76,6 +212,27 @@ class ScopedMcpToolset(McpToolset):
         if isinstance(self.tool_filter, list) and len(self.tool_filter) == 1:
             return self.tool_filter[0]
         return "mcp_toolset"
+
+    async def get_tools(self, readonly_context: Any = None) -> list[BaseTool]:
+        tools = await super().get_tools(readonly_context)
+        for t in tools:
+            orig_run_async = t.run_async
+
+            async def _wrapped_run_async(
+                *,
+                args: dict[str, Any],
+                tool_context: ToolContext,
+                _orig=orig_run_async,
+                _tool=t,
+            ) -> Any:
+                res = await _orig(args=args, tool_context=tool_context)
+                sync_mcp_security_state_callback(
+                    tool=_tool, args=args, tool_context=tool_context, tool_response=res
+                )
+                return res
+
+            t.run_async = _wrapped_run_async
+        return tools
 
 
 def create_mcp_tool(tool_name: str) -> ScopedMcpToolset:
@@ -394,6 +551,7 @@ bq_investigation_agent = Agent(
     tools=[create_mcp_tool("get_entity_behavioral_profile")],
     before_agent_callback=before_sub_agent_starts,
     after_agent_callback=log_agent_completion,
+    after_tool_callback=sync_mcp_security_state_callback,
 )
 
 
@@ -433,6 +591,7 @@ visual_analysis_agent = Agent(
     ],
     before_agent_callback=before_sub_agent_starts,
     after_agent_callback=log_agent_completion,
+    after_tool_callback=sync_mcp_security_state_callback,
 )
 
 
@@ -487,6 +646,7 @@ soc_ticketing_agent = Agent(
     before_tool_callback=security_gate_callback,
     before_agent_callback=before_sub_agent_starts,
     after_agent_callback=default_deny_soc_callback,
+    after_tool_callback=sync_mcp_security_state_callback,
 )
 
 
