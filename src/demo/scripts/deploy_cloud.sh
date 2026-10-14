@@ -237,18 +237,6 @@ if command -v terraform >/dev/null 2>&1 && [ -d "${TERRAFORM_DIR}" ]; then
     fi
   done
 
-  # BigQuery Connection
-  if ! echo "${TF_STATE_LIST}" | grep -q "^google_bigquery_connection.vertex_ai_connection$"; then
-    if curl -s -H "Authorization: Bearer $(gcloud auth print-access-token 2>/dev/null || true)" \
-      "https://bigqueryconnection.googleapis.com/v1/projects/${PROJECT_ID}/locations/US/connections/continuous-query-vertex-ai-connection" 2>/dev/null | grep -q '"name":'; then
-      echo "Importing existing BigQuery Connection into Terraform state..."
-      terraform -chdir="${TERRAFORM_DIR}" import \
-        -var="project_id=${PROJECT_ID}" \
-        -var="region=${REGION}" \
-        google_bigquery_connection.vertex_ai_connection "projects/${PROJECT_ID}/locations/US/connections/continuous-query-vertex-ai-connection" 2>/dev/null || true
-    fi
-  fi
-
   # Storage Buckets
   for BUCKET_NAME in "cymbal_cyber_adk_staging_bucket_${PROJECT_ID}" "cymbal-cyber-adk-escalations-bucket_${PROJECT_ID}" "cymbal-cyber-screenshots_${PROJECT_ID}" "cymbal-cyber-raw-logs_${PROJECT_ID}"; do
     case "${BUCKET_NAME}" in

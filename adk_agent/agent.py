@@ -26,6 +26,9 @@ from google.adk.agents.callback_context import CallbackContext
 from google.adk.apps import App
 from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.tools import BaseTool, ToolContext, google_search
+from google.adk.tools.mcp_tool.mcp_session_manager import StdioConnectionParams
+from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
+from mcp import StdioServerParameters
 
 try:
     from google.adk.plugins.bigquery_agent_analytics_plugin import (
@@ -47,28 +50,8 @@ for _p in [str(_CURRENT_DIR), str(_SRC_DIR), str(_CURRENT_DIR.parent)]:
 # --- Local Imports ---
 try:
     from .logging_utils import log_agent_event, setup_logging
-    from .tools import (
-        create_rich_ticket_id,
-        dispatch_to_soc_ticketing_system,
-        escalate_to_human,
-        generate_signed_url,
-        get_entity_behavioral_profile,
-        get_gcs_uri_for_user,
-        get_visual_analysis_for_user,
-        log_false_positive,
-    )
 except ImportError:
     from logging_utils import log_agent_event, setup_logging
-    from tools import (
-        create_rich_ticket_id,
-        dispatch_to_soc_ticketing_system,
-        escalate_to_human,
-        generate_signed_url,
-        get_entity_behavioral_profile,
-        get_gcs_uri_for_user,
-        get_visual_analysis_for_user,
-        log_false_positive,
-    )
 
 # --- Configuration ---
 load_dotenv()
@@ -81,6 +64,40 @@ warnings.filterwarnings("ignore", category=UserWarning, module="vertexai")
 warnings.filterwarnings("ignore", category=UserWarning, module="google.adk")
 
 setup_logging()
+
+os.environ["ADK_ALLOW_CONFIG_STDIO_MCP_SERVERS"] = "true"
+
+
+class ScopedMcpToolset(McpToolset):
+    """Scoped MCP toolset exposing designated tools over stdio JSON-RPC."""
+
+    @property
+    def name(self) -> str:
+        if isinstance(self.tool_filter, list) and len(self.tool_filter) == 1:
+            return self.tool_filter[0]
+        return "mcp_toolset"
+
+
+def create_mcp_tool(tool_name: str) -> ScopedMcpToolset:
+    """Helper to instantiate a scoped MCP tool connected to the local MCP server."""
+    env = dict(os.environ)
+    if "PYTHONPATH" not in env:
+        env["PYTHONPATH"] = (
+            str(_SRC_DIR)
+            + ":"
+            + str(_CURRENT_DIR.parent)
+            + ":"
+            + os.environ.get("PYTHONPATH", "")
+        )
+    params = StdioConnectionParams(
+        server_params=StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "adk_agent.mcp_server"],
+            env=env,
+        )
+    )
+    return ScopedMcpToolset(connection_params=params, tool_filter=[tool_name])
+
 
 # --- Initialize BigQuery Analytics Plugin ---
 bq_analytics_plugin = None
@@ -374,7 +391,7 @@ bq_investigation_agent = Agent(
     3. Summarize your findings into clear behavioral risk indicators and conclude whether telemetry confirms an anomaly or indicates benign activity.
     """,
     output_key="bigquery_investigation_results",
-    tools=[get_entity_behavioral_profile],
+    tools=[create_mcp_tool("get_entity_behavioral_profile")],
     before_agent_callback=before_sub_agent_starts,
     after_agent_callback=log_agent_completion,
 )
@@ -409,7 +426,11 @@ visual_analysis_agent = Agent(
        - Clickable signed screenshot URL.
     """,
     output_key="visual_analysis_results",
-    tools=[get_visual_analysis_for_user, get_gcs_uri_for_user, generate_signed_url],
+    tools=[
+        create_mcp_tool("get_visual_analysis_for_user"),
+        create_mcp_tool("get_gcs_uri_for_user"),
+        create_mcp_tool("generate_signed_url"),
+    ],
     before_agent_callback=before_sub_agent_starts,
     after_agent_callback=log_agent_completion,
 )
@@ -457,11 +478,11 @@ soc_ticketing_agent = Agent(
     - No conversational banter. Your primary action must be invoking the correct resolution tool.
     """,
     tools=[
-        dispatch_to_soc_ticketing_system,
-        log_false_positive,
-        create_rich_ticket_id,
-        generate_signed_url,
-        escalate_to_human,
+        create_mcp_tool("dispatch_to_soc_ticketing_system"),
+        create_mcp_tool("log_false_positive"),
+        create_mcp_tool("create_rich_ticket_id"),
+        create_mcp_tool("generate_signed_url"),
+        create_mcp_tool("escalate_to_human"),
     ],
     before_tool_callback=security_gate_callback,
     before_agent_callback=before_sub_agent_starts,

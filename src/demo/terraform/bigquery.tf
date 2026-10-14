@@ -285,33 +285,7 @@ resource "google_bigquery_table" "agent_events" {
   }
 }
 
-# 6. BigQuery Cloud Resource Connection for Object Tables
-resource "google_bigquery_connection" "vertex_ai_connection" {
-  project       = var.project_id
-  connection_id = "continuous-query-vertex-ai-connection"
-  location      = var.bigquery_location
-  friendly_name = "Vertex AI & Cloud Storage Connection"
-  description   = "Enables BigQuery object tables and ML remote models."
-
-  cloud_resource {}
-
-  depends_on = [google_project_service.required]
-}
-
-# Grant Connection SA permissions to read Cloud Storage and invoke Vertex AI
-resource "google_project_iam_member" "connection_vertex_ai_user" {
-  project = var.project_id
-  role    = "roles/aiplatform.user"
-  member  = "serviceAccount:${google_bigquery_connection.vertex_ai_connection.cloud_resource[0].service_account_id}"
-}
-
-resource "google_storage_bucket_iam_member" "connection_storage_viewer" {
-  bucket = google_storage_bucket.screenshots.name
-  role   = "roles/storage.objectViewer"
-  member = "serviceAccount:${google_bigquery_connection.vertex_ai_connection.cloud_resource[0].service_account_id}"
-}
-
-# 7. BigQuery View for User Screenshots
+# 6. BigQuery View for User Screenshots
 resource "google_bigquery_table" "user_screenshots_view" {
   project             = var.project_id
   dataset_id          = google_bigquery_dataset.cyber_dataset.dataset_id

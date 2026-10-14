@@ -21,6 +21,7 @@ dependencies = [
     "altair>=6.3.0",
     "pydeck>=0.9.3",
     "pandas>=3.0.6",
+    "mcp>=1.2.0,<3.0.0",
 ]
 requires-python = ">=3.12,<3.13"
 
@@ -86,7 +87,7 @@ deprecated = "ignore"
 
 [tool.codespell]
 ignore-words-list = "rouge"
-skip = "./locust_env/*,uv.lock,.venv,./frontend,**/package-lock.json"
+skip = "./locust_env/*,uv.lock,.venv,./frontend,**/package-lock.json,./local_demo_data/*"
 
 
 [build-system]

@@ -1,0 +1,175 @@
+"""
+Cymbal Cyber Local MCP Server
+=============================
+Implements a standards-compliant Model Context Protocol (MCP) server
+exposing BigQuery behavioral telemetry investigation, multimodal
+visual forensics, and SOC incident ticketing tools over stdio and SSE.
+"""
+
+import logging
+import sys
+from typing import Any
+
+try:
+    from mcp.server.mcpserver import MCPServer
+except ImportError:
+    from mcp.server.fastmcp import FastMCP as MCPServer
+
+from adk_agent.tools import (
+    create_rich_ticket_id as soc_create_rich_ticket_id,
+)
+from adk_agent.tools import (
+    dispatch_to_soc_ticketing_system as soc_dispatch_to_soc_ticketing_system,
+)
+from adk_agent.tools import (
+    escalate_to_human as soc_escalate_to_human,
+)
+from adk_agent.tools import (
+    execute_sql as bq_execute_sql,
+)
+from adk_agent.tools import (
+    generate_signed_url as vis_generate_signed_url,
+)
+from adk_agent.tools import (
+    get_entity_behavioral_profile as bq_get_entity_behavioral_profile,
+)
+from adk_agent.tools import (
+    get_gcs_uri_for_user as vis_get_gcs_uri_for_user,
+)
+from adk_agent.tools import (
+    get_table_schema as bq_get_table_schema,
+)
+from adk_agent.tools import (
+    get_visual_analysis_for_user as vis_get_visual_analysis_for_user,
+)
+from adk_agent.tools import (
+    log_false_positive as soc_log_false_positive,
+)
+
+logger = logging.getLogger("cymbal-cyber-mcp")
+
+# Initialize Server
+mcp_server = MCPServer(
+    name="cymbal-cyber-mcp",
+    description="Cymbal Cyber Security Operations Center (SOC) Investigation and Response MCP Server",
+)
+
+
+# Tool 1: BigQuery Entity Behavioral Profile
+@mcp_server.tool()
+def get_entity_behavioral_profile(
+    entity_type: str,
+    entity_id: str,
+    window_to_investigate: str = "24 HOUR",
+) -> dict[str, Any]:
+    """Retrieves 24-hour behavioral profile metrics for an entity (user, device, IP)."""
+    return bq_get_entity_behavioral_profile(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        window_to_investigate=window_to_investigate,
+    )
+
+
+# Tool 2: Analyst SQL Execution
+@mcp_server.tool()
+def execute_sql(query: str) -> str:
+    """Executes a read-only SQL query against the BigQuery security dataset."""
+    try:
+        return bq_execute_sql(query=query)
+    except Exception as e:
+        return f"Tool execution was blocked: {e}"
+
+
+# Tool 3: BigQuery Table Schema
+@mcp_server.tool()
+def get_table_schema(dataset_id: str, table_id: str) -> str:
+    """Retrieves the column schema of a specified BigQuery table."""
+    return bq_get_table_schema(dataset_id=dataset_id, table_id=table_id)
+
+
+# Tool 4: Visual Screenshot Analysis
+@mcp_server.tool()
+def get_visual_analysis_for_user(gcs_uri: str) -> str:
+    """Performs multimodal inspection of a desktop screenshot using Gemini or local OCR."""
+    return vis_get_visual_analysis_for_user(gcs_uri=gcs_uri)
+
+
+# Tool 5: GCS URI Resolution
+@mcp_server.tool()
+def get_gcs_uri_for_user(user: str) -> str:
+    """Queries BigQuery user_screenshots_view to retrieve the GCS URI of a user's desktop screenshot."""
+    return vis_get_gcs_uri_for_user(user=user)
+
+
+# Tool 6: Signed URL Generation
+@mcp_server.tool()
+def generate_signed_url(gcs_uri: str) -> str:
+    """Generates a secure signed URL for a GCS object to allow human SOC analyst viewing."""
+    return vis_generate_signed_url(gcs_uri=gcs_uri)
+
+
+# Tool 7: Rich Ticket ID Generation
+@mcp_server.tool()
+def create_rich_ticket_id(user_id: str) -> str:
+    """Generates a standardized, readable ticket ID."""
+    return soc_create_rich_ticket_id(user_id=user_id)
+
+
+# Tool 8: SOC Ticket Dispatch
+@mcp_server.tool()
+def dispatch_to_soc_ticketing_system(
+    ticket_id: str,
+    alert_payload: str,
+    agent_reason: str,
+    structured_report: str,
+    severity: str = "HIGH",
+    screenshot_url: str = "",
+) -> str:
+    """Passes a confirmed or suspected threat incident ticket directly to the SOC Ticketing System."""
+    return soc_dispatch_to_soc_ticketing_system(
+        ticket_id=ticket_id,
+        alert_payload=alert_payload,
+        agent_reason=agent_reason,
+        structured_report=structured_report,
+        severity=severity,
+        screenshot_url=screenshot_url,
+    )
+
+
+# Tool 9: False Positive Logging
+@mcp_server.tool()
+def log_false_positive(alert_payload: str, agent_comment: str) -> str:
+    """Logs the alert as an autonomously resolved False Positive in BigQuery."""
+    return soc_log_false_positive(
+        alert_payload=alert_payload,
+        agent_comment=agent_comment,
+    )
+
+
+# Tool 10: Human Escalation
+@mcp_server.tool()
+def escalate_to_human(
+    ticket_id: str,
+    alert_payload: str,
+    agent_reason_for_escalation: str,
+    context_data: str,
+) -> str:
+    """Dispatches an incident ticket to the SOC ticketing queue for human analyst adjudication."""
+    return soc_escalate_to_human(
+        ticket_id=ticket_id,
+        alert_payload=alert_payload,
+        agent_reason_for_escalation=agent_reason_for_escalation,
+        context_data=context_data,
+    )
+
+
+def main():
+    """Main CLI entrypoint for stdio and SSE transport."""
+    transport = "stdio"
+    if "--sse" in sys.argv:
+        transport = "sse"
+    mcp_server.run(transport=transport)
+
+
+if __name__ == "__main__":
+    main()

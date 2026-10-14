@@ -774,6 +774,28 @@ def execute_sql(
         raise
 
 
+def get_table_schema(dataset_id: str, table_id: str) -> str:
+    """Returns the schema of a specified BigQuery table as JSON."""
+    clean_dataset = sanitize_entity_value(dataset_id, field_name="dataset_id")
+    clean_table = sanitize_entity_value(table_id, field_name="table_id")
+    is_local_mode = os.getenv("LOCAL_MODE", "false").lower() == "true"
+    if is_local_mode:
+        return json.dumps(
+            {
+                "table": f"{clean_dataset}.{clean_table}",
+                "status": "LOCAL_SIMULATION",
+                "columns": ["event_timestamp", "user_id", "device_id", "source_ip"],
+            }
+        )
+
+    bq = get_bq_client()
+    table = bq.get_table(f"{PROJECT_ID}.{clean_dataset}.{clean_table}")
+    fields = [
+        {"name": f.name, "type": f.field_type, "mode": f.mode} for f in table.schema
+    ]
+    return json.dumps(fields)
+
+
 def get_visual_analysis_for_user(
     gcs_uri: str, tool_context: ToolContext | None = None
 ) -> str:

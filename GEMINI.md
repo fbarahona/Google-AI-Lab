@@ -7,10 +7,11 @@
 ### Featured Demonstration: Real-Time Cyber Security AI
 The project features an end-to-end near real-time cybersecurity threat detection, multi-agent AI investigation, and SOC response system:
 - **ADK Multi-Agent Team (`adk_agent/`):** Autonomous multi-agent orchestrator coordinating 4 specialized agents:
-  1. `google_search_agent`: OSINT threat intel on external public IPs.
-  2. `bq_investigation_agent`: 24-hour behavioral profile queries in BigQuery.
-  3. `visual_analysis_agent`: Gemini multimodal vision OCR on user desktop screenshots.
-  4. `soc_ticketing_agent`: Incident synthesis and dispatch to SOC ticketing.
+  1. `google_search_agent`: OSINT threat intel on external public IPs (native ADK tool).
+  2. `bq_investigation_agent`: 24-hour behavioral profile queries in BigQuery (via Local MCP).
+  3. `visual_analysis_agent`: Gemini multimodal vision OCR on user desktop screenshots (via Local MCP).
+  4. `soc_ticketing_agent`: Incident synthesis and dispatch to SOC ticketing (via Local MCP).
+- **Local MCP Server (`adk_agent/mcp_server/`):** Decoupled Model Context Protocol tool server exposing 10 security, vision, and ticketing tools over standard I/O (`stdio`) to ADK sub-agents and external clients.
 - **Threat Detector (`adk_agent/threat_detector.py`):** Scheduled micro-batch Cloud Run Job scanning BigQuery for newly emerging threat events and triggering agent investigations.
 - **Synthetic Log Generator (`src/demo/data_generator/`):** Generates access and network logs with ad-hoc threat injection.
 - **Data Engineering Pipelines (`src/demo/data_pipeline/`):** Ingestion pipelines, GCS loader, and BigQuery Continuous Queries.
@@ -26,7 +27,12 @@ The project features an end-to-end near real-time cybersecurity threat detection
 /workspaces/Google/
 ├── adk_agent/                      # Canonical ADK Multi-Agent package
 │   ├── agent.py                    # Multi-agent orchestrator & 4 sub-agents
-│   ├── tools.py                    # Tools (BigQuery, OSINT, Vision OCR, SOC ticketing)
+│   ├── tools.py                    # Legacy tool implementations & compatibility facade
+│   ├── mcp_server/                 # Local Model Context Protocol (MCP) server
+│   │   ├── __init__.py             # Package init and server factory
+│   │   ├── __main__.py             # stdio/SSE execution entrypoint
+│   │   ├── server.py               # MCPServer instance & tool registrations
+│   │   └── tools/                  # Modular tool providers (BigQuery, Vision, SOC)
 │   ├── threat_detector.py          # Scheduled micro-batch detector Cloud Run Job
 │   ├── logging_utils.py            # Structured logging utilities
 │   ├── fast_api_app.py             # FastAPI backend server (webhook + A2A)
@@ -50,6 +56,8 @@ The project features an end-to-end near real-time cybersecurity threat detection
 ├── pytest.ini                      # Pytest runner configuration
 ├── .env.example                    # Template environment variables
 ├── .env                            # Local environment variables (not committed)
+├── DEPLOYMENT.md                   # Cloud deployment, operations, and FinOps runbook
+├── CLOUD_SECURITY.md               # IAM architecture and least-privilege security baseline
 ├── GEMINI.md                       # Workspace guidance and agent instructions
 └── README.md                       # Project documentation
 ```
