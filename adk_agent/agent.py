@@ -286,6 +286,23 @@ def sync_mcp_security_state_callback(
     return None
 
 
+def mcp_tool_error_callback(
+    tool: BaseTool,
+    args: dict[str, Any],
+    tool_context: ToolContext,
+    error: Exception,
+) -> dict[str, Any]:
+    """
+    Converts an exception raised by an MCP tool into an error response.
+
+    ADK runs after_tool_callback on the response returned here, so the state sync sees
+    the error and evidence tools fail closed with evidence_unavailable. Only reached if
+    ADK's graceful MCP error handling lets the exception propagate.
+    """
+    log_agent_event(f"MCP tool {getattr(tool, 'name', '')} raised: {error}")
+    return {"error": f"MCP tool execution failed: {error}"}
+
+
 class ScopedMcpToolset(McpToolset):
     """Scoped MCP toolset exposing designated tools over stdio JSON-RPC."""
 
@@ -298,33 +315,6 @@ class ScopedMcpToolset(McpToolset):
         if isinstance(self.tool_filter, list) and len(self.tool_filter) == 1:
             return self.tool_filter[0]
         return self._toolset_name
-
-    async def get_tools(self, readonly_context: Any = None) -> list[BaseTool]:
-        tools = await super().get_tools(readonly_context)
-        for t in tools:
-            orig_run_async = t.run_async
-
-            async def _wrapped_run_async(
-                *,
-                args: dict[str, Any],
-                tool_context: ToolContext,
-                _orig=orig_run_async,
-                _tool=t,
-            ) -> Any:
-                try:
-                    res = await _orig(args=args, tool_context=tool_context)
-                except Exception as e:
-                    # Reached only if ADK lets the exception propagate (graceful MCP
-                    # error handling disabled); convert it so the callback fails closed.
-                    log_agent_event(f"MCP tool {_tool.name} raised: {e}")
-                    res = {"error": f"MCP tool execution failed: {e}"}
-                sync_mcp_security_state_callback(
-                    tool=_tool, args=args, tool_context=tool_context, tool_response=res
-                )
-                return res
-
-            t.run_async = _wrapped_run_async
-        return tools
 
 
 def create_mcp_toolset(
@@ -694,6 +684,7 @@ bq_investigation_agent = Agent(
     before_agent_callback=before_sub_agent_starts,
     after_agent_callback=log_agent_completion,
     after_tool_callback=sync_mcp_security_state_callback,
+    on_tool_error_callback=mcp_tool_error_callback,
 )
 
 
@@ -739,6 +730,7 @@ visual_analysis_agent = Agent(
     before_agent_callback=before_sub_agent_starts,
     after_agent_callback=log_agent_completion,
     after_tool_callback=sync_mcp_security_state_callback,
+    on_tool_error_callback=mcp_tool_error_callback,
 )
 
 
@@ -805,6 +797,7 @@ soc_ticketing_agent = Agent(
     before_agent_callback=before_sub_agent_starts,
     after_agent_callback=default_deny_soc_callback,
     after_tool_callback=sync_mcp_security_state_callback,
+    on_tool_error_callback=mcp_tool_error_callback,
 )
 
 

@@ -142,10 +142,9 @@ async def test_timed_out_evidence_tool_blocks_false_positive():
         ctx = _ctx({"telemetry_evidence_collected": True})
 
         start = time.monotonic()
-        await tools[0].run_async(
-            args={"gcs_uri": f"gs://{SCREENSHOTS_BUCKET}/u.lewis.png"},
-            tool_context=ctx,
-        )
+        args = {"gcs_uri": f"gs://{SCREENSHOTS_BUCKET}/u.lewis.png"}
+        res = await tools[0].run_async(args=args, tool_context=ctx)
+        sync_mcp_security_state_callback(tools[0], args, ctx, res)
         assert time.monotonic() - start < 9  # timed out, did not wait for the tool
 
         assert ctx.state.get("evidence_unavailable") is True

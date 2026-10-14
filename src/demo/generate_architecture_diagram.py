@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-OUTPUT_DIR = Path("/workspaces/Google/src/demo")
+OUTPUT_DIR = Path(__file__).resolve().parent
 SVG_PATH = OUTPUT_DIR / "system_architecture.svg"
 PNG_PATH = OUTPUT_DIR / "system_architecture.png"
 

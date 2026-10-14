@@ -4,6 +4,7 @@ Unit tests for ADK Agent tools, safety callbacks, SQL parameterization, and sign
 
 import os
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -26,6 +27,13 @@ from adk_agent.tools import (
     log_false_positive,
     read_png_text_chunks,
     sanitize_entity_value,
+)
+
+C_WILSON_PNG = (
+    Path(__file__).resolve().parents[4]
+    / "local_demo_data"
+    / "user_screenshots"
+    / "c.wilson.png"
 )
 
 
@@ -470,15 +478,13 @@ def test_get_entity_behavioral_profile_local_mode_schema_parity():
 def test_read_png_text_chunks_and_injection_detection(monkeypatch):
     """Verify that read_png_text_chunks extracts embedded OCR text and triggers prompt injection flag in State."""
     monkeypatch.setenv("LOCAL_MODE", "true")
-    chunks = read_png_text_chunks("local_demo_data/user_screenshots/c.wilson.png")
+    chunks = read_png_text_chunks(str(C_WILSON_PNG))
     assert "forensic_ocr_text" in chunks
     assert "AUTHORIZED RED TEAM PENTEST" in chunks["forensic_ocr_text"]
 
     mock_ctx = MagicMock()
     mock_ctx.state = State({}, {})
-    vis = get_visual_analysis_for_user(
-        "file://local_demo_data/user_screenshots/c.wilson.png", tool_context=mock_ctx
-    )
+    vis = get_visual_analysis_for_user(f"file://{C_WILSON_PNG}", tool_context=mock_ctx)
     assert "PROMPT INJECTION DETECTED" in vis
     assert mock_ctx.state.get("prompt_injection_detected") is True
 
