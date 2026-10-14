@@ -11,10 +11,13 @@ import pytest
 from google.adk.sessions.state import State
 
 from adk_agent.agent import (
-    create_mcp_tool,
+    bq_investigation_agent,
+    create_mcp_toolset,
     default_deny_soc_callback,
     security_gate_callback,
+    soc_ticketing_agent,
     sync_mcp_security_state_callback,
+    visual_analysis_agent,
 )
 from adk_agent.mcp_server.server import mcp_server
 from src.demo.data_generator.log_generator import SyntheticLogEngine
@@ -23,15 +26,13 @@ from src.demo.data_generator.sinks import LocalSink
 
 @pytest.mark.asyncio
 async def test_mcp_server_initialization_and_tool_registration():
-    """Verify that mcp_server initializes properly and registers all 10 tools."""
+    """Verify that mcp_server initializes properly and registers exactly the 8 investigation tools."""
     assert mcp_server.name == "cymbal-cyber-mcp"
     tools = await mcp_server.list_tools()
     tool_names = {t.name for t in tools}
 
     expected_tools = {
         "get_entity_behavioral_profile",
-        "execute_sql",
-        "get_table_schema",
         "get_visual_analysis_for_user",
         "get_gcs_uri_for_user",
         "generate_signed_url",
@@ -40,7 +41,63 @@ async def test_mcp_server_initialization_and_tool_registration():
         "log_false_positive",
         "escalate_to_human",
     }
-    assert expected_tools.issubset(tool_names)
+    assert tool_names == expected_tools
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_exposes_no_free_form_sql_tools():
+    """Regression guard: an MCP client connecting without a tool_filter must not get
+    arbitrary SQL execution or cross-dataset schema discovery."""
+    tool_names = {t.name for t in await mcp_server.list_tools()}
+    assert "execute_sql" not in tool_names
+    assert "get_table_schema" not in tool_names
+
+
+def test_each_agent_uses_a_single_scoped_mcp_toolset():
+    """Each MCP-backed agent shares one MCP server process across its tools, and its
+    tool_filter is exactly that agent's allow-list."""
+    expected = [
+        (bq_investigation_agent, ["get_entity_behavioral_profile"]),
+        (
+            visual_analysis_agent,
+            [
+                "get_visual_analysis_for_user",
+                "get_gcs_uri_for_user",
+                "generate_signed_url",
+            ],
+        ),
+        (
+            soc_ticketing_agent,
+            [
+                "dispatch_to_soc_ticketing_system",
+                "log_false_positive",
+                "create_rich_ticket_id",
+                "generate_signed_url",
+                "escalate_to_human",
+            ],
+        ),
+    ]
+    for agent, tool_names in expected:
+        assert len(agent.tools) == 1, agent.name
+        assert agent.tools[0].tool_filter == tool_names
+
+
+@pytest.mark.asyncio
+async def test_multi_tool_toolset_only_lists_filtered_tools(monkeypatch):
+    """A multi-tool toolset exposes only its filtered tools from the shared server process."""
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    toolset = create_mcp_toolset(
+        ["create_rich_ticket_id", "generate_signed_url"], toolset_name="test_mcp"
+    )
+    try:
+        assert toolset.name == "test_mcp"
+        tools = await toolset.get_tools()
+        assert sorted(t.name for t in tools) == [
+            "create_rich_ticket_id",
+            "generate_signed_url",
+        ]
+    finally:
+        await toolset.close()
 
 
 @pytest.mark.asyncio
@@ -61,46 +118,6 @@ async def test_mcp_server_call_get_entity_behavioral_profile(monkeypatch):
     metrics = json.loads(content_text)
     assert "total_access_events_24h" in metrics
     assert "total_login_failures_24h" in metrics
-
-
-@pytest.mark.asyncio
-async def test_mcp_server_call_execute_sql_sandboxed(monkeypatch):
-    """Verify executing sandboxed read-only SQL via MCP server."""
-    monkeypatch.setenv("LOCAL_MODE", "true")
-    res = await mcp_server.call_tool(
-        "execute_sql",
-        {"query": "SELECT * FROM `user_access_events` LIMIT 5"},
-    )
-    assert not res.is_error
-    content_text = res.content[0].text
-    assert "LOCAL_SIMULATION_SUCCESS" in content_text
-
-
-@pytest.mark.asyncio
-async def test_mcp_server_call_execute_sql_blocks_destructive(monkeypatch):
-    """Verify that destructive SQL operations are blocked by MCP server tool execution."""
-    monkeypatch.setenv("LOCAL_MODE", "true")
-    res = await mcp_server.call_tool(
-        "execute_sql",
-        {"query": "DROP TABLE user_access_events"},
-    )
-    assert not res.is_error
-    content_text = res.content[0].text
-    assert "Tool execution was blocked" in content_text
-    assert "Destructive SQL operation 'DROP' is strictly forbidden" in content_text
-
-
-@pytest.mark.asyncio
-async def test_mcp_server_call_get_table_schema(monkeypatch):
-    """Verify table schema discovery tool over MCP."""
-    monkeypatch.setenv("LOCAL_MODE", "true")
-    res = await mcp_server.call_tool(
-        "get_table_schema",
-        {"dataset_id": "Cymbal_Cyber", "table_id": "user_access_events"},
-    )
-    assert not res.is_error
-    content_text = res.content[0].text
-    assert "LOCAL_SIMULATION" in content_text
 
 
 @pytest.mark.asyncio
@@ -159,7 +176,7 @@ async def test_mcp_tool_updates_real_adk_state_on_visual_prompt_injection():
     populates prompt_injection_detected in a real ADK State object, enabling security_gate_callback
     to deterministically block log_false_positive.
     """
-    toolset = create_mcp_tool("get_visual_analysis_for_user")
+    toolset = create_mcp_toolset(["get_visual_analysis_for_user"])
     tools = await toolset.get_tools()
     assert len(tools) == 1
     tool = tools[0]
@@ -195,7 +212,7 @@ async def test_mcp_tool_updates_real_adk_state_on_ticket_dispatch(monkeypatch):
     from falsely triggering AUTO_ESCALATED_DEFAULT_DENY.
     """
     monkeypatch.setenv("LOCAL_MODE", "true")
-    toolset = create_mcp_tool("dispatch_to_soc_ticketing_system")
+    toolset = create_mcp_toolset(["dispatch_to_soc_ticketing_system"])
     tools = await toolset.get_tools()
     assert len(tools) == 1
     tool = tools[0]
@@ -244,7 +261,7 @@ async def test_mcp_tool_updates_real_adk_state_on_false_positive(monkeypatch):
     alerts to complete without spurious default-deny auto-escalation.
     """
     monkeypatch.setenv("LOCAL_MODE", "true")
-    toolset = create_mcp_tool("log_false_positive")
+    toolset = create_mcp_toolset(["log_false_positive"])
     tools = await toolset.get_tools()
     assert len(tools) == 1
     tool = tools[0]
@@ -303,7 +320,7 @@ async def test_mcp_tool_updates_real_adk_state_on_behavioral_telemetry(
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("PYTHONPATH", raising=False)
     monkeypatch.setenv("LOCAL_MODE", "true")
-    toolset = create_mcp_tool("get_entity_behavioral_profile")
+    toolset = create_mcp_toolset(["get_entity_behavioral_profile"])
     tools = await toolset.get_tools()
     assert len(tools) == 1
     tool = tools[0]

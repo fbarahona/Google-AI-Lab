@@ -107,18 +107,16 @@ When an anomaly triggers, the **ADK Orchestrator** assigns the investigation to 
 The agent tooling layer is decoupled from the core orchestrator into an independent **Local Model Context Protocol (MCP)** server ([`adk_agent/mcp_server/`](file:///workspaces/Google/adk_agent/mcp_server/)). 
 
 ### Why MCP?
-- **Subprocess Isolation:** Heavy database SDKs, image processors, and network clients run in an isolated process over standard I/O (`stdio`), preventing crashes or memory leaks from destabilizing the orchestrator.
-- **Least-Privilege Tool Scoping:** Sub-agents only connect to tools explicitly authorized for their role via `ScopedMcpToolset` (e.g., the BigQuery agent cannot access signed URL generators; the Vision agent cannot modify ticket queues).
-- **AST SQL Safety Gates:** The `execute_sql` tool parses queries via SQLGlot AST analysis to strictly enforce read-only execution (blocking `INSERT`, `UPDATE`, `DROP`, `DELETE`, `ALTER`) and enforces a 1 GB dry-run scan limit.
+- **Subprocess Isolation:** Heavy database SDKs, image processors, and network clients run in an isolated process over standard I/O (`stdio`), preventing crashes or memory leaks from destabilizing the orchestrator. Each MCP-backed sub-agent gets one server process (three in total), not one per tool.
+- **Least-Privilege Tool Scoping:** Each sub-agent connects through one `ScopedMcpToolset` whose `tool_filter` lists only the tools authorized for its role (e.g., the BigQuery agent cannot access signed URL generators; the Vision agent cannot modify ticket queues).
+- **No Free-Form SQL:** The server exposes only fixed, parameterized operations. There is no `execute_sql` or schema-discovery tool, so a client that connects without a `tool_filter` still cannot run arbitrary queries. Every BigQuery job the tools run carries a `maximum_bytes_billed` ceiling (1 GB default, `BQ_MAX_BYTES_BILLED`).
 - **Cross-Client Interoperability:** Because the server implements standard MCP, external AI environments (Cursor, Windsurf, Claude Desktop, Gemini Enterprise) can query the exact same security tool catalog directly.
 
-### Registered Tool Domains (10 Tools)
+### Registered Tool Domains (8 Tools)
 
 | Domain | Tool Name | Purpose & Security Enforcement |
 | :--- | :--- | :--- |
 | **BigQuery Telemetry** | `get_entity_behavioral_profile` | Aggregates 24-hour behavioral baseline for user/IP. |
-| | `execute_sql` | Read-only SQL executor with AST parser validation & 1 GB dry-run ceiling. |
-| | `get_table_schema` | Inspects schema, partition columns, and types for incident tables. |
 | **Multimodal Vision** | `get_visual_analysis_for_user` | Runs Gemini multimodal OCR on desktop screenshot evidence. |
 | | `get_gcs_uri_for_user` | Resolves Cloud Storage URI (`gs://...`) for user desktop captures. |
 | | `generate_signed_url` | Generates short-lived V4 signed URLs for analyst inspection without exposing public buckets. |
@@ -210,7 +208,7 @@ The agent tooling layer is decoupled from the core orchestrator into an independ
 │   ├── mcp_server/                 # Local Model Context Protocol (MCP) Server
 │   │   ├── __init__.py             # Package initialization & factory
 │   │   ├── __main__.py             # stdio/SSE CLI execution entrypoint
-│   │   ├── server.py               # MCPServer("cymbal-cyber-mcp") & 10 security tools
+│   │   ├── server.py               # MCPServer("cymbal-cyber-mcp") & 8 security tools
 │   │   └── tools/                  # Modular tool providers (BigQuery, Vision, SOC)
 │   ├── threat_detector.py          # Scheduled micro-batch detector (Cloud Run Job)
 │   ├── logging_utils.py            # Structured logging utilities
