@@ -175,9 +175,9 @@ In legacy multi-agent setups, BigQuery required an external Cloud Resource conne
 
 ### Local MCP Security Architecture & Controls:
 The Local MCP server operates over standard I/O (`stdio`) or Server-Sent Events (`sse`), enforcing rigorous runtime guardrails:
-- **Least-Privilege Tool Scoping:** Sub-agents only connect to tools explicitly bound to their role via `create_mcp_tool(name)` / `ScopedMcpToolset`. The BigQuery agent cannot access GCS signed URLs, and the Vision agent cannot modify ticket queues.
-- **AST-Based SQL Validation (`execute_sql`):** Uses SQLGlot AST analysis to strictly restrict analyst queries to read-only `SELECT` statements. Any DDL or DML statements (`DROP`, `DELETE`, `UPDATE`, `INSERT`, `ALTER`, `CREATE`) are intercepted and rejected prior to BigQuery execution.
-- **Dry-Run Query Ceilings:** Automatically performs a BigQuery dry-run to validate syntax and estimate bytes processed, enforcing a maximum scan ceiling of 1 GB to avoid inadvertent data scans and runaway costs.
+- **Least-Privilege Tool Scoping:** Sub-agents only connect to tools explicitly bound to their role via `create_mcp_toolset([...])` / `ScopedMcpToolset`: one MCP server process per sub-agent, with a `tool_filter` allow-list of that agent's tools. The BigQuery agent cannot access GCS signed URLs, and the Vision agent cannot modify ticket queues.
+- **No Free-Form SQL Surface:** The server exposes no `execute_sql` or schema-discovery tool. Agents and any other MCP client can only call fixed, parameterized investigation and ticketing operations, with entity values validated against an allow-list pattern before they reach a query.
+- **Scan Ceilings:** Every BigQuery job issued by the tools sets `maximum_bytes_billed` (1 GB default, configurable via `BQ_MAX_BYTES_BILLED`), so a query that would scan more fails instead of running. The event tables are day-partitioned for pruning but do not set `require_partition_filter`; the byte ceiling is the cost guardrail.
 - **Native Grounding Preservation:** `google_search_agent` retains the native ADK `google_search` tool for search-grounded OSINT without proxying external queries through third-party protocols.
 
 ---

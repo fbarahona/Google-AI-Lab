@@ -207,11 +207,15 @@ def sync_mcp_security_state_callback(
 class ScopedMcpToolset(McpToolset):
     """Scoped MCP toolset exposing designated tools over stdio JSON-RPC."""
 
+    def __init__(self, *args: Any, toolset_name: str = "mcp_toolset", **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        self._toolset_name = toolset_name
+
     @property
     def name(self) -> str:
         if isinstance(self.tool_filter, list) and len(self.tool_filter) == 1:
             return self.tool_filter[0]
-        return "mcp_toolset"
+        return self._toolset_name
 
     async def get_tools(self, readonly_context: Any = None) -> list[BaseTool]:
         tools = await super().get_tools(readonly_context)
@@ -235,8 +239,13 @@ class ScopedMcpToolset(McpToolset):
         return tools
 
 
-def create_mcp_tool(tool_name: str) -> ScopedMcpToolset:
-    """Helper to instantiate a scoped MCP tool connected to the local MCP server."""
+def create_mcp_toolset(
+    tool_names: list[str], toolset_name: str = "mcp_toolset"
+) -> ScopedMcpToolset:
+    """
+    Instantiates one MCP toolset (one MCP server process) scoped to an agent's tools.
+    The tool_filter is the agent's allow-list: tools not named here are never exposed to it.
+    """
     env = dict(os.environ)
     if "PYTHONPATH" not in env:
         env["PYTHONPATH"] = (
@@ -253,7 +262,11 @@ def create_mcp_tool(tool_name: str) -> ScopedMcpToolset:
             env=env,
         )
     )
-    return ScopedMcpToolset(connection_params=params, tool_filter=[tool_name])
+    return ScopedMcpToolset(
+        connection_params=params,
+        tool_filter=list(tool_names),
+        toolset_name=toolset_name,
+    )
 
 
 # --- Initialize BigQuery Analytics Plugin ---
@@ -548,7 +561,7 @@ bq_investigation_agent = Agent(
     3. Summarize your findings into clear behavioral risk indicators and conclude whether telemetry confirms an anomaly or indicates benign activity.
     """,
     output_key="bigquery_investigation_results",
-    tools=[create_mcp_tool("get_entity_behavioral_profile")],
+    tools=[create_mcp_toolset(["get_entity_behavioral_profile"])],
     before_agent_callback=before_sub_agent_starts,
     after_agent_callback=log_agent_completion,
     after_tool_callback=sync_mcp_security_state_callback,
@@ -585,9 +598,14 @@ visual_analysis_agent = Agent(
     """,
     output_key="visual_analysis_results",
     tools=[
-        create_mcp_tool("get_visual_analysis_for_user"),
-        create_mcp_tool("get_gcs_uri_for_user"),
-        create_mcp_tool("generate_signed_url"),
+        create_mcp_toolset(
+            [
+                "get_visual_analysis_for_user",
+                "get_gcs_uri_for_user",
+                "generate_signed_url",
+            ],
+            toolset_name="visual_analysis_mcp",
+        ),
     ],
     before_agent_callback=before_sub_agent_starts,
     after_agent_callback=log_agent_completion,
@@ -637,11 +655,16 @@ soc_ticketing_agent = Agent(
     - No conversational banter. Your primary action must be invoking the correct resolution tool.
     """,
     tools=[
-        create_mcp_tool("dispatch_to_soc_ticketing_system"),
-        create_mcp_tool("log_false_positive"),
-        create_mcp_tool("create_rich_ticket_id"),
-        create_mcp_tool("generate_signed_url"),
-        create_mcp_tool("escalate_to_human"),
+        create_mcp_toolset(
+            [
+                "dispatch_to_soc_ticketing_system",
+                "log_false_positive",
+                "create_rich_ticket_id",
+                "generate_signed_url",
+                "escalate_to_human",
+            ],
+            toolset_name="soc_ticketing_mcp",
+        ),
     ],
     before_tool_callback=security_gate_callback,
     before_agent_callback=before_sub_agent_starts,
