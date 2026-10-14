@@ -165,7 +165,7 @@ PYTHONPATH=src uv run python -m demo.data_generator.log_generator --mode threat 
 
 ### 2. Data Pipelines to BigQuery (`src/demo/data_pipeline/`)
 - **Pub/Sub to BigQuery Direct Subscriptions [Default]:** Direct table ingestion configured in Terraform (`raw_access_to_bq` & `raw_network_to_bq`) using table schemas (`use_table_schema = true`, `drop_unknown_fields = true`) and filtered by `attributes.event_family` (`access` and `network`). Provides serverless, zero-compute-cost streaming ingestion directly into `user_access_events` and `network_events`.
-- **Scheduled Threat Detector (Cloud Run Job) [Default]:** [`adk_agent/threat_detector.py`](/workspaces/Google/adk_agent/threat_detector.py)
+- **Scheduled Threat Detector (Cloud Run Job) [Default]:** [`adk_agent/threat_detector.py`](../../adk_agent/threat_detector.py)
   Scheduled micro-batch detector triggered every 5 minutes by Cloud Scheduler. Evaluates 2-minute tumbling windows closed >60s ago via idempotent BigQuery `MERGE`, publishing alert contract JSON to Pub/Sub with $0 continuous slot reservation cost (alert latency ~5 to 7 minutes with late-data allowance).
 - **Pub/Sub to BigQuery Dataflow Streaming Pipeline [Optional / Benchmark Only]:** [`data_pipeline/pubsub_to_bigquery_dataflow.py`](data_pipeline/pubsub_to_bigquery_dataflow.py)
   Apache Beam pipeline streaming from `cymbal_cyber_raw_logs` into BigQuery tables. Optional custom ETL alternative; gated off by default to avoid streaming VM charges. (Do not run concurrently with direct subscriptions to prevent duplicate rows).

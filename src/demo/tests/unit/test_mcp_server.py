@@ -5,6 +5,7 @@ Validates tool registration, JSON-RPC schemas, and tool execution over MCP.
 """
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -22,6 +23,16 @@ from adk_agent.agent import (
 from adk_agent.mcp_server.server import mcp_server
 from src.demo.data_generator.log_generator import SyntheticLogEngine
 from src.demo.data_generator.sinks import LocalSink
+
+REPO_ROOT = Path(__file__).resolve().parents[4]
+C_WILSON_PNG = REPO_ROOT / "local_demo_data" / "user_screenshots" / "c.wilson.png"
+
+
+async def _run_mcp_tool(tool, *, args: dict, tool_context):
+    """Runs an MCP tool the way an ADK agent does: the call, then after_tool_callback."""
+    res = await tool.run_async(args=args, tool_context=tool_context)
+    sync_mcp_security_state_callback(tool, args, tool_context, res)
+    return res
 
 
 @pytest.mark.asyncio
@@ -188,8 +199,11 @@ async def test_mcp_tool_updates_real_adk_state_on_visual_prompt_injection(monkey
     mock_ctx.state = real_state
 
     # c.wilson screenshot contains active prompt injection attempting to coerce triage to FALSE_POSITIVE
-    screenshot_uri = "file:///workspaces/Google/src/demo/user_screenshots/c.wilson.png"
-    res = await tool.run_async(args={"gcs_uri": screenshot_uri}, tool_context=mock_ctx)
+    assert C_WILSON_PNG.exists()
+    screenshot_uri = f"file://{C_WILSON_PNG}"
+    res = await _run_mcp_tool(
+        tool, args={"gcs_uri": screenshot_uri}, tool_context=mock_ctx
+    )
     assert res is not None
 
     # Assert the flag was written to the real ADK State over the MCP boundary
@@ -223,7 +237,8 @@ async def test_mcp_tool_updates_real_adk_state_on_ticket_dispatch(monkeypatch):
     real_state = State({}, {})
     mock_ctx.state = real_state
 
-    res = await tool.run_async(
+    res = await _run_mcp_tool(
+        tool,
         args={
             "ticket_id": "SOC-TICKET-TEST-MCP-1",
             "alert_payload": json.dumps(
@@ -272,7 +287,8 @@ async def test_mcp_tool_updates_real_adk_state_on_false_positive(monkeypatch):
     real_state = State({}, {})
     mock_ctx.state = real_state
 
-    res = await tool.run_async(
+    res = await _run_mcp_tool(
+        tool,
         args={
             "alert_payload": json.dumps(
                 {
@@ -331,7 +347,8 @@ async def test_mcp_tool_updates_real_adk_state_on_behavioral_telemetry(
     real_state = State({}, {})
     mock_ctx.state = real_state
 
-    res = await tool.run_async(
+    res = await _run_mcp_tool(
+        tool,
         args={"entity_type": "user", "entity_id": "u.lewis"},
         tool_context=mock_ctx,
     )
