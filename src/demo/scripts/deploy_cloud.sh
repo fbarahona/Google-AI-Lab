@@ -54,11 +54,17 @@ else
   echo "GEMINI_API_KEY detected and will be injected into Cloud Run."
 fi
 
-# Ensure Terraform uses the active gcloud authentication token, preventing "invalid token JSON from metadata: EOF"
-if command -v gcloud >/dev/null 2>&1; then
-  ACTIVE_OAUTH_TOKEN="$(gcloud auth print-access-token 2>/dev/null || true)"
-  if [ -n "${ACTIVE_OAUTH_TOKEN}" ]; then
-    export GOOGLE_OAUTH_ACCESS_TOKEN="${ACTIVE_OAUTH_TOKEN}"
+# Terraform authenticates with Application Default Credentials, which the provider refreshes
+# itself. A static GOOGLE_OAUTH_ACCESS_TOKEN would take precedence and expire after about an
+# hour, failing long applies partway, so never pass one through.
+unset GOOGLE_OAUTH_ACCESS_TOKEN
+if command -v terraform >/dev/null 2>&1 && command -v gcloud >/dev/null 2>&1; then
+  if ! gcloud auth application-default print-access-token >/dev/null 2>&1; then
+    echo "Error: Application Default Credentials are not set up for Terraform."
+    echo "Run once (and again after rebuilding the devcontainer unless gcloud config is mounted):"
+    echo "  gcloud auth application-default login"
+    echo "  gcloud auth application-default set-quota-project ${PROJECT_ID}"
+    exit 1
   fi
 fi
 
@@ -84,7 +90,26 @@ if command -v gcloud >/dev/null 2>&1; then
 fi
 
 ARTIFACT_REPO="${ARTIFACT_REPO:-cymbal-cyber}"
-IMAGE_TAG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REPO}/cymbal-cyber-agent:latest"
+IMAGE_REPO="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REPO}/cymbal-cyber-agent"
+
+# Tag images with the git commit so every deployed image traces back to its source.
+# A clean checkout reuses an existing image for the same commit (set FORCE_BUILD=true to
+# rebuild); uncommitted changes or no git get a unique tag and always build.
+FORCE_BUILD="${FORCE_BUILD:-false}"
+if GIT_SHA="$(git -C "${REPO_ROOT}" rev-parse --short=12 HEAD 2>/dev/null)"; then
+  if [ -n "$(git -C "${REPO_ROOT}" status --porcelain 2>/dev/null)" ]; then
+    IMAGE_VERSION="${GIT_SHA}-dirty-$(date -u +%Y%m%d%H%M%S)"
+    FORCE_BUILD="true"
+    echo "WARNING: Working tree has uncommitted changes; building image ${IMAGE_VERSION}."
+  else
+    IMAGE_VERSION="${GIT_SHA}"
+  fi
+else
+  IMAGE_VERSION="build-$(date -u +%Y%m%d%H%M%S)"
+  FORCE_BUILD="true"
+  echo "WARNING: Not a git checkout; building image ${IMAGE_VERSION}."
+fi
+IMAGE_TAG="${IMAGE_REPO}:${IMAGE_VERSION}"
 
 # Detect active deploying account to ensure it is granted Artifact Registry writer permissions
 DEPLOYER_MEMBER=""
@@ -110,36 +135,31 @@ if command -v terraform >/dev/null 2>&1 && [ -d "${TERRAFORM_DIR}" ]; then
   echo "================================================================="
   echo "1. Provisioning Artifact Registry repository via Terraform..."
   echo "================================================================="
-  if [ ! -d "${TERRAFORM_DIR}/.terraform" ]; then
-    echo "Initializing Terraform..."
-    terraform -chdir="${TERRAFORM_DIR}" init
+  # State lives in a versioned GCS bucket so it survives devcontainer rebuilds. The bucket
+  # name is passed at init (backend.tf holds no project ID).
+  TF_STATE_BUCKET="${TF_STATE_BUCKET:-${PROJECT_ID}-tfstate}"
+  if command -v gcloud >/dev/null 2>&1 && ! gcloud storage buckets describe "gs://${TF_STATE_BUCKET}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+    echo "Creating Terraform state bucket gs://${TF_STATE_BUCKET}..."
+    gcloud storage buckets create "gs://${TF_STATE_BUCKET}" \
+      --project="${PROJECT_ID}" \
+      --location="${REGION}" \
+      --uniform-bucket-level-access \
+      --public-access-prevention
+    gcloud storage buckets update "gs://${TF_STATE_BUCKET}" --versioning
   fi
 
-  # Ensure the Artifact Registry repository physically exists in GCP first.
-  # This prevents 403 Forbidden errors when Terraform attempts to refresh/read IAM policies on a nonexistent repo.
-  if command -v gcloud >/dev/null 2>&1; then
-    if ! gcloud artifacts repositories describe "${ARTIFACT_REPO}" --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
-      echo "Creating Artifact Registry repository '${ARTIFACT_REPO}' in ${REGION}..."
-      gcloud artifacts repositories create "${ARTIFACT_REPO}" \
-        --repository-format=docker \
-        --location="${REGION}" \
-        --project="${PROJECT_ID}" \
-        --description="Docker repository for Cymbal Cyber agent and detection container images" \
-        --quiet || true
-    fi
+  # Refuse to start from empty remote state while a local state file still holds resources.
+  LOCAL_STATE="${TERRAFORM_DIR}/terraform.tfstate"
+  if [ -s "${LOCAL_STATE}" ] && grep -q '"type"' "${LOCAL_STATE}"; then
+    echo "Error: Found local Terraform state at ${LOCAL_STATE}."
+    echo "Migrate it to the GCS backend once, then move the local file aside:"
+    echo "  terraform -chdir=${TERRAFORM_DIR} init -migrate-state -backend-config=\"bucket=${TF_STATE_BUCKET}\""
+    echo "  mv ${LOCAL_STATE} ${LOCAL_STATE}.migrated"
+    exit 1
   fi
 
-  # Import pre-existing GCP repository into state if not yet tracked
-  if command -v gcloud >/dev/null 2>&1 && gcloud artifacts repositories describe "${ARTIFACT_REPO}" --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
-    if ! terraform -chdir="${TERRAFORM_DIR}" state list 2>/dev/null | grep -q "^google_artifact_registry_repository.agent_repo$"; then
-      echo "Importing existing Artifact Registry repository into Terraform state..."
-      terraform -chdir="${TERRAFORM_DIR}" import \
-        -var="project_id=${PROJECT_ID}" \
-        -var="region=${REGION}" \
-        google_artifact_registry_repository.agent_repo \
-        "projects/${PROJECT_ID}/locations/${REGION}/repositories/${ARTIFACT_REPO}" 2>/dev/null || true
-    fi
-  fi
+  echo "Initializing Terraform (state: gs://${TF_STATE_BUCKET})..."
+  terraform -chdir="${TERRAFORM_DIR}" init -input=false -backend-config="bucket=${TF_STATE_BUCKET}"
 
   # 1a. Ensure repository resource is provisioned and reconciled in Terraform first
   terraform -chdir="${TERRAFORM_DIR}" apply -auto-approve \
@@ -177,9 +197,9 @@ echo "================================================================="
 echo "2. Building and pushing container image: ${IMAGE_TAG}"
 echo "Project: ${PROJECT_ID} | Region: ${REGION}"
 echo "================================================================="
-if [[ "${FORCE_BUILD:-true}" != "true" ]] && command -v gcloud >/dev/null 2>&1 && gcloud artifacts docker images describe "${IMAGE_TAG}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+if [[ "${FORCE_BUILD}" != "true" ]] && command -v gcloud >/dev/null 2>&1 && gcloud artifacts docker images describe "${IMAGE_TAG}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
   echo "Container image already exists in Artifact Registry: ${IMAGE_TAG}"
-  echo "Proceeding with rollout of existing image (FORCE_BUILD=false)..."
+  echo "Reusing the image built for this commit (set FORCE_BUILD=true to rebuild)..."
 elif command -v docker >/dev/null 2>&1; then
   echo "Building and pushing container image with Docker: ${IMAGE_TAG}..."
   docker build -t "${IMAGE_TAG}" -f "${REPO_ROOT}/Dockerfile" "${REPO_ROOT}"
@@ -222,76 +242,17 @@ else
   exit 1
 fi
 
+# :latest is only a convenience pointer to the newest image; nothing deploys from it.
+if command -v gcloud >/dev/null 2>&1; then
+  gcloud artifacts docker tags add "${IMAGE_TAG}" "${IMAGE_REPO}:latest" --quiet >/dev/null 2>&1 || \
+    echo "WARNING: Could not move the :latest tag to ${IMAGE_TAG}."
+fi
+
 # 4. Apply complete Terraform configuration
 if command -v terraform >/dev/null 2>&1 && [ -d "${TERRAFORM_DIR}" ]; then
   echo "================================================================="
   echo "3. Applying complete Terraform configuration: ${TERRAFORM_DIR}"
   echo "================================================================="
-
-  # Pre-import existing GCP resources into Terraform state if created out-of-band to prevent 409 conflicts
-  TF_STATE_LIST="$(terraform -chdir="${TERRAFORM_DIR}" state list 2>/dev/null || true)"
-
-  # Service Accounts
-  for SA_NAME in bq-continuous-query-sa cymbal-adk-agent-sa cymbal-soc-console-sa pubsub-invoker-sa threat-detector-job-sa; do
-    case "${SA_NAME}" in
-      bq-continuous-query-sa) TF_RES="google_service_account.continuous_query_sa" ;;
-      cymbal-adk-agent-sa)    TF_RES="google_service_account.agent_sa" ;;
-      cymbal-soc-console-sa)  TF_RES="google_service_account.soc_console_sa" ;;
-      pubsub-invoker-sa)      TF_RES="google_service_account.invoker_sa" ;;
-      threat-detector-job-sa) TF_RES="google_service_account.detector_sa" ;;
-    esac
-    if ! echo "${TF_STATE_LIST}" | grep -q "^${TF_RES}$"; then
-      if gcloud iam service-accounts describe "${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" --project="${PROJECT_ID}" >/dev/null 2>&1; then
-        echo "Importing existing Service Account ${SA_NAME} into Terraform state..."
-        terraform -chdir="${TERRAFORM_DIR}" import \
-          -var="project_id=${PROJECT_ID}" \
-          -var="region=${REGION}" \
-          "${TF_RES}" "projects/${PROJECT_ID}/serviceAccounts/${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" 2>/dev/null || true
-      fi
-    fi
-  done
-
-  # Storage Buckets
-  for BUCKET_NAME in "cymbal_cyber_adk_staging_bucket_${PROJECT_ID}" "cymbal-cyber-adk-escalations-bucket_${PROJECT_ID}" "cymbal-cyber-screenshots_${PROJECT_ID}" "cymbal-cyber-raw-logs_${PROJECT_ID}"; do
-    case "${BUCKET_NAME}" in
-      "cymbal_cyber_adk_staging_bucket_"*)      TF_RES="google_storage_bucket.adk_staging" ;;
-      "cymbal-cyber-adk-escalations-bucket_"*)  TF_RES="google_storage_bucket.escalations" ;;
-      "cymbal-cyber-screenshots_"*)             TF_RES="google_storage_bucket.screenshots" ;;
-      "cymbal-cyber-raw-logs_"*)                TF_RES="google_storage_bucket.raw_logs" ;;
-    esac
-    if ! echo "${TF_STATE_LIST}" | grep -q "^${TF_RES}$"; then
-      if gcloud storage buckets describe "gs://${BUCKET_NAME}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
-        echo "Importing existing bucket ${BUCKET_NAME} into Terraform state..."
-        terraform -chdir="${TERRAFORM_DIR}" import \
-          -var="project_id=${PROJECT_ID}" \
-          -var="region=${REGION}" \
-          "${TF_RES}" "${BUCKET_NAME}" 2>/dev/null || true
-      fi
-    fi
-  done
-
-  # Cloud Run Service
-  if ! echo "${TF_STATE_LIST}" | grep -q "^google_cloud_run_v2_service.adk_agent_service$"; then
-    if gcloud run services describe cymbal-cyber-adk-agent --project="${PROJECT_ID}" --region="${REGION}" >/dev/null 2>&1; then
-      echo "Importing existing Cloud Run service cymbal-cyber-adk-agent into Terraform state..."
-      terraform -chdir="${TERRAFORM_DIR}" import \
-        -var="project_id=${PROJECT_ID}" \
-        -var="region=${REGION}" \
-        -var="agent_image=${IMAGE_TAG}" \
-        google_cloud_run_v2_service.adk_agent_service "projects/${PROJECT_ID}/locations/${REGION}/services/cymbal-cyber-adk-agent" 2>/dev/null || true
-    fi
-  fi
-
-  if ! echo "${TF_STATE_LIST}" | grep -q "^google_cloud_run_v2_service.soc_console_service$"; then
-    if gcloud run services describe cymbal-cyber-soc-console --project="${PROJECT_ID}" --region="${REGION}" >/dev/null 2>&1; then
-      echo "Importing existing Cloud Run service cymbal-cyber-soc-console into Terraform state..."
-      terraform -chdir="${TERRAFORM_DIR}" import \
-        -var="project_id=${PROJECT_ID}" \
-        -var="region=${REGION}" \
-        -var="agent_image=${IMAGE_TAG}" \
-        google_cloud_run_v2_service.soc_console_service "projects/${PROJECT_ID}/locations/${REGION}/services/cymbal-cyber-soc-console" 2>/dev/null || true
-    fi
-  fi
 
   TF_APPLY_MAX_ATTEMPTS=3
   TF_APPLY_ATTEMPT=1

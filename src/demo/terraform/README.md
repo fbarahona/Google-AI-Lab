@@ -11,26 +11,25 @@ This Terraform module provisions the complete enterprise infrastructure for the 
 
 ---
 
-## State Management: Enterprise Remote Backend vs. Brownfield Discovery
+## State Management: GCS Remote Backend
 
-### 1. Enterprise Remote State Backend (Recommended)
-To prevent "split-brain" state desynchronization across developer devcontainers, Cloud Shell, and CI/CD runners, configure a dedicated Cloud Storage backend with distributed state locking:
+State lives in a versioned Cloud Storage bucket (`backend.tf`), so it survives devcontainer rebuilds and is shared by every machine that deploys. `backend.tf` holds no project ID; the bucket is passed at init:
 
 ```bash
-# 1. Create the dedicated state bucket with object versioning enabled (run once):
-gcloud storage buckets create gs://<PROJECT_ID>-tfstate --project=<PROJECT_ID> --location=us-east1
-gcloud storage buckets update gs://<PROJECT_ID>-tfstate --versioning
-
-# 2. Copy the template and insert your project ID:
-cp backend.tf.example backend.tf
-sed -i "s/<PROJECT_ID>/your-project-id/g" backend.tf
-
-# 3. Initialize Terraform with state migration:
-terraform init -migrate-state
+terraform init -backend-config="bucket=<PROJECT_ID>-tfstate"
 ```
 
-### 2. Brownfield Import Loops (Transitional Discovery)
-If deploying into an existing environment with unmanaged pre-existing resources, the automated deployment script (`./src/demo/scripts/deploy_cloud.sh`) includes idempotent import loops that probe GCP APIs and auto-adopt existing resources into state prior to `terraform apply`.
+`./src/demo/scripts/deploy_cloud.sh` creates the bucket (versioning, uniform access, public access prevention) and runs this init on every deploy. Terraform authenticates with Application Default Credentials (`gcloud auth application-default login`), never a static access token.
+
+### One-time migration from local state
+If `terraform.tfstate` still exists in this directory:
+
+```bash
+terraform init -migrate-state -backend-config="bucket=<PROJECT_ID>-tfstate"
+mv terraform.tfstate terraform.tfstate.migrated
+```
+
+If local state was already lost and resources exist in GCP, run `./src/demo/scripts/tf_adopt_existing.sh <PROJECT_ID> [REGION]` once instead. The deploy script never imports resources.
 
 ---
 
@@ -115,4 +114,4 @@ terraform destroy -var="project_id=<PROJECT_ID>"
 ```
 
 > [!NOTE]
-> By default, destroying this module preserves Google Cloud APIs (`disable_on_destroy = false`) and non-force-destroyed Cloud Storage buckets containing historical data.
+> By default, destroying this module preserves Google Cloud APIs (`disable_on_destroy = false`) and non-force-destroyed Cloud Storage buckets containing historical data.
