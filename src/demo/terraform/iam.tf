@@ -83,12 +83,15 @@ resource "google_project_iam_member" "agent_sa_bq_job_user" {
   member  = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
-# Resource-level BigQuery dataset dataEditor access (queries tables, UDFs, updates triage status and tickets)
-resource "google_bigquery_dataset_iam_member" "agent_sa_bq_editor" {
-  project    = var.project_id
-  dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
-  role       = "roles/bigquery.dataEditor"
-  member     = "serviceAccount:${google_service_account.agent_sa.email}"
+# Resource-level BigQuery dataset READER access (queries event tables, views and UDFs).
+# Writes are limited to the table-level grants below, so the agent cannot modify the
+# raw event tables it investigates. Uses google_bigquery_dataset_access like every
+# other dataset grant here; do not mix in google_bigquery_dataset_iam_* resources.
+resource "google_bigquery_dataset_access" "agent_dataset_reader" {
+  project       = var.project_id
+  dataset_id    = google_bigquery_dataset.cyber_dataset.dataset_id
+  role          = "READER"
+  user_by_email = google_service_account.agent_sa.email
 }
 
 # Table-level least-privilege dataEditor scoped strictly to soc_tickets
@@ -114,6 +117,16 @@ resource "google_bigquery_table_iam_member" "agent_alerts_editor" {
   project    = var.project_id
   dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
   table_id   = google_bigquery_table.alerts.table_id
+  role       = "roles/bigquery.dataEditor"
+  member     = "serviceAccount:${google_service_account.agent_sa.email}"
+}
+
+# Table-level least-privilege dataEditor scoped strictly to agent_events (ADK analytics
+# plugin rows and additive schema upgrades; the plugin's views are disabled)
+resource "google_bigquery_table_iam_member" "agent_agent_events_editor" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
+  table_id   = google_bigquery_table.agent_events.table_id
   role       = "roles/bigquery.dataEditor"
   member     = "serviceAccount:${google_service_account.agent_sa.email}"
 }

@@ -271,7 +271,7 @@ terraform apply -var="project_id=<PROJECT_ID>" -auto-approve
 - **APIs:** BigQuery, Vertex AI, Pub/Sub, Storage, Cloud Run, Dataflow, IAM Credentials, Resource Manager.
 - **IAM:** Least-privilege dedicated service accounts:
   1. `detector_sa` (`threat-detector-job-sa`) **[Default]**: Scheduled Threat Detector Cloud Run Job identity. BigQuery jobUser, dataset READER, table dataEditor on `alerts`, `alerts_dead_letter`, and `soc_tickets`, Pub/Sub alerts topic publisher.
-  2. `agent_sa` (`cymbal-adk-agent-sa`) **[Default]**: Multi-Agent runtime identity. Dataset READER, table dataEditor on `soc_tickets`, `adk_threat_assessment`, and `alerts` (status updates), GCS screenshots viewer, GCS escalations user, self-token-creation for V4 signed URLs.
+  2. `agent_sa` (`cymbal-adk-agent-sa`) **[Default]**: Multi-Agent runtime identity. Dataset READER, table dataEditor on `soc_tickets`, `adk_threat_assessment`, `alerts` (status updates), and `agent_events` (analytics plugin, views disabled), GCS screenshots viewer, GCS escalations user, self-token-creation for V4 signed URLs.
   3. `invoker_sa` (`pubsub-invoker-sa`) **[Default]**: Cloud Run invoker role for authenticated Pub/Sub push notifications.
   4. `pubsub_sa` (`service-<PROJECT_NUMBER>@gcp-sa-pubsub.iam.gserviceaccount.com`) **[Default]**: Google-managed Pub/Sub service agent. Table dataEditor on `user_access_events`, `network_events`, and `alerts_dead_letter`, DLQ topic publisher, and push subscription subscriber.
   5. `continuous_query_sa` (`bq-continuous-query-sa`) **[Optional / Benchmark Only]**: Headless identity running BigQuery Continuous Queries. Dataset READER, Pub/Sub alerts topic publisher.

@@ -33,6 +33,7 @@ from mcp import StdioServerParameters
 try:
     from google.adk.plugins.bigquery_agent_analytics_plugin import (
         BigQueryAgentAnalyticsPlugin,
+        BigQueryLoggerConfig,
     )
 
     HAS_ANALYTICS = True
@@ -324,8 +325,13 @@ def create_mcp_toolset(
 bq_analytics_plugin = None
 if HAS_ANALYTICS and BigQueryAgentAnalyticsPlugin is not None:
     try:
+        # create_views=False: per-event views need dataset-level tables.create, which
+        # the agent SA deliberately lacks (it has dataset READER + table-level writes).
         bq_analytics_plugin = BigQueryAgentAnalyticsPlugin(
-            project_id=PROJECT_ID, dataset_id=DATASET_ID, table_id="agent_events"
+            project_id=PROJECT_ID,
+            dataset_id=DATASET_ID,
+            table_id="agent_events",
+            config=BigQueryLoggerConfig(create_views=False),
         )
     except Exception as e:
         log_agent_event(f"BigQuery analytics plugin initialization note: {e}")
