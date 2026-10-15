@@ -3,7 +3,7 @@
 [![Google Cloud](https://img.shields.io/badge/Google_Cloud-4285F4?style=for-the-badge&logo=google-cloud&logoColor=white)](https://cloud.google.com/)
 [![Google ADK](https://img.shields.io/badge/Google_ADK-Multi--Agent-34A853?style=for-the-badge&logo=google&logoColor=white)](https://adk.dev/)
 [![Gemini 3.8 Flash](https://img.shields.io/badge/Gemini_3.8_Flash-Multimodal-FBBC04?style=for-the-badge&logo=google-gemini&logoColor=black)](https://ai.google.dev/)
-[![Model Context Protocol](https://img.shields.io/badge/MCP-Local_Tool_Server-7B1FA2?style=for-the-badge&logo=protocol&logoColor=white)](https://modelcontextprotocol.io/)
+[![Model Context Protocol](https://img.shields.io/badge/MCP-Cloud_Run_Tool_Service-7B1FA2?style=for-the-badge&logo=protocol&logoColor=white)](https://modelcontextprotocol.io/)
 [![BigQuery](https://img.shields.io/badge/BigQuery-Single_Source_of_Truth-673AB7?style=for-the-badge&logo=google-bigquery&logoColor=white)](https://cloud.google.com/bigquery)
 
 An enterprise reference architecture for real-time cybersecurity threat detection, autonomous multi-agent forensic investigation, and human-in-the-loop Security Operations Center (SOC) triage, built with the **Google Agent Development Kit (ADK)**, **Gemini 3.8 Flash**, the **Model Context Protocol (MCP)**, and **Google Cloud Platform**.
@@ -16,7 +16,7 @@ An enterprise reference architecture for real-time cybersecurity threat detectio
 | :--- | :--- |
 | **Alert Fatigue:** Security analysts are bombarded with hundreds of daily alerts, 70%+ of which turn out to be benign administrative false positives. | **Automated Forensic Synthesis:** Autonomous agents triage alerts instantly, separating genuine APT attacks from benign scripts without human delay. |
 | **Fragmented Evidence:** Investigating a single incident requires querying historical logs, checking external OSINT IP reputation, and examining desktop artifacts across disparate systems, taking **30 to 45 minutes per alert**. | **Multi-Specialist Agent Team:** Specialized ADK agents gather OSINT intelligence, profile 24-hour behavioral baselines in BigQuery, and perform multimodal OCR on desktop evidence in parallel, in **under 30 seconds**. |
-| **Monolithic, Fragile Tooling:** Legacy AI tooling binds database connections and heavy dependencies directly into prompt loops, risking crashes and prompt injection. | **Decoupled Local MCP Server:** Tools run in an independent MCP server over `stdio`, with fixed parameterized queries (no free-form SQL), BigQuery scan ceilings, and least-privilege tool access per agent. |
+| **Monolithic, Fragile Tooling:** Legacy AI tooling binds database connections and heavy dependencies directly into prompt loops, risking crashes and prompt injection. | **MCP Tool Service with Its Own Identity:** Tools run in an independent MCP server, its own Cloud Run service and service account in the cloud (stdio locally), with fixed parameterized queries (no free-form SQL), BigQuery scan ceilings, and least-privilege tool access per agent. The agent's identity cannot read evidence or write tickets; it can only invoke the tool service. |
 
 ---
 
@@ -96,9 +96,9 @@ When an anomaly triggers, the ADK orchestrator (**`SecurityInvestigationOrchestr
    │        InvestigationTeam (Phase 1: run in parallel)      │   │soc_ticketing_    │
    │                                                          │──▶│agent             │
    │ ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │   │(Phase 2)         │
-   │ │google_search_│  │bq_investiga- │  │visual_analy- │     │   │Local MCP stdio:  │
+   │ │google_search_│  │bq_investiga- │  │visual_analy- │     │   │MCP tools:        │
    │ │agent         │  │tion_agent    │  │sis_agent     │     │   │Ticket Dispatch   │
-   │ │Native search │  │Local MCP:    │  │Local MCP:    │     │   └────────┬─────────┘
+   │ │Native search │  │MCP tools:    │  │MCP tools:    │     │   └────────┬─────────┘
    │ │grounding     │  │Behavior query│  │Vision OCR    │     │            │
    │ └──────────────┘  └──────────────┘  └──────────────┘     │            ▼
    └──────────────────────────────────────────────────────────┘   ┌──────────────────┐
@@ -111,24 +111,31 @@ When an anomaly triggers, the ADK orchestrator (**`SecurityInvestigationOrchestr
 | Agent | Role | What it does |
 | :--- | :--- | :--- |
 | `google_search_agent` | External OSINT intelligence | Investigates external public IPs flagged in network telemetry, using native ADK Google Search grounding to correlate them with known threat actors (e.g., Lazarus Group, APT29) and Tor/VPN exit nodes. |
-| `bq_investigation_agent` | Behavioral telemetry profiling | Queries historical access and network logs in BigQuery through the local MCP server, building a 24-hour baseline of login frequency, authentication failures, and privilege anomalies for the user and device. |
+| `bq_investigation_agent` | Behavioral telemetry profiling | Queries historical access and network logs in BigQuery through the MCP tool server, building a 24-hour baseline of login frequency, authentication failures, and privilege anomalies for the user and device. |
 | `visual_analysis_agent` | Multimodal desktop forensics | Retrieves desktop screenshots from Cloud Storage and runs Gemini vision inspection and OCR to extract terminal commands, detecting malicious utilities (e.g., Mimikatz, PowerShell obfuscation, Netcat reverse shells) and prompt injection attempts. |
 | `soc_ticketing_agent` | Synthesis & incident dispatch | Combines all findings into a structured **Security Incident Report**. Benign activity is resolved with audit notes (`log_false_positive`); confirmed malicious activity gets a ticket ID and is dispatched to BigQuery and the SOC queue. |
 
 ---
 
-## 🔌 Local MCP Tool Server
+## 🔌 MCP Tool Server
 
-Agent tools are decoupled from the orchestrator into an independent MCP server, `cymbal-cyber-mcp`, in [`adk_agent/mcp_server/`](adk_agent/mcp_server/). It runs over `stdio` by default and supports SSE with `--sse`.
+Agent tools are decoupled from the orchestrator into an independent MCP server, `cymbal-cyber-mcp`, in [`adk_agent/mcp_server/`](adk_agent/mcp_server/). It has two transports, and the agent picks one from `MCP_SERVER_URL`:
+
+| | Local (`MCP_SERVER_URL` unset) | Cloud (`MCP_SERVER_URL=https://cymbal-cyber-mcp-…/mcp`) |
+| :--- | :--- | :--- |
+| Transport | `stdio`: one child process per MCP-backed sub-agent | Streamable HTTP (stateless, JSON): the `cymbal-cyber-mcp` Cloud Run service |
+| Identity behind the tools | Your ADC / local files | `cymbal-mcp-tools-sa`, its own service account |
+| Authentication | None (a child process) | Google ID token minted by the agent SA for the service URL; Cloud Run IAM checks it, then the server re-checks audience and caller |
 
 ### Why MCP?
 
-- **Subprocess isolation:** Database SDKs, image processors, and network clients run in a separate process, so crashes or memory leaks cannot destabilize the orchestrator. Each MCP-backed sub-agent gets one server process (three in total), not one per tool.
+- **Privilege boundary, not just a code boundary:** In the cloud the tools run as `cymbal-mcp-tools-sa`, which holds the evidence reads (event tables, screenshots), Gemini vision, signed URLs and ticket writes. The agent SA holds none of these: its only grant on the tool service is `roles/run.invoker`, plus its own bookkeeping tables (`alerts`, `agent_events`). Even the default-deny escalation goes through the tool service. A prompt-injected agent can therefore only ask for the fixed operations below, never read or write data directly.
+- **Process isolation:** Database SDKs, image processors, and network clients run outside the orchestrator, so crashes or memory leaks cannot destabilize it. Locally each MCP-backed sub-agent gets one server process (three in total), not one per tool.
 - **Least-privilege tool scoping:** Each sub-agent connects through one `ScopedMcpToolset` whose `tool_filter` lists only the tools its role needs (e.g., the BigQuery agent cannot generate signed URLs, and the vision agent cannot modify ticket queues).
 - **No free-form SQL:** The server exposes only fixed, parameterized operations. There is no `execute_sql` or schema-discovery tool, so a client that connects without a `tool_filter` still cannot run arbitrary queries. Every BigQuery job the tools run carries a `maximum_bytes_billed` ceiling (1 GB default, configurable with `BQ_MAX_BYTES_BILLED`).
-- **Cross-client interoperability:** Because the server speaks standard MCP, other AI clients (Cursor, Windsurf, Claude Desktop, Gemini Enterprise) can use the same security tool catalog.
+- **Cross-client interoperability:** Because the server speaks standard MCP, other AI clients (Cursor, Windsurf, Claude Desktop, Gemini Enterprise) can use the same security tool catalog over stdio. The deployed service admits only the agent's identity.
 
-### Registered tools (8)
+### Registered tools (8 agent tools + 1 platform tool)
 
 | Domain | Tool | Purpose & security enforcement |
 | :--- | :--- | :--- |
@@ -140,8 +147,9 @@ Agent tools are decoupled from the orchestrator into an independent MCP server, 
 | | `log_false_positive` | Closes benign activity as a False Positive and archives it (status RESOLVED, "Auto-closed by agent") so analysts can review it in the Ticket Archive. |
 | | `create_rich_ticket_id` | Generates a unique ticket ID; during an investigation the security gate replaces it with the alert's deterministic ID (`SOC-TICKET-<user>-<hash of alert_id>`). |
 | | `escalate_to_human` | Writes raw forensic payloads to Cloud Storage for senior analyst escalation. |
+| **Platform only** | `auto_escalate_unresolved_alert` | The default-deny guardrail's escalation when the model resolves nothing. No agent's `tool_filter` lists it, so no model is offered it, and the ticket decision (`AUTO_ESCALATED_DEFAULT_DENY`) is fixed server-side. |
 
-See [Cloud Security & IAM Architecture](CLOUD_SECURITY.md#3-decoupled-tool-execution-via-local-model-context-protocol-mcp-server) for the security model behind the server.
+See [Cloud Security & IAM Architecture](CLOUD_SECURITY.md#3-decoupled-tool-execution-via-the-model-context-protocol-mcp-tool-service) for the security model behind the server.
 
 ---
 
@@ -195,11 +203,13 @@ A rendered diagram is also available at [`src/demo/system_architecture.png`](src
                                 │   ADK Multi-Agent Orchestrator  │
                                 │   (Cloud Run Webhook: FastAPI)  │
                                 └────────────────┬────────────────┘
-                                                 │ stdio (JSON-RPC)
+                                                 │ MCP over HTTPS + ID token
+                                                 │ (agent SA: run.invoker only)
                                                  ▼
                                 ┌─────────────────────────────────┐
-                                │   Local MCP Server (`cymbal`)   │
-                                │   (adk_agent/mcp_server/)       │
+                                │ MCP Tool Service (Cloud Run)    │
+                                │ cymbal-cyber-mcp, own SA:       │
+                                │ evidence reads, ticket writes   │
                                 └────────────────┬────────────────┘
                                                  │
                                                  ▼
@@ -227,7 +237,7 @@ A rendered diagram is also available at [`src/demo/system_architecture.png`](src
 ├── adk_agent/                      # ADK multi-agent package (agents-cli agent_directory)
 │   ├── agent.py                    # Orchestrator, parallel investigation team & 4 sub-agents
 │   ├── tools.py                    # Tool implementations & compatibility facade
-│   ├── mcp_server/                 # Local MCP server ("cymbal-cyber-mcp")
+│   ├── mcp_server/                 # MCP tool server ("cymbal-cyber-mcp"): stdio or HTTP
 │   │   ├── __main__.py             # stdio/SSE CLI entrypoint
 │   │   └── server.py               # Server definition & 8 registered tools
 │   ├── threat_detector.py          # Scheduled micro-batch detector (Cloud Run Job)

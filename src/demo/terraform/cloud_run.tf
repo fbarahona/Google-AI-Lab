@@ -1,5 +1,5 @@
 # ==============================================================================
-# CLOUD RUN WORKLOADS: ADK AGENT WEBHOOK SERVICE & THREAT DETECTOR JOB
+# CLOUD RUN WORKLOADS: ADK AGENT WEBHOOK, MCP TOOL SERVICE, THREAT DETECTOR JOB
 # ==============================================================================
 
 # 1. Cloud Run Deployment for ADK Multi-Agent Team
@@ -58,16 +58,18 @@ resource "google_cloud_run_v2_service" "adk_agent_service" {
         value = "false"
       }
       env {
-        name  = "SCREENSHOTS_BUCKET"
-        value = google_storage_bucket.screenshots.name
+        name  = "BIGQUERY_DATASET"
+        value = var.dataset_id
+      }
+      # Every tool runs in the MCP tool service as its own SA; the agent calls it with
+      # ID tokens minted from the agent SA (its only grant there is run.invoker).
+      env {
+        name  = "MCP_SERVER_URL"
+        value = "${local.mcp_service_url}/mcp"
       }
       env {
         name  = "MCP_TOOL_TIMEOUT_SECONDS"
         value = "90"
-      }
-      env {
-        name  = "GCS_SIGNER_SA"
-        value = google_service_account.agent_sa.email
       }
       env {
         name  = "EXPECTED_OIDC_AUDIENCE"
@@ -88,10 +90,107 @@ resource "google_cloud_run_v2_service" "adk_agent_service" {
     ]
   }
 
-  depends_on = [google_project_service.required]
+  depends_on = [
+    google_project_service.required,
+    google_cloud_run_v2_service.mcp_server,
+  ]
 }
 
 # NOTE: Invoker IAM binding (google_cloud_run_v2_service_iam_member.agent_invoker) is centralized in iam.tf
+
+# 1b. MCP Tool Service: the agent's tools as their own Cloud Run service and identity.
+# The agent SA is its only invoker (iam.tf, agent_invokes_mcp), and the server re-checks
+# every request's ID token for that caller and this service's URL as audience.
+resource "google_cloud_run_v2_service" "mcp_server" {
+  name                = "cymbal-cyber-mcp"
+  location            = var.region
+  project             = var.project_id
+  ingress             = "INGRESS_TRAFFIC_ALL"
+  deletion_protection = false
+
+  template {
+    timeout                          = "300s"
+    service_account                  = google_service_account.mcp_sa.email
+    max_instance_request_concurrency = 20
+
+    scaling {
+      min_instance_count = 0
+      max_instance_count = 5
+    }
+
+    containers {
+      image   = var.agent_image != "" ? var.agent_image : "us-docker.pkg.dev/cloudrun/container/hello"
+      command = ["python"]
+      args    = ["-m", "adk_agent.mcp_server", "--http"]
+
+      resources {
+        limits = {
+          cpu    = "1"
+          memory = "1Gi"
+        }
+      }
+
+      env {
+        name  = "PROJECT_ID"
+        value = var.project_id
+      }
+      env {
+        name  = "GOOGLE_CLOUD_PROJECT"
+        value = var.project_id
+      }
+      env {
+        name  = "BIGQUERY_DATASET"
+        value = var.dataset_id
+      }
+      # The vision tool calls Gemini on Vertex AI as the MCP SA (roles/aiplatform.user).
+      env {
+        name  = "GOOGLE_GENAI_USE_VERTEXAI"
+        value = "true"
+      }
+      env {
+        name  = "GOOGLE_CLOUD_LOCATION"
+        value = var.vertex_ai_location
+      }
+      env {
+        name  = "LOCAL_MODE"
+        value = "false"
+      }
+      env {
+        name  = "SCREENSHOTS_BUCKET"
+        value = google_storage_bucket.screenshots.name
+      }
+      env {
+        name  = "ESCALATION_BUCKET"
+        value = google_storage_bucket.escalations.name
+      }
+      env {
+        name  = "GCS_SIGNER_SA"
+        value = google_service_account.mcp_sa.email
+      }
+      env {
+        name  = "MCP_EXPECTED_AUDIENCE"
+        value = local.mcp_service_url
+      }
+      env {
+        name  = "MCP_ALLOWED_CALLER"
+        value = google_service_account.agent_sa.email
+      }
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].containers[0].image,
+      client,
+      client_version,
+    ]
+  }
+
+  depends_on = [
+    google_project_service.required,
+    google_service_account.mcp_sa,
+  ]
+}
 
 # 2. Scheduled Micro-Batch Threat Detector Cloud Run Job
 resource "google_cloud_run_v2_job" "threat_detector" {

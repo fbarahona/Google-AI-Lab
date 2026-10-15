@@ -26,11 +26,11 @@ To execute `./src/demo/scripts/deploy_cloud.sh` or run `terraform apply`, the de
 | Domain | Role ID | Purpose |
 | :--- | :--- | :--- |
 | **Project IAM** | `roles/resourcemanager.projectIamAdmin` | **Required**: Grants project roles (`aiplatform.user`, `bigquery.jobUser`) to workload SAs. |
-| **Service Accounts** | `roles/iam.serviceAccountAdmin` | Creates the workload SAs (`agent-sa`, `console-sa`, `invoker-sa`, `scheduler-sa`, `console-access`, `detector-sa`, and `cq-sa` when continuous queries are on). |
+| **Service Accounts** | `roles/iam.serviceAccountAdmin` | Creates the workload SAs (`agent-sa`, `mcp-tools-sa`, `console-sa`, `invoker-sa`, `scheduler-sa`, `console-access`, `detector-sa`, and `cq-sa` when continuous queries are on). |
 | **Service Account Actor** | `roles/iam.serviceAccountUser` | Authorizes attaching SAs to Cloud Run services and jobs (`actAs`). |
 | **API Management** | `roles/serviceusage.serviceUsageAdmin` | Enables necessary Google Cloud APIs (`gcloud services enable`). |
 | **BigQuery** | `roles/bigquery.admin` | Creates dataset `Cymbal_Cyber`, tables, and SQL routines. |
-| **Cloud Run** | `roles/run.admin` | Deploys container services (`adk-agent`, `soc-console`) and jobs (`threat-detector`). |
+| **Cloud Run** | `roles/run.admin` | Deploys container services (`adk-agent`, `mcp`, `soc-console`) and jobs (`threat-detector`). |
 | **Pub/Sub** | `roles/pubsub.admin` | Creates telemetry topics, DLQ stores, and BigQuery direct subscriptions. |
 | **Cloud Storage** | `roles/storage.admin` | Provisions evidence buckets and configures bucket-level IAM policies. |
 | **Artifact Registry** | `roles/artifactregistry.admin` | Provisions Docker repo `cymbal-cyber` and configures push permissions. |
@@ -137,11 +137,13 @@ cd ../../..
 IMAGE_TAG="${REGION}-docker.pkg.dev/${PROJECT_ID}/cymbal-cyber/cymbal-cyber-agent:$(git rev-parse --short=12 HEAD)"
 gcloud builds submit --project="${PROJECT_ID}" --tag="${IMAGE_TAG}" .
 
-# 4. Deploy Cloud Run Service (ADK Multi-Agent Webhook)
-gcloud run deploy cymbal-cyber-adk-agent \
-  --project="${PROJECT_ID}" \
-  --region="${REGION}" \
-  --image="${IMAGE_TAG}"
+# 4. Roll the image out to the Cloud Run services (MCP tool service first: the agent calls it)
+for service in cymbal-cyber-mcp cymbal-cyber-adk-agent cymbal-cyber-soc-console; do
+  gcloud run services update "${service}" \
+    --project="${PROJECT_ID}" \
+    --region="${REGION}" \
+    --image="${IMAGE_TAG}"
+done
 
 # 5. Deploy Cloud Run Job (Threat Detector Micro-Batch Job)
 gcloud run jobs update threat-detector \
@@ -202,6 +204,15 @@ bq query --use_legacy_sql=false \
 # Step G: The incidents view rolls those windows into one row
 bq query --use_legacy_sql=false \
   "SELECT * FROM \`${PROJECT_ID}.Cymbal_Cyber.incidents\` WHERE user_id = 'u.lewis'"
+
+# Step H: The tools ran in the MCP tool service, as its own identity
+gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="cymbal-cyber-mcp"' \
+  --project="${PROJECT_ID}" --freshness=30m --limit=20 --format='value(timestamp, textPayload)'
+
+# Step I: Nobody but the agent can call the tools (expect 403 from Cloud Run IAM)
+MCP_URL="$(gcloud run services describe cymbal-cyber-mcp --project="${PROJECT_ID}" \
+  --region="${REGION}" --format='value(status.url)')"
+curl -s -o /dev/null -w '%{http_code}\n' -X POST "${MCP_URL}/mcp"
 ```
 
 ---
@@ -238,7 +249,7 @@ The token lasts one hour; restart the proxy to refresh it. `401` means the token
 Open **`http://localhost:8501`** in your browser to view the incident queue, triage tickets, and inspect visual evidence.
 
 #### ADK Agent Web Playground (off by default):
-The cloud agent service serves only the Pub/Sub webhook. The ADK web UI, `/run`, session and A2A APIs, and `/docs` are not routed, because they run investigations as the agent SA without the webhook's OIDC check. For a supervised demo, apply Terraform with `-var="enable_adk_dev_ui=true"`, then:
+The cloud agent service serves only the Pub/Sub webhook. The ADK web UI, `/run`, session and A2A APIs, and `/docs` are not routed, because they run investigations as the agent SA without the webhook's OIDC check. Even then, the playground's tools run in the MCP tool service as its own identity, exactly as in the webhook path. For a supervised demo, apply Terraform with `-var="enable_adk_dev_ui=true"`, then:
 ```bash
 gcloud run services proxy cymbal-cyber-adk-agent \
   --project="${PROJECT_ID}" \

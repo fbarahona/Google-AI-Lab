@@ -16,6 +16,7 @@ import sys
 import warnings
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -25,7 +26,10 @@ from google.adk.agents.callback_context import CallbackContext
 from google.adk.apps import App
 from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.tools import BaseTool, ToolContext, google_search
-from google.adk.tools.mcp_tool.mcp_session_manager import StdioConnectionParams
+from google.adk.tools.mcp_tool.mcp_session_manager import (
+    StdioConnectionParams,
+    StreamableHTTPConnectionParams,
+)
 from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
 from mcp import StdioServerParameters
 
@@ -42,12 +46,7 @@ except Exception:
 
 # --- Local Imports ---
 from adk_agent.logging_utils import log_agent_event, setup_logging
-from adk_agent.tools import (
-    SocTicket,
-    alert_id_from_payload,
-    get_soc_service,
-    ticket_id_for_alert,
-)
+from adk_agent.tools import alert_id_from_payload, ticket_id_for_alert
 
 # The repository root is the one import root (adk_agent and src.demo both resolve
 # from it); MCP server subprocesses get it on PYTHONPATH whatever their working dir.
@@ -71,6 +70,11 @@ os.environ["ADK_ALLOW_CONFIG_STDIO_MCP_SERVERS"] = "true"
 # Per-request MCP timeout. ADK's stdio default is 5s for both connecting and each
 # tool call, which a Gemini vision call or a cold MCP subprocess can exceed.
 MCP_TOOL_TIMEOUT_SECONDS = float(os.getenv("MCP_TOOL_TIMEOUT_SECONDS", "90"))
+
+# Where the tools run. Unset: an MCP server child process over stdio (local dev, tests).
+# Set (the cloud): the MCP tool service on Cloud Run, e.g. https://<service>/mcp, which
+# runs as its own service account; this agent's identity can only invoke it.
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "").strip()
 
 
 # Flags that only tighten the security gate; any MCP tool may raise them.
@@ -288,6 +292,68 @@ class ScopedMcpToolset(McpToolset):
         return self._toolset_name
 
 
+class McpIdTokenProvider:
+    """
+    Authorization headers for the MCP tool service: a Google ID token whose audience is
+    the service URL, minted from this service's own identity (the metadata server on
+    Cloud Run). The token is cached until it nears expiry, so MCP sessions, which ADK
+    pools per header set, are reused for the token's hour instead of reopened per call.
+    """
+
+    def __init__(self, audience: str):
+        self.audience = audience
+        self._credentials = None
+
+    def __call__(self, _readonly_context: Any = None) -> dict[str, str]:
+        if LOCAL_MODE:
+            return {}
+        import google.auth.transport.requests
+        from google.oauth2 import id_token
+
+        request = google.auth.transport.requests.Request()
+        if self._credentials is None:
+            self._credentials = id_token.fetch_id_token_credentials(
+                self.audience, request=request
+            )
+        if not self._credentials.valid:
+            self._credentials.refresh(request)
+        return {"Authorization": f"Bearer {self._credentials.token}"}
+
+
+def mcp_audience(server_url: str) -> str:
+    """Cloud Run accepts ID tokens whose audience is the service's base URL."""
+    parts = urlsplit(server_url)
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+_mcp_header_provider = (
+    McpIdTokenProvider(mcp_audience(MCP_SERVER_URL)) if MCP_SERVER_URL else None
+)
+
+
+def mcp_connection_params(
+    timeout: float | None = None, server_args: list[str] | None = None
+) -> StdioConnectionParams | StreamableHTTPConnectionParams:
+    """Streamable HTTP to MCP_SERVER_URL when set, else a stdio MCP server process."""
+    timeout = timeout or MCP_TOOL_TIMEOUT_SECONDS
+    if MCP_SERVER_URL and not server_args:
+        return StreamableHTTPConnectionParams(
+            url=MCP_SERVER_URL, timeout=timeout, sse_read_timeout=timeout
+        )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        p for p in (str(REPO_ROOT), os.environ.get("PYTHONPATH", "")) if p
+    )
+    return StdioConnectionParams(
+        server_params=StdioServerParameters(
+            command=sys.executable,
+            args=server_args or ["-m", "adk_agent.mcp_server"],
+            env=env,
+        ),
+        timeout=timeout,
+    )
+
+
 def create_mcp_toolset(
     tool_names: list[str],
     toolset_name: str = "mcp_toolset",
@@ -295,27 +361,26 @@ def create_mcp_toolset(
     server_args: list[str] | None = None,
 ) -> ScopedMcpToolset:
     """
-    Instantiates one MCP toolset (one MCP server process) scoped to an agent's tools.
+    Instantiates one MCP toolset (one MCP connection) scoped to an agent's tools.
     The tool_filter is the agent's allow-list: tools not named here are never exposed to it.
     timeout overrides MCP_TOOL_TIMEOUT_SECONDS; server_args lets tests launch a stub server.
     """
-    env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(
-        p for p in (str(REPO_ROOT), os.environ.get("PYTHONPATH", "")) if p
-    )
-    params = StdioConnectionParams(
-        server_params=StdioServerParameters(
-            command=sys.executable,
-            args=server_args or ["-m", "adk_agent.mcp_server"],
-            env=env,
-        ),
-        timeout=timeout or MCP_TOOL_TIMEOUT_SECONDS,
-    )
+    params = mcp_connection_params(timeout=timeout, server_args=server_args)
     return ScopedMcpToolset(
         connection_params=params,
         tool_filter=list(tool_names),
         toolset_name=toolset_name,
+        header_provider=_mcp_header_provider
+        if isinstance(params, StreamableHTTPConnectionParams)
+        else None,
     )
+
+
+# The default-deny callback's own connection to the tool service. Attached to no agent,
+# so no model sees auto_escalate_unresolved_alert.
+default_deny_mcp = create_mcp_toolset(
+    ["auto_escalate_unresolved_alert"], toolset_name="default_deny_mcp"
+)
 
 
 # --- Initialize BigQuery Analytics Plugin ---
@@ -536,12 +601,15 @@ def before_orchestrator_starts(callback_context: CallbackContext):
                 pass
 
 
-def default_deny_soc_callback(callback_context: CallbackContext):
+async def default_deny_soc_callback(callback_context: CallbackContext):
     """
     Default-Deny safety enforcement callback running after soc_ticketing_agent finishes.
     Ensures that every investigated alert has an active adjudication. If the model finished
     without resolving the alert through a permitted tool action (dispatch, escalation, or
     false positive logging), this callback deterministically escalates the alert to human review.
+
+    The ticket is filed through the MCP tool service like every other ticket, so the
+    agent's own identity never writes tickets.
     """
     log_agent_completion(callback_context)
     state = getattr(callback_context, "state", None)
@@ -558,34 +626,47 @@ def default_deny_soc_callback(callback_context: CallbackContext):
         log_agent_event(
             "DEFAULT-DENY ENFORCEMENT: Model finished without invoking a resolution tool. Executing deterministic human escalation."
         )
-        soc_service = get_soc_service()
         user_id = state.get("user_id") or "unresolved_user"
-        ticket_id = ticket_id_for_alert(
-            user_id, state.get("alert_id"), prefix="SOC-TICKET-AUTO-ESCALATED"
-        )
-        ticket = SocTicket(
-            ticket_id=ticket_id,
-            transaction_window_end=state.get("window_end")
-            or state.get("transaction_window_end"),
-            user_id=user_id,
-            device_id=state.get("device_id") or "unknown_device",
-            source_ip=state.get("source_ip") or "unknown_ip",
-            threat_score=state.get("threat_score") or 100,
-            severity="CRITICAL"
+        args = {
+            "ticket_id": ticket_id_for_alert(
+                user_id, state.get("alert_id"), prefix="SOC-TICKET-AUTO-ESCALATED"
+            ),
+            "user_id": user_id,
+            "device_id": state.get("device_id") or "unknown_device",
+            "source_ip": state.get("source_ip") or "unknown_ip",
+            "threat_score": int(state.get("threat_score") or 100),
+            "window_end": str(
+                state.get("window_end") or state.get("transaction_window_end") or ""
+            ),
+            "severity": "CRITICAL"
             if state.get("prompt_injection_detected")
             or state.get("malicious_indicators")
             else "HIGH",
-            status="ESCALATED",
-            agent_decision="AUTO_ESCALATED_DEFAULT_DENY",
-            agent_reason="Deterministic Default-Deny: Model terminated turn without resolving alert through a permitted tool action.",
-            structured_report=append_investigation_evidence(
+            "structured_report": append_investigation_evidence(
                 "Auto-escalated by security platform default-deny guardrail.", state
             ),
-        )
+        }
         # Raises if the ticket cannot be stored: the investigation then fails and the
         # webhook returns 500, so Pub/Sub redelivers the alert instead of dropping it.
-        soc_service.create_and_dispatch_ticket(ticket)
+        (tool,) = await default_deny_mcp.get_tools(readonly_context=callback_context)
+        response = await tool.run_async(args=args, tool_context=callback_context)
+        if not _escalated(response):
+            raise RuntimeError(f"Default-deny escalation was not stored: {response}")
         state["escalation_dispatched"] = True
+
+
+def _escalated(response: Any) -> bool:
+    """True only for the escalation tool's structured success response."""
+    if (
+        not isinstance(response, dict)
+        or response.get("isError")
+        or response.get("error")
+    ):
+        return False
+    payload = response.get("structuredContent")
+    if not isinstance(payload, dict):
+        payload = response
+    return str(payload.get("status", "")).upper() == "ESCALATED"
 
 
 # ==============================================================================

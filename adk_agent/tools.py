@@ -1111,3 +1111,46 @@ def escalate_to_human(
         ),
         "security_flags": {"escalation_dispatched": True},
     }
+
+
+def auto_escalate_unresolved_alert(
+    ticket_id: str,
+    user_id: str,
+    device_id: str,
+    source_ip: str,
+    threat_score: int,
+    window_end: str,
+    severity: str,
+    structured_report: str,
+) -> dict[str, Any]:
+    """
+    Files the default-deny ticket for an alert the model left unresolved.
+
+    Called only by the agent's default-deny callback, never offered to a model: no
+    agent's tool_filter lists it. The decision is fixed here, so the caller cannot
+    label the ticket anything but AUTO_ESCALATED_DEFAULT_DENY. Raises if the ticket
+    cannot be stored, so the investigation fails and Pub/Sub redelivers the alert.
+    """
+    ticket = SocTicket(
+        ticket_id=ticket_id,
+        transaction_window_end=window_end or None,
+        user_id=user_id or "unresolved_user",
+        device_id=device_id or "unknown_device",
+        source_ip=source_ip or "unknown_ip",
+        threat_score=threat_score or 100,
+        severity=normalize_severity(severity),
+        status="ESCALATED",
+        agent_decision="AUTO_ESCALATED_DEFAULT_DENY",
+        agent_reason=(
+            "Deterministic Default-Deny: Model terminated turn without resolving alert "
+            "through a permitted tool action."
+        ),
+        structured_report=structured_report,
+    )
+    get_soc_service().create_and_dispatch_ticket(ticket)
+    logger.warning("Default-deny escalation filed ticket %s", ticket_id)
+    return {
+        "status": "ESCALATED",
+        "ticket_id": ticket_id,
+        "security_flags": {"escalation_dispatched": True},
+    }

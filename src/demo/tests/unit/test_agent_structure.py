@@ -71,35 +71,66 @@ def test_analytics_plugin_does_not_create_views():
     assert bq_analytics_plugin.config.create_views is False
 
 
-def test_agent_sa_has_no_dataset_level_bigquery_write():
-    """iam.tf: agent SA gets dataset READER plus table-level dataEditor on its four tables only."""
+def _tf_resources(tf: str, kind: str) -> dict[str, str]:
+    """Maps each resource of a kind to its body."""
     import re
+
+    return dict(re.findall(rf'resource "{kind}" "(\w+)" \{{(.*?)\n\}}', tf, re.DOTALL))
+
+
+def test_agent_sa_reaches_evidence_and_tickets_only_through_mcp():
+    """iam.tf: the agent SA writes only its own bookkeeping tables and may invoke the MCP
+    tool service; evidence reads, buckets, signing and ticket writes belong to the MCP SA."""
     from pathlib import Path
 
     iam_tf = (Path(__file__).resolve().parents[2] / "terraform" / "iam.tf").read_text()
     assert "google_bigquery_dataset_iam_member" not in iam_tf
     assert "google_bigquery_dataset_iam_binding" not in iam_tf
 
-    reader = re.search(
-        r'resource "google_bigquery_dataset_access" "agent_dataset_reader" \{(.*?)\n\}',
-        iam_tf,
-        re.DOTALL,
-    )
-    assert reader is not None
-    assert 'role          = "READER"' in reader.group(1)
-    assert "agent_sa.email" in reader.group(1)
+    def grants(kind: str, sa: str) -> set[str]:
+        out = set()
+        for body in _tf_resources(iam_tf, kind).values():
+            if f"{sa}.email" in body or f"{sa}.name" in body:
+                out.add(body)
+        return out
 
-    agent_tables = set(
-        re.findall(
-            r'resource "google_bigquery_table_iam_member" "agent_\w+" \{[^}]*?'
-            r"google_bigquery_table\.(\w+)\.table_id[^}]*?agent_sa\.email",
-            iam_tf,
-            re.DOTALL,
-        )
-    )
-    assert agent_tables == {
-        "soc_tickets",
-        "alerts",
-        "adk_threat_assessment",
-        "agent_events",
-    }
+    def tables(sa: str) -> set[str]:
+        import re
+
+        return {
+            re.search(r"google_bigquery_table\.(\w+)\.table_id", body).group(1)
+            for body in grants("google_bigquery_table_iam_member", sa)
+        }
+
+    # Agent SA: no dataset access, no buckets, no token creator; its own tables only.
+    assert not grants("google_bigquery_dataset_access", "agent_sa")
+    assert not grants("google_storage_bucket_iam_member", "agent_sa")
+    assert not grants("google_service_account_iam_member", "agent_sa")
+    assert tables("agent_sa") == {"alerts", "agent_events"}
+    invoke = _tf_resources(iam_tf, "google_cloud_run_v2_service_iam_member")[
+        "agent_invokes_mcp"
+    ]
+    assert "google_cloud_run_v2_service.mcp_server.name" in invoke
+    assert "agent_sa.email" in invoke
+
+    # MCP SA: reads the dataset, writes tickets, reads screenshots, files escalations.
+    (reader,) = grants("google_bigquery_dataset_access", "mcp_sa")
+    assert 'role          = "READER"' in reader
+    assert tables("mcp_sa") == {"soc_tickets", "adk_threat_assessment"}
+    assert len(grants("google_storage_bucket_iam_member", "mcp_sa")) == 2
+
+
+def test_mcp_service_runs_as_its_own_sa_and_admits_only_the_agent():
+    from pathlib import Path
+
+    tf = (
+        Path(__file__).resolve().parents[2] / "terraform" / "cloud_run.tf"
+    ).read_text()
+    services = _tf_resources(tf, "google_cloud_run_v2_service")
+    mcp = services["mcp_server"]
+    assert "google_service_account.mcp_sa.email" in mcp
+    assert '"adk_agent.mcp_server", "--http"' in mcp
+    assert "MCP_ALLOWED_CALLER" in mcp
+    assert "google_service_account.agent_sa.email" in mcp
+    assert "MCP_SERVER_URL" in services["adk_agent_service"]
+    assert "allUsers" not in tf

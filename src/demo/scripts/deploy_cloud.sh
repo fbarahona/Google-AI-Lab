@@ -280,7 +280,7 @@ fi
 # ignores only the image), so this changes the image and nothing else, and any failure
 # stops the script before it reports success.
 if command -v gcloud >/dev/null 2>&1; then
-  for service in cymbal-cyber-adk-agent cymbal-cyber-soc-console; do
+  for service in cymbal-cyber-mcp cymbal-cyber-adk-agent cymbal-cyber-soc-console; do
     echo "================================================================="
     echo "Rolling out ${IMAGE_TAG} to Cloud Run service: ${service}"
     echo "================================================================="
@@ -304,6 +304,7 @@ fi
 echo "================================================================="
 echo "Deployment Complete!"
 echo "- Webhook Service : cymbal-cyber-adk-agent"
+echo "- MCP Tool Service: cymbal-cyber-mcp"
 echo "- Scheduled Job   : threat-detector"
 SOC_CONSOLE_URL="$(gcloud run services describe cymbal-cyber-soc-console --project="${PROJECT_ID}" --region="${REGION}" --format="value(status.url)" 2>/dev/null || true)"
 if [ -n "${SOC_CONSOLE_URL}" ]; then

@@ -1,5 +1,5 @@
 # ==============================================================================
-# LEAST-PRIVILEGE WORKLOAD IDENTITY ARCHITECTURE (3 SCOPED IDENTITIES)
+# LEAST-PRIVILEGE WORKLOAD IDENTITY ARCHITECTURE (ONE IDENTITY PER WORKLOAD)
 # ==============================================================================
 
 # 1. Continuous Query Workload Service Account
@@ -68,21 +68,25 @@ moved {
 
 
 # 2. ADK Multi-Agent Runtime Service Account
-# Role: Runs multi-agent investigations, background anomaly scanner, and SOC ticket dispatch.
+# Role: Runs the agents (Gemini reasoning) and the Pub/Sub webhook. It holds no evidence
+# reads and no ticket writes: every tool call, including the default-deny escalation,
+# goes to the MCP tool service (2a), which it may only invoke. What it keeps is its own
+# bookkeeping: alert status on `alerts` and the ADK analytics rows in `agent_events`.
 resource "google_service_account" "agent_sa" {
   project      = var.project_id
   account_id   = var.agent_service_account_id
   display_name = "Cymbal Cyber ADK Multi-Agent Runtime SA"
-  description  = "Executes multi-agent forensic investigations, threat scanner, and SOC ticket dispatch."
+  description  = "Runs the ADK agents and the Pub/Sub webhook; calls tools only through the MCP tool service."
 
   depends_on = [google_project_service.required]
 }
 
-# Project-level least-privilege roles for Agent Runtime SA. aiplatform.user serves every
-# Gemini call (agents and vision) through Vertex AI; no BigQuery connections are used.
+# Project-level least-privilege roles for Agent Runtime SA. aiplatform.user serves the
+# agents' Gemini calls through Vertex AI; bigquery.jobUser runs the alert status queries.
 locals {
   agent_project_roles = toset([
     "roles/aiplatform.user",
+    "roles/bigquery.jobUser",
     "roles/logging.logWriter",
     "roles/serviceusage.serviceUsageConsumer",
   ])
@@ -96,43 +100,12 @@ resource "google_project_iam_member" "agent_project_bindings" {
   member  = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
-# Required to run BigQuery query jobs (client.query)
-resource "google_project_iam_member" "agent_sa_bq_job_user" {
-  project = var.project_id
-  role    = "roles/bigquery.jobUser"
-  member  = "serviceAccount:${google_service_account.agent_sa.email}"
+moved {
+  from = google_project_iam_member.agent_sa_bq_job_user
+  to   = google_project_iam_member.agent_project_bindings["roles/bigquery.jobUser"]
 }
 
-# Resource-level BigQuery dataset READER access (queries event tables, views and UDFs).
-# Writes are limited to the table-level grants below, so the agent cannot modify the
-# raw event tables it investigates. Uses google_bigquery_dataset_access like every
-# other dataset grant here; do not mix in google_bigquery_dataset_iam_* resources.
-resource "google_bigquery_dataset_access" "agent_dataset_reader" {
-  project       = var.project_id
-  dataset_id    = google_bigquery_dataset.cyber_dataset.dataset_id
-  role          = "READER"
-  user_by_email = google_service_account.agent_sa.email
-}
-
-# Table-level least-privilege dataEditor scoped strictly to soc_tickets
-resource "google_bigquery_table_iam_member" "agent_soc_tickets_editor" {
-  project    = var.project_id
-  dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
-  table_id   = google_bigquery_table.soc_tickets.table_id
-  role       = "roles/bigquery.dataEditor"
-  member     = "serviceAccount:${google_service_account.agent_sa.email}"
-}
-
-# Table-level least-privilege dataEditor scoped strictly to adk_threat_assessment
-resource "google_bigquery_table_iam_member" "agent_adk_threat_assessment_editor" {
-  project    = var.project_id
-  dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
-  table_id   = google_bigquery_table.adk_threat_assessment.table_id
-  role       = "roles/bigquery.dataEditor"
-  member     = "serviceAccount:${google_service_account.agent_sa.email}"
-}
-
-# Table-level least-privilege dataEditor scoped strictly to alerts (status updates)
+# Table-level dataEditor scoped strictly to alerts (dedupe and status updates)
 resource "google_bigquery_table_iam_member" "agent_alerts_editor" {
   project    = var.project_id
   dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
@@ -141,8 +114,8 @@ resource "google_bigquery_table_iam_member" "agent_alerts_editor" {
   member     = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
-# Table-level least-privilege dataEditor scoped strictly to agent_events (ADK analytics
-# plugin rows and additive schema upgrades; the plugin's views are disabled)
+# Table-level dataEditor scoped strictly to agent_events (ADK analytics plugin rows and
+# additive schema upgrades; the plugin's views are disabled)
 resource "google_bigquery_table_iam_member" "agent_agent_events_editor" {
   project    = var.project_id
   dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
@@ -151,34 +124,102 @@ resource "google_bigquery_table_iam_member" "agent_agent_events_editor" {
   member     = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
-# Resource-level GCS bucket bindings:
-# 1) Screenshots bucket: READ-ONLY (objectViewer)
-resource "google_storage_bucket_iam_member" "agent_screenshots_reader" {
-  bucket = google_storage_bucket.screenshots.name
-  role   = "roles/storage.objectViewer"
-  member = "serviceAccount:${google_service_account.agent_sa.email}"
+# The agent's only path to evidence and tickets: invoking the MCP tool service.
+resource "google_cloud_run_v2_service_iam_member" "agent_invokes_mcp" {
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.mcp_server.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
-# 1b) Screenshots bucket: READ-ONLY for the BigQuery connection behind the
-#     user_screenshots_objects object table.
+
+# 2a. MCP Tool Service Account
+# Role: Runs the MCP tool server (cloud_run.tf) and is the identity behind every tool:
+# reads telemetry and screenshots, runs the Gemini vision check, signs screenshot URLs,
+# and writes tickets. Only the agent SA may call it (Cloud Run invoker plus the server's
+# own ID-token check), and the server exposes nine fixed operations, no free-form SQL.
+resource "google_service_account" "mcp_sa" {
+  project      = var.project_id
+  account_id   = var.mcp_service_account_id
+  display_name = "Cymbal Cyber MCP Tool Server SA"
+  description  = "Identity of the MCP tool service: evidence reads, vision analysis, signed URLs and ticket writes."
+
+  depends_on = [google_project_service.required]
+}
+
+locals {
+  mcp_project_roles = toset([
+    "roles/aiplatform.user",
+    "roles/bigquery.jobUser",
+    "roles/logging.logWriter",
+    "roles/serviceusage.serviceUsageConsumer",
+  ])
+}
+
+resource "google_project_iam_member" "mcp_project_bindings" {
+  for_each = local.mcp_project_roles
+
+  project = var.project_id
+  role    = each.value
+  member  = "serviceAccount:${google_service_account.mcp_sa.email}"
+}
+
+# Dataset READER: event tables, the screenshots view and the ticket views the tools query.
+# Uses google_bigquery_dataset_access like every other dataset grant here; do not mix in
+# google_bigquery_dataset_iam_* resources.
+resource "google_bigquery_dataset_access" "mcp_dataset_reader" {
+  project       = var.project_id
+  dataset_id    = google_bigquery_dataset.cyber_dataset.dataset_id
+  role          = "READER"
+  user_by_email = google_service_account.mcp_sa.email
+}
+
+# Table-level dataEditor scoped strictly to soc_tickets (ticket tools)
+resource "google_bigquery_table_iam_member" "mcp_soc_tickets_editor" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
+  table_id   = google_bigquery_table.soc_tickets.table_id
+  role       = "roles/bigquery.dataEditor"
+  member     = "serviceAccount:${google_service_account.mcp_sa.email}"
+}
+
+# Table-level dataEditor scoped strictly to adk_threat_assessment (verdict rows)
+resource "google_bigquery_table_iam_member" "mcp_adk_threat_assessment_editor" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
+  table_id   = google_bigquery_table.adk_threat_assessment.table_id
+  role       = "roles/bigquery.dataEditor"
+  member     = "serviceAccount:${google_service_account.mcp_sa.email}"
+}
+
+# Screenshots bucket: READ-ONLY (vision analysis)
+resource "google_storage_bucket_iam_member" "mcp_screenshots_reader" {
+  bucket = google_storage_bucket.screenshots.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.mcp_sa.email}"
+}
+
+# Screenshots bucket: READ-ONLY for the BigQuery connection behind the
+# user_screenshots_objects object table.
 resource "google_storage_bucket_iam_member" "screenshots_connection_reader" {
   bucket = google_storage_bucket.screenshots.name
   role   = "roles/storage.objectViewer"
   member = "serviceAccount:${google_bigquery_connection.screenshots.cloud_resource[0].service_account_id}"
 }
 
-# 2) Escalations bucket: WRITE/READ (objectUser)
-resource "google_storage_bucket_iam_member" "agent_escalations_writer" {
+# Escalations bucket: WRITE/READ (escalation request files)
+resource "google_storage_bucket_iam_member" "mcp_escalations_writer" {
   bucket = google_storage_bucket.escalations.name
   role   = "roles/storage.objectUser"
-  member = "serviceAccount:${google_service_account.agent_sa.email}"
+  member = "serviceAccount:${google_service_account.mcp_sa.email}"
 }
 
 # Self-token-creation scoped strictly to itself for keyless V4 signed URLs
-resource "google_service_account_iam_member" "agent_self_impersonation" {
-  service_account_id = google_service_account.agent_sa.name
+resource "google_service_account_iam_member" "mcp_self_impersonation" {
+  service_account_id = google_service_account.mcp_sa.name
   role               = "roles/iam.serviceAccountTokenCreator"
-  member             = "serviceAccount:${google_service_account.agent_sa.email}"
+  member             = "serviceAccount:${google_service_account.mcp_sa.email}"
 }
 
 

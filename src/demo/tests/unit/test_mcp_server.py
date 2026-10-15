@@ -37,7 +37,8 @@ async def _run_mcp_tool(tool, *, args: dict, tool_context):
 
 @pytest.mark.asyncio
 async def test_mcp_server_initialization_and_tool_registration():
-    """Verify that mcp_server initializes properly and registers exactly the 8 investigation tools."""
+    """Verify that mcp_server registers exactly the 8 agent tools plus the platform-only
+    default-deny escalation."""
     assert mcp_server.name == "cymbal-cyber-mcp"
     tools = await mcp_server.list_tools()
     tool_names = {t.name for t in tools}
@@ -51,6 +52,7 @@ async def test_mcp_server_initialization_and_tool_registration():
         "dispatch_to_soc_ticketing_system",
         "log_false_positive",
         "escalate_to_human",
+        "auto_escalate_unresolved_alert",
     }
     assert tool_names == expected_tools
 
@@ -264,7 +266,7 @@ async def test_mcp_tool_updates_real_adk_state_on_ticket_dispatch(monkeypatch):
     callback_ctx = MagicMock()
     callback_ctx.state = real_state
     with patch("adk_agent.tools.get_soc_service") as mock_soc:
-        default_deny_soc_callback(callback_ctx)
+        await default_deny_soc_callback(callback_ctx)
         mock_soc.assert_not_called()
     assert real_state.get("escalation_dispatched") is not True
 
@@ -311,7 +313,7 @@ async def test_mcp_tool_updates_real_adk_state_on_false_positive(monkeypatch):
     callback_ctx = MagicMock()
     callback_ctx.state = real_state
     with patch("adk_agent.tools.get_soc_service") as mock_soc:
-        default_deny_soc_callback(callback_ctx)
+        await default_deny_soc_callback(callback_ctx)
         mock_soc.assert_not_called()
     assert real_state.get("escalation_dispatched") is not True
 

@@ -39,6 +39,12 @@ variable "agent_service_account_id" {
   default     = "cymbal-adk-agent-sa"
 }
 
+variable "mcp_service_account_id" {
+  description = "ID for the MCP tool service account, the identity behind every agent tool."
+  type        = string
+  default     = "cymbal-mcp-tools-sa"
+}
+
 variable "console_service_account_id" {
   description = "ID for the dedicated SOC console (Streamlit) service account."
   type        = string

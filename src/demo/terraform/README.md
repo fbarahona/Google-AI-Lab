@@ -4,10 +4,10 @@ This Terraform module provisions the complete enterprise infrastructure for the 
 
 - **BigQuery Analytical Lakehouse**: Datasets (`Cymbal_Cyber`), scalar SQL UDFs (`calculate_threat_score`, `is_malicious_*`), partitioned tables (`user_access_events`, `network_events`, `alerts`, `soc_tickets`), views (`soc_tickets_current`, `incidents`), a BigLake object table over the screenshots bucket (`user_screenshots_objects`) and a protobuf data contract on the raw telemetry topic.
 - **Pub/Sub Telemetry Streaming**: Event ingestion topics, BigQuery direct-write subscriptions, dead-letter queues (DLQ), and agent push subscriptions.
-- **Multi-Agent Cloud Run Services**: Containerized ADK multi-agent orchestrator (`cymbal-cyber-adk-agent`) and interactive SOC console (`cymbal-cyber-soc-console`).
+- **Multi-Agent Cloud Run Services**: Containerized ADK multi-agent orchestrator (`cymbal-cyber-adk-agent`), the MCP tool service it calls (`cymbal-cyber-mcp`, its own identity), and interactive SOC console (`cymbal-cyber-soc-console`).
 - **Scheduled Micro-Batch Threat Detector**: Cloud Run Job (`threat-detector`) invoked on a cron schedule via Cloud Scheduler.
 - **Cloud Storage Evidence Buckets**: Raw logs, staging, multimodal desktop screenshots, and human escalation queues.
-- **Granular Least-Privilege IAM**: Service accounts for ADK Agent, Continuous Query, Pub/Sub Invoker, and Threat Detector.
+- **Granular Least-Privilege IAM**: Service accounts for the ADK Agent (no evidence or ticket access), the MCP tool service (evidence reads and ticket writes; invocable only by the agent), SOC console, Continuous Query, Pub/Sub Invoker, and Threat Detector.
 
 ---
 
@@ -40,11 +40,11 @@ To execute `terraform apply` or run the automated deployment script, the deployi
 | Domain | Role ID | Purpose |
 | :--- | :--- | :--- |
 | **Project IAM** | `roles/resourcemanager.projectIamAdmin` | **Required**: Grants project roles (`aiplatform.user`, `bigquery.jobUser`) to workload SAs. |
-| **Service Accounts** | `roles/iam.serviceAccountAdmin` | Creates the workload SAs (`agent-sa`, `console-sa`, `invoker-sa`, `scheduler-sa`, `console-access`, `detector-sa`, and `cq-sa` when continuous queries are on). |
+| **Service Accounts** | `roles/iam.serviceAccountAdmin` | Creates the workload SAs (`agent-sa`, `mcp-tools-sa`, `console-sa`, `invoker-sa`, `scheduler-sa`, `console-access`, `detector-sa`, and `cq-sa` when continuous queries are on). |
 | **Service Account Actor** | `roles/iam.serviceAccountUser` | Authorizes attaching SAs to Cloud Run services and jobs (`actAs`). |
 | **API Management** | `roles/serviceusage.serviceUsageAdmin` | Enables necessary Google Cloud APIs (`gcloud services enable`). |
 | **BigQuery** | `roles/bigquery.admin` | Creates dataset `Cymbal_Cyber`, tables, SQL routines, and Vertex AI connections. |
-| **Cloud Run** | `roles/run.admin` | Deploys container services (`adk-agent`, `soc-console`) and jobs (`threat-detector`). |
+| **Cloud Run** | `roles/run.admin` | Deploys container services (`adk-agent`, `mcp`, `soc-console`) and jobs (`threat-detector`). |
 | **Pub/Sub** | `roles/pubsub.admin` | Creates telemetry topics, DLQ stores, and BigQuery direct subscriptions. |
 | **Cloud Storage** | `roles/storage.admin` | Provisions evidence buckets and configures bucket-level IAM policies. |
 | **Artifact Registry** | `roles/artifactregistry.admin` | Provisions Docker repo `cymbal-cyber` and configures push permissions. |

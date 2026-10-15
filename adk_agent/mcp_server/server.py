@@ -3,7 +3,15 @@ Cymbal Cyber Local MCP Server
 =============================
 Implements a standards-compliant Model Context Protocol (MCP) server
 exposing BigQuery behavioral telemetry investigation, multimodal
-visual forensics, and SOC incident ticketing tools over stdio and SSE.
+visual forensics, and SOC incident ticketing tools.
+
+Two transports:
+- stdio (default): a child process of the agent, for local development and tests.
+- Streamable HTTP (`--http` or MCP_TRANSPORT=streamable-http): the cloud deployment,
+  its own Cloud Run service running as its own service account. That identity, not
+  the agent's, holds the evidence reads and ticket writes; the agent's identity can
+  only invoke this service. Every request must carry a Google ID token for this
+  service, minted by the one allowed caller (MCP_ALLOWED_CALLER).
 
 The server deliberately exposes no free-form SQL or schema-discovery tools: any MCP
 client that connects without a tool_filter only gets the fixed, parameterized
@@ -14,6 +22,7 @@ structured security_flags in it are what the agent's state sync reads.
 """
 
 import logging
+import os
 import sys
 from typing import Any
 
@@ -137,12 +146,135 @@ def escalate_to_human(
     )
 
 
+# Platform tool: the default-deny callback's escalation. No agent's tool_filter lists it,
+# so no model is ever offered it; the ticket decision is fixed server-side.
+@mcp_server.tool()
+def auto_escalate_unresolved_alert(
+    ticket_id: str,
+    user_id: str,
+    device_id: str,
+    source_ip: str,
+    threat_score: int,
+    window_end: str,
+    severity: str,
+    structured_report: str,
+) -> dict[str, Any]:
+    """Platform-only: files the default-deny escalation ticket for an unresolved alert."""
+    return tools.auto_escalate_unresolved_alert(
+        ticket_id=ticket_id,
+        user_id=user_id,
+        device_id=device_id,
+        source_ip=source_ip,
+        threat_score=threat_score,
+        window_end=window_end,
+        severity=severity,
+        structured_report=structured_report,
+    )
+
+
+def _local_mode() -> bool:
+    return os.getenv("LOCAL_MODE", "false").lower() in ("true", "1")
+
+
+class CallerAuthMiddleware:
+    """
+    Admits only requests whose Google ID token was minted for this service by the
+    allowed caller. Cloud Run IAM already rejects callers without run.invoker; this
+    re-checks the token in the app so a misconfigured invoker binding (or a second
+    invoker) still cannot reach the tools. Off only in LOCAL_MODE.
+    """
+
+    def __init__(self, app, audience: str, allowed_caller: str):
+        self.app = app
+        self.audience = audience
+        self.allowed_caller = allowed_caller
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = dict(scope.get("headers") or [])
+        auth = headers.get(b"authorization", b"").decode("latin-1")
+        status, reason = self.check(auth)
+        if status != 200:
+            await _send_json(send, status, {"error": reason})
+            return
+        await self.app(scope, receive, send)
+
+    def check(self, auth_header: str) -> tuple[int, str]:
+        """Returns (200, caller) for an admitted token, else (401|403, reason)."""
+        if not auth_header.startswith("Bearer "):
+            return 401, "Missing bearer token."
+        token = auth_header.split(" ", 1)[1].strip()
+        try:
+            from google.auth.transport import requests as google_requests
+            from google.oauth2 import id_token
+
+            claims = id_token.verify_oauth2_token(
+                token, google_requests.Request(), audience=self.audience
+            )
+        except Exception as exc:
+            logger.warning("MCP caller rejected: invalid ID token (%s)", exc)
+            return 401, "Invalid ID token."
+        caller = claims.get("email")
+        if not claims.get("email_verified") or caller != self.allowed_caller:
+            logger.warning("MCP caller rejected: %s is not the allowed caller", caller)
+            return 403, "Caller is not allowed to use these tools."
+        return 200, caller
+
+
+async def _send_json(send, status: int, body: dict[str, Any]) -> None:
+    import json
+
+    payload = json.dumps(body).encode()
+    await send(
+        {
+            "type": "http.response.start",
+            "status": status,
+            "headers": [(b"content-type", b"application/json")],
+        }
+    )
+    await send({"type": "http.response.body", "body": payload})
+
+
+def build_http_app():
+    """
+    The Streamable HTTP app Cloud Run serves: stateless JSON responses, so any
+    instance can answer any request and the service scales horizontally.
+    Refuses to start in the cloud without the caller check configured.
+    """
+    app = mcp_server.streamable_http_app(
+        streamable_http_path="/mcp",
+        stateless_http=True,
+        json_response=True,
+        host="0.0.0.0",
+    )
+    if _local_mode():
+        return app
+    audience = os.getenv("MCP_EXPECTED_AUDIENCE", "")
+    allowed_caller = os.getenv("MCP_ALLOWED_CALLER", "")
+    if not audience or not allowed_caller:
+        raise RuntimeError(
+            "MCP_EXPECTED_AUDIENCE and MCP_ALLOWED_CALLER must be set outside LOCAL_MODE."
+        )
+    return CallerAuthMiddleware(app, audience=audience, allowed_caller=allowed_caller)
+
+
 def main():
-    """Main CLI entrypoint for stdio and SSE transport."""
-    transport = "stdio"
-    if "--sse" in sys.argv:
-        transport = "sse"
-    mcp_server.run(transport=transport)
+    """CLI entrypoint: stdio by default, Streamable HTTP with --http."""
+    if "--http" in sys.argv or os.getenv("MCP_TRANSPORT") == "streamable-http":
+        import uvicorn
+
+        logging.basicConfig(level=logging.INFO)
+        uvicorn.run(
+            build_http_app(),
+            host="0.0.0.0",
+            port=int(os.getenv("PORT", "8080")),
+            proxy_headers=True,
+            forwarded_allow_ips="*",
+        )
+        return
+    mcp_server.run(transport="stdio")
 
 
 if __name__ == "__main__":

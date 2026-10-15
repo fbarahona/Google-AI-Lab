@@ -6,7 +6,7 @@ This guide details the security baseline, IAM role requirements, separation of o
 
 ## 🛡️ Architecture & Security Model: Principle of Least Privilege
 
-In enterprise security engineering, granting broad administrative roles across all components introduces lateral movement risks and violates the principle of least privilege. This architecture enforces **strict separation of duties** across four distinct identity tiers:
+In enterprise security engineering, granting broad administrative roles across all components introduces lateral movement risks and violates the principle of least privilege. This architecture enforces **strict separation of duties** across distinct identity tiers, one per workload and trust path:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -17,7 +17,7 @@ In enterprise security engineering, granting broad administrative roles across a
 │    - Elevated: Project IAM Admin, Storage Admin, Vertex AI Admin            │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ 2. Day-2 Operator & SOC Analyst Identity (Human Incident Responder)         │
-│    - Daily operations: Run Streamlit console, review tickets, query logs   │
+│    - Daily operations: Run Streamlit console, review tickets, query logs    │
 │    - Least-Privilege: BigQuery User & DataViewer, Storage ObjectViewer      │
 │    - ZERO administrative, IAM mutation, or storage deletion permissions     │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -28,13 +28,18 @@ In enterprise security engineering, granting broad administrative roles across a
 │    - ZERO storage access, ZERO Vertex AI access, ZERO token creation        │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ 4. ADK Agent Runtime Workload Identity (`cymbal-adk-agent-sa`)              │
-│    - Multi-agent forensic investigations, threat scanner, and SOC dispatch  │
-│    - Scoped execution: BigQuery jobUser, dataset READER, table-level        │
-│      dataEditor on soc_tickets, alerts, adk_threat_assessment and           │
-│      agent_events, bucket-level read on screenshots, bucket-level write     │
-│      on escalations, aiplatform.user                                        │
-│    - Keyless V4 signed URL self-impersonation (scoped to itself only)       │
+│    - Runs the agents (Gemini reasoning) and the Pub/Sub webhook             │
+│    - Scoped: aiplatform.user, BigQuery jobUser, table-level dataEditor on   │
+│      alerts and agent_events only; run.invoker on the MCP tool service      │
+│    - ZERO evidence reads, ZERO ticket writes, ZERO bucket access            │
 │    - ZERO publish rights on raw telemetry (cannot forge its own evidence)   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 4a. MCP Tool Service Identity (`cymbal-mcp-tools-sa`)                       │
+│    - Identity behind every agent tool (Cloud Run service cymbal-cyber-mcp)  │
+│    - Scoped: BigQuery jobUser, dataset READER, table-level dataEditor on    │
+│      soc_tickets and adk_threat_assessment, read on screenshots, write on   │
+│      escalations, aiplatform.user (vision), self token creator (signing)    │
+│    - Callable only by the agent SA: run.invoker + in-app ID token check     │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ 4b. SOC Console Workload Identity (`cymbal-soc-console-sa`)                 │
 │    - Streamlit analyst console: dashboards, verdicts, ticket Q&A, demo data │
@@ -54,10 +59,10 @@ In enterprise security engineering, granting broad administrative roles across a
 │    - Humans impersonate it to open the console through gcloud proxy         │
 │    - run.invoker on the console only; ZERO ambient project roles            │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ 6. Tool Isolation Layer: Local Model Context Protocol (MCP) Server          │
-│    - Dedicated stdio tool server (`adk_agent/mcp_server`)                   │
-│    - Eliminates legacy BigQuery external connection (`bqcx-...`) entirely  │
-│    - AST read-only enforcement, 1 GB scan limit, and scoped tool filtering  │
+│ 6. Tool Isolation Layer: Model Context Protocol (MCP) Tool Service          │
+│    - Own Cloud Run service and identity in the cloud, stdio locally         │
+│    - Nine fixed operations, no free-form SQL, 1 GB scan ceiling per query   │
+│    - Per-agent tool_filter allow-lists; one platform-only escalation tool   │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -182,18 +187,40 @@ done
 
 ---
 
-## 3. Decoupled Tool Execution via Local Model Context Protocol (MCP) Server
+## 3. Decoupled Tool Execution via the Model Context Protocol (MCP) Tool Service
 
 In legacy multi-agent setups, BigQuery required an external Cloud Resource connection (`continuous-query-vertex-ai-connection`) with an autogenerated service account (`bqcx-...`) to query object tables and invoke remote Gemini models via SQL `ML.GENERATE_TEXT`.
 
 ### Why BigQuery External Connections Were Decommissioned:
 1. **IAM Propagation Delays:** The GCP-managed connection SA (`bqcx-...`) creates an asynchronous 15–30 second propagation window during provisioning, leading to `Error 400: Service account ... does not exist` during automated `terraform apply` executions.
 2. **Brittle Cross-Service Coupling:** Running generative AI calls inside BigQuery SQL tightly couples database queries to foundation model availability, complicating error handling, rate limiting, and observability.
-3. **Decoupled Architecture:** The system now delegates all AI calls to the **ADK Agents** via the Python Vertex AI SDK under Workload Identity (`roles/aiplatform.user`), while database and forensic operations run through a **Local Model Context Protocol (MCP) Server** (`adk_agent/mcp_server/`).
+3. **Decoupled Architecture:** The system now delegates all AI calls to the **ADK Agents** via the Python Vertex AI SDK under Workload Identity (`roles/aiplatform.user`), while database and forensic operations run through a **Model Context Protocol (MCP) tool server** (`adk_agent/mcp_server/`).
 
-### Local MCP Security Architecture & Controls:
-The Local MCP server operates over standard I/O (`stdio`) or Server-Sent Events (`sse`), enforcing rigorous runtime guardrails:
-- **Least-Privilege Tool Scoping:** Sub-agents only connect to tools explicitly bound to their role via `create_mcp_toolset([...])` / `ScopedMcpToolset`: one MCP server process per sub-agent, with a `tool_filter` allow-list of that agent's tools. The BigQuery agent cannot access GCS signed URLs, and the Vision agent cannot modify ticket queues.
+### MCP as a Privilege Boundary
+In the cloud the MCP server is its own Cloud Run service, `cymbal-cyber-mcp`, running as its own service account, `cymbal-mcp-tools-sa`. That identity holds every evidence read and ticket write; the agent's identity holds none of them.
+
+```
+ Pub/Sub push (pubsub-invoker-sa)
+        │
+        ▼
+ cymbal-cyber-adk-agent  ── runs as cymbal-adk-agent-sa ──────────────────┐
+   agents + webhook        Gemini (aiplatform.user), alerts + agent_events │
+        │                                                                  │
+        │ MCP Streamable HTTP, Authorization: Bearer <ID token>            │
+        │ audience = MCP service URL, minted by cymbal-adk-agent-sa        │
+        ▼                                                                  │
+ cymbal-cyber-mcp  ── runs as cymbal-mcp-tools-sa ─────────────────────────┘
+   9 fixed tools       event tables, screenshots, vision, signed URLs, tickets
+```
+
+- **Two checks on every call:** Cloud Run IAM admits only principals with `roles/run.invoker` on the service, and the only one is the agent SA. The server then verifies the ID token itself (`CallerAuthMiddleware`): audience must be the service URL (`MCP_EXPECTED_AUDIENCE`) and the caller must be the agent SA (`MCP_ALLOWED_CALLER`). The server refuses to start in the cloud without both settings.
+- **What a compromised agent can do:** ask for the nine operations below with model-chosen arguments, each validated server-side. It cannot run SQL, read a table, list a bucket, sign an arbitrary URL, or write a ticket outside these tools, because its credentials do not allow it.
+- **Default-deny included:** when the model resolves nothing, the guardrail files its escalation through the platform-only MCP tool `auto_escalate_unresolved_alert`, so even that write uses the tool identity. No agent's `tool_filter` lists the tool, and its ticket decision is fixed server-side.
+- **Stateless transport:** the server runs Streamable HTTP with stateless JSON responses, so any instance can serve any request and the service scales horizontally. The agent caches its ID token until it nears expiry, so MCP sessions are reused rather than reopened per call.
+- **Locally** (`MCP_SERVER_URL` unset) the agent starts the same server over `stdio` as a child process, with no network or token involved.
+
+### MCP Security Controls:
+- **Least-Privilege Tool Scoping:** Sub-agents only connect to tools explicitly bound to their role via `create_mcp_toolset([...])` / `ScopedMcpToolset`: one MCP connection per sub-agent, with a `tool_filter` allow-list of that agent's tools. The BigQuery agent cannot access GCS signed URLs, and the Vision agent cannot modify ticket queues.
 - **No Free-Form SQL Surface:** The server exposes no `execute_sql` or schema-discovery tool. Agents and any other MCP client can only call fixed, parameterized investigation and ticketing operations, with entity values validated against an allow-list pattern before they reach a query.
 - **Scan Ceilings:** Every BigQuery job issued by the tools sets `maximum_bytes_billed` (1 GB default, configurable via `BQ_MAX_BYTES_BILLED`), so a query that would scan more fails instead of running. The event tables are day-partitioned for pruning but do not set `require_partition_filter`; the byte ceiling is the cost guardrail.
 - **Native Grounding Preservation:** `google_search_agent` retains the native ADK `google_search` tool for search-grounded OSINT without proxying external queries through third-party protocols.
@@ -213,15 +240,22 @@ To enforce the principle of least privilege, background automation is split into
 - **Zero Access:** No access to GCS, Vertex AI, or token creation.
 
 ### 4B. ADK Multi-Agent Runtime Identity (`cymbal-adk-agent-sa`)
-- **Purpose:** Executes the ADK multi-agent team, background threat scanner daemon, visual inspection, and SOC ticket dispatch.
-- **Project Roles:** `roles/bigquery.jobUser`, `roles/aiplatform.user` (every Gemini call, agents and vision, goes through Vertex AI as this identity; there is no API key), `roles/logging.logWriter`, `roles/serviceusage.serviceUsageConsumer`.
+- **Purpose:** Runs the ADK multi-agent team and the Pub/Sub webhook. Every tool call goes to the MCP tool service (4B1).
+- **Project Roles:** `roles/aiplatform.user` (the agents' Gemini calls through Vertex AI; there is no API key), `roles/bigquery.jobUser` (alert status queries), `roles/logging.logWriter`, `roles/serviceusage.serviceUsageConsumer`.
 - **Resource Bindings (Least-Privilege Scoped):**
-  - `READER` access on BigQuery dataset `Cymbal_Cyber` (reads event tables, views and UDFs for investigations). No dataset-level write: the agent cannot modify the raw event tables it investigates.
-  - Table-level `roles/bigquery.dataEditor` on `soc_tickets` and `adk_threat_assessment` (incident tickets and triage decisions), `alerts` (status updates), and `agent_events` (ADK analytics plugin rows; its per-event views are disabled because they would need dataset-level create).
-  - `roles/storage.objectViewer` on `screenshots` bucket (read-only for multimodal vision OCR).
-  - `roles/storage.objectUser` on `escalations` bucket (uploading escalation tickets).
-  - `roles/storage.objectUser` on `adk_staging` bucket.
-  - `roles/iam.serviceAccountTokenCreator` bound **strictly to itself** for generating short-lived keyless V4 signed URLs without persistent keys.
+  - Table-level `roles/bigquery.dataEditor` on `alerts` (dedupe and status updates) and `agent_events` (ADK analytics plugin rows; its per-event views are disabled because they would need dataset-level create).
+  - `roles/run.invoker` on `cymbal-cyber-mcp`, its only path to evidence and tickets.
+- **Zero Access:** No dataset READER, no `soc_tickets` or `adk_threat_assessment` write, no bucket access, no token creation, no publish right on raw telemetry.
+
+### 4B1. MCP Tool Service Identity (`cymbal-mcp-tools-sa`)
+- **Purpose:** Runs the MCP tool server (`cymbal-cyber-mcp`) and is the identity behind every agent tool.
+- **Project Roles:** `roles/bigquery.jobUser`, `roles/aiplatform.user` (Gemini vision in `get_visual_analysis_for_user`), `roles/logging.logWriter`, `roles/serviceusage.serviceUsageConsumer`.
+- **Resource Bindings (Least-Privilege Scoped):**
+  - `READER` access on BigQuery dataset `Cymbal_Cyber` (event tables, the screenshots view, ticket views). No dataset-level write: the tools cannot modify the raw event tables they investigate.
+  - Table-level `roles/bigquery.dataEditor` on `soc_tickets` and `adk_threat_assessment` (incident tickets and triage decisions).
+  - `roles/storage.objectViewer` on the `screenshots` bucket and `roles/storage.objectUser` on the `escalations` bucket.
+  - `roles/iam.serviceAccountTokenCreator` bound **strictly to itself** for short-lived keyless V4 signed URLs.
+- **Callers:** the agent SA only (Cloud Run invoker binding plus the server's own ID token check).
 
 ### 4B2. SOC Console Identity (`cymbal-soc-console-sa`)
 - **Purpose:** Runs the Streamlit analyst console (`cymbal-cyber-soc-console`). It has its own identity so the agent never holds a publish right on raw telemetry: the console's "Inject scenario" and "Stream logs" controls publish to `cymbal_cyber_raw_logs`, which feeds the same BigQuery subscriptions, detector and agent as real traffic.
@@ -264,7 +298,7 @@ CQ_SA="bq-continuous-query-sa@${PROJECT_ID}.iam.gserviceaccount.com"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${CQ_SA}" --role="roles/bigquery.jobUser"
 gcloud pubsub topics add-iam-policy-binding "cymbal_cyber_alerts" --project="${PROJECT_ID}" --member="serviceAccount:${CQ_SA}" --role="roles/pubsub.publisher"
 
-# 2. Create ADK Agent Runtime Service Account
+# 2. Create ADK Agent Runtime Service Account (agents + webhook; no evidence or ticket access)
 gcloud iam service-accounts create cymbal-adk-agent-sa \
     --project="${PROJECT_ID}" \
     --display-name="Cymbal Cyber ADK Agent SA"
@@ -274,24 +308,43 @@ AGENT_ROLES=("roles/bigquery.jobUser" "roles/aiplatform.user" "roles/logging.log
 for role in "${AGENT_ROLES[@]}"; do
   gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${AGENT_SA}" --role="$role"
 done
-
-# BigQuery: dataset READER plus table-level dataEditor on the four tables the agent writes
-bq show --format=prettyjson "${PROJECT_ID}:Cymbal_Cyber" > /tmp/cymbal_dataset.json
-jq --arg sa "${AGENT_SA}" '.access += [{"role": "READER", "userByEmail": $sa}]' /tmp/cymbal_dataset.json > /tmp/cymbal_dataset_new.json
-bq update --source /tmp/cymbal_dataset_new.json "${PROJECT_ID}:Cymbal_Cyber"
-for table in soc_tickets alerts adk_threat_assessment agent_events; do
+for table in alerts agent_events; do
   bq add-iam-policy-binding --member="serviceAccount:${AGENT_SA}" --role="roles/bigquery.dataEditor" "${PROJECT_ID}:Cymbal_Cyber.${table}"
 done
 
-# Resource-level bucket bindings for Agent SA
-gcloud storage buckets add-iam-policy-binding "gs://cymbal-cyber-screenshots_${PROJECT_ID}" --member="serviceAccount:${AGENT_SA}" --role="roles/storage.objectViewer"
-gcloud storage buckets add-iam-policy-binding "gs://cymbal-cyber-adk-escalations-bucket_${PROJECT_ID}" --member="serviceAccount:${AGENT_SA}" --role="roles/storage.objectUser"
+# 2b. Create MCP Tool Service Account (identity behind every tool)
+gcloud iam service-accounts create cymbal-mcp-tools-sa \
+    --project="${PROJECT_ID}" \
+    --display-name="Cymbal Cyber MCP Tool Server SA"
+
+MCP_SA="cymbal-mcp-tools-sa@${PROJECT_ID}.iam.gserviceaccount.com"
+MCP_ROLES=("roles/bigquery.jobUser" "roles/aiplatform.user" "roles/logging.logWriter")
+for role in "${MCP_ROLES[@]}"; do
+  gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${MCP_SA}" --role="$role"
+done
+
+# BigQuery: dataset READER plus table-level dataEditor on the ticket tables
+bq show --format=prettyjson "${PROJECT_ID}:Cymbal_Cyber" > /tmp/cymbal_dataset.json
+jq --arg sa "${MCP_SA}" '.access += [{"role": "READER", "userByEmail": $sa}]' /tmp/cymbal_dataset.json > /tmp/cymbal_dataset_new.json
+bq update --source /tmp/cymbal_dataset_new.json "${PROJECT_ID}:Cymbal_Cyber"
+for table in soc_tickets adk_threat_assessment; do
+  bq add-iam-policy-binding --member="serviceAccount:${MCP_SA}" --role="roles/bigquery.dataEditor" "${PROJECT_ID}:Cymbal_Cyber.${table}"
+done
+
+# Resource-level bucket bindings for the MCP SA
+gcloud storage buckets add-iam-policy-binding "gs://cymbal-cyber-screenshots_${PROJECT_ID}" --member="serviceAccount:${MCP_SA}" --role="roles/storage.objectViewer"
+gcloud storage buckets add-iam-policy-binding "gs://cymbal-cyber-adk-escalations-bucket_${PROJECT_ID}" --member="serviceAccount:${MCP_SA}" --role="roles/storage.objectUser"
 
 # Resource-level self-impersonation for keyless V4 signed URLs
-gcloud iam service-accounts add-iam-policy-binding "${AGENT_SA}" \
+gcloud iam service-accounts add-iam-policy-binding "${MCP_SA}" \
     --project="${PROJECT_ID}" \
-    --member="serviceAccount:${AGENT_SA}" \
+    --member="serviceAccount:${MCP_SA}" \
     --role="roles/iam.serviceAccountTokenCreator"
+
+# The agent may invoke the MCP tool service, and nothing else may
+gcloud run services add-iam-policy-binding cymbal-cyber-mcp \
+    --project="${PROJECT_ID}" --region="${REGION}" \
+    --member="serviceAccount:${AGENT_SA}" --role="roles/run.invoker"
 
 # 3. Create Pub/Sub Push Invoker Service Account
 gcloud iam service-accounts create pubsub-invoker-sa \
