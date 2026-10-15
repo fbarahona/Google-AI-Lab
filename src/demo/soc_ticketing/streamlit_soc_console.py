@@ -206,6 +206,22 @@ def short_ts(value: Any) -> str:
     return str(value or "")[:19].replace("T", " ")
 
 
+def score_label(ticket: dict[str, Any]) -> str:
+    """Queue score: the incident total when the ticket covers several windows."""
+    windows = ticket.get("incident_windows") or 0
+    if windows > 1:
+        return f"score {ticket.get('incident_total_score')} ({windows} windows)"
+    return f"score {ticket.get('threat_score', 'N/A')}"
+
+
+def entity_label(value: Any) -> str:
+    """Header value for a ticket entity; placeholders mean the field was not in the alert."""
+    text = str(value or "")
+    if not text or text.startswith(("unknown_", "unresolved_")):
+        return "Not in alert"
+    return text
+
+
 def is_simulated(ticket: dict[str, Any]) -> bool:
     return ticket.get("agent_decision") == SIMULATED_DECISION
 
@@ -412,10 +428,22 @@ def render_ticket_detail(ticket: dict[str, Any], archived: bool) -> None:
             )
 
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("User", ticket.get("user_id", "Unknown"))
-        m2.metric("Device", ticket.get("device_id", "Unknown"))
-        m3.metric("Origin IP", ticket.get("source_ip", "Unknown"))
-        m4.metric("Threat Score", ticket.get("threat_score", "N/A"))
+        m1.metric("User", entity_label(ticket.get("user_id")))
+        m2.metric("Device", entity_label(ticket.get("device_id")))
+        m3.metric("Origin IP", entity_label(ticket.get("source_ip")))
+        windows = ticket.get("incident_windows") or 0
+        if windows > 1:
+            m4.metric(
+                "Incident Score",
+                ticket.get("incident_total_score"),
+                help=(
+                    f"{windows} correlated 2-minute windows, peak "
+                    f"{ticket.get('incident_peak_score')}. The agent was alerted on "
+                    f"the first window (score {ticket.get('threat_score')})."
+                ),
+            )
+        else:
+            m4.metric("Threat Score", ticket.get("threat_score", "N/A"))
 
         reason = (
             ticket.get("agent_reason")
@@ -845,8 +873,8 @@ def queue_panel() -> None:
             sev = str(t.get("severity") or "HIGH").upper()
             selected = tid == st.session_state.selected_ticket_id
             label = (
-                f"{SEVERITY_ICONS.get(sev, '⚪')} **{t.get('user_id', 'Unknown')}** · {sev} · "
-                f"score {t.get('threat_score', 'N/A')}"
+                f"{SEVERITY_ICONS.get(sev, '⚪')} **{entity_label(t.get('user_id'))}** · {sev} · "
+                f"{score_label(t)}"
                 f"{' · 🧪 Simulated' if is_simulated(t) else ''}  \n"
                 f"{short_ts(t.get('created_at') or t.get('timestamp'))}"
             )
@@ -1019,13 +1047,32 @@ PAGES = {
 }
 
 
+def nav_links() -> None:
+    """Page links; the triage count refreshes with the live panels."""
+    for page in PAGES.values():
+        label = page.title
+        if page is PAGES["triage"]:
+            label = f"{page.title} ({len(load_new_tickets())})"
+        st.page_link(page, label=label, icon=page.icon, width="stretch")
+
+
 def status_panel() -> None:
-    pending = len(load_new_tickets())
-    archived = len(load_historic_tickets())
+    # Simulated tickets sit in the queue with a badge but, like every other
+    # dashboard metric, are left out of the counts.
+    queue = load_new_tickets()
+    pending = sum(not is_simulated(t) for t in queue)
+    simulated = len(queue) - pending
+    archived = sum(not is_simulated(t) for t in load_historic_tickets())
     mode = "Cloud (BigQuery SSOT)" if service.is_cloud_enabled() else "Local simulation"
     st.markdown('<div class="panel-title">System status</div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
-    c1.metric("Pending", pending)
+    c1.metric(
+        "Pending",
+        pending,
+        help=f"{simulated} simulated ticket(s) also in the queue, not counted."
+        if simulated
+        else None,
+    )
     c2.metric("Archived", archived)
     st.caption(f"Mode: {mode}")
     st.caption(f"Dataset: {PROJECT_ID}.{DATASET_ID}")
@@ -1041,11 +1088,7 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    for page in PAGES.values():
-        label = page.title
-        if page is PAGES["triage"]:
-            label = f"{page.title} ({len(load_new_tickets())})"
-        st.page_link(page, label=label, icon=page.icon, width="stretch")
+    st.fragment(nav_links, run_every=live_interval())()
 
     st.divider()
     with st.container(border=True):

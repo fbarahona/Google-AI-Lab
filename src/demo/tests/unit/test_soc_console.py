@@ -307,3 +307,62 @@ def test_console_archive_shows_auto_closed_false_positives(tmp_path, monkeypatch
 )
 def test_neutralize_markdown_blocks_beacons_and_live_links(text, expected):
     assert report_parser.neutralize_markdown(text) == expected
+
+
+def test_pending_leaves_out_simulated_and_header_marks_missing_entities(
+    tmp_path, monkeypatch
+):
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    monkeypatch.setenv("LOCAL_QUEUE_DIR", str(tmp_path))
+    from src.demo.soc_ticketing.models import SIMULATED_DECISION, SocTicket
+    from src.demo.soc_ticketing.ticketing_service import SocTicketingService
+
+    svc = SocTicketingService(project_id="local-demo")
+    common = {
+        "severity": "CRITICAL",
+        "status": "ESCALATED",
+        "agent_reason": "r",
+        "structured_report": "Report.",
+        "threat_score": 100,
+    }
+    svc.create_and_dispatch_ticket(
+        SocTicket(
+            ticket_id="SOC-TICKET-c.wilson-1",
+            user_id="c.wilson",
+            device_id="unknown_device",
+            source_ip="unknown_ip",
+            agent_decision="PERCEIVED_THREAT",
+            created_at="2026-10-15T05:31:00+00:00",
+            **common,
+        )
+    )
+    svc.create_and_dispatch_ticket(
+        SocTicket(
+            ticket_id="SOC-TICKET-l.taylor-sim",
+            user_id="l.taylor",
+            device_id="ws-admin",
+            source_ip="10.0.0.15",
+            agent_decision=SIMULATED_DECISION,
+            created_at="2026-10-15T05:00:00+00:00",
+            **common,
+        )
+    )
+
+    import streamlit as st
+
+    st.cache_data.clear()
+    at = AppTest.from_file(str(CONSOLE), default_timeout=60)
+    at.run()
+    at._page_hash = next(
+        h for h, p in at._registered_pages.items() if p.get("url_pathname") == "triage"
+    )
+    at.run()
+    assert not at.exception, at.exception
+    metrics = {m.label: m.value for m in at.metric}
+    assert metrics["Pending"] == "1"
+    assert metrics["User"] == "c.wilson"
+    assert metrics["Device"] == "Not in alert"
+    assert metrics["Origin IP"] == "Not in alert"
+    assert any("Triage Queue (2)" in str(link.label) for link in at.get("page_link"))

@@ -110,6 +110,12 @@ _LIFECYCLE_FLAG_BY_TOOL = {
     "log_false_positive": "false_positive_logged",
 }
 
+# Evidence tools and the argument naming the user they investigated.
+_USER_ARG_BY_TOOL = {
+    "get_entity_behavioral_profile": "entity_id",
+    "get_gcs_uri_for_user": "user",
+}
+
 # Tools whose ticket_id argument the gate replaces with the alert's own ticket ID, so
 # the model cannot reuse or collide IDs and a redelivered alert maps to the same ticket.
 _TICKET_ID_TOOLS = frozenset(
@@ -232,6 +238,16 @@ def sync_mcp_security_state_callback(
             collected_flag = _COLLECTED_FLAG_BY_TOOL.get(tool_name)
             if collected_flag:
                 state[collected_flag] = True
+
+    # The user the evidence tools ran for, for tickets with no alert to name one
+    # (ADK playground). Taken from the call's own arguments, never from tool output.
+    if tool_name in _USER_ARG_BY_TOOL and isinstance(sec_flags, dict):
+        if tool_name != "get_entity_behavioral_profile" or str(
+            args.get("entity_type", "")
+        ).lower() in ("user", "user_id"):
+            user = args.get(_USER_ARG_BY_TOOL[tool_name])
+            if user and not state.get("investigated_user"):
+                state["investigated_user"] = str(user)
 
     # 1. Update state from structured security_flags. Evidence flags only ever
     #    tighten the security gate, so any tool may raise them; lifecycle flags
@@ -434,6 +450,8 @@ def security_gate_callback(
     report argument, so the analyst sees the evidence behind the summary.
     """
     state = getattr(tool_context, "state", None)
+    if tool.name in _TICKET_ID_TOOLS:
+        _pin_alert_identity(args, state)
     report_arg = _REPORT_ARG_BY_TOOL.get(tool.name)
     if report_arg is not None:
         _assign_ticket_id(tool.name, args, state)
@@ -507,6 +525,52 @@ def security_gate_callback(
     return None
 
 
+# alert_payload keys the ticket tools read before the canonical ones; dropped when the
+# gate pins the canonical value, so the model's spelling cannot shadow it.
+_ALERT_KEY_ALIASES = {
+    "user_id": ("user",),
+    "device_id": ("device",),
+    "source_ip": ("ip_address",),
+    "total_2_min_threat_score": ("threat_score",),
+}
+
+
+def _pin_alert_identity(args: dict[str, Any], state: Any) -> None:
+    """
+    Overwrites the entity fields of the model's alert_payload with the alert the
+    investigation started from, so the ticket names the alerted user, device, IP and
+    score whatever the model wrote. Without an alert (an ADK playground prompt such
+    as "investigate user c.wilson") the user is the one the evidence tools were run
+    for; fields with no trusted source are left to the model.
+    """
+    if state is None:
+        return
+    trusted = {
+        "alert_id": state.get("alert_id"),
+        "user_id": state.get("user_id") or state.get("investigated_user"),
+        "device_id": state.get("device_id"),
+        "source_ip": state.get("source_ip"),
+        "total_2_min_threat_score": state.get("threat_score"),
+        "window_end": state.get("window_end"),
+    }
+    trusted = {k: v for k, v in trusted.items() if v not in (None, "")}
+    if not trusted:
+        return
+    payload = args.get("alert_payload")
+    if not isinstance(payload, dict):
+        try:
+            payload = json.loads(payload or "{}")
+        except (TypeError, ValueError):
+            payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    for key, value in trusted.items():
+        for alias in _ALERT_KEY_ALIASES.get(key, ()):
+            payload.pop(alias, None)
+        payload[key] = value
+    args["alert_payload"] = json.dumps(payload)
+
+
 def _assign_ticket_id(tool_name: str, args: dict[str, Any], state: Any) -> None:
     """Replaces the model's ticket_id with the one seeded for this alert."""
     if tool_name in _TICKET_ID_TOOLS and state is not None and state.get("ticket_id"):
@@ -559,6 +623,7 @@ def before_orchestrator_starts(callback_context: CallbackContext):
         state["window_end"] = None
         state["ticket_id"] = None
         state["alert_id"] = None
+        state["investigated_user"] = None
 
         # Seed alert fields from user_content
         user_content = getattr(callback_context, "user_content", None)
