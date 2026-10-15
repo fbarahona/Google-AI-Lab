@@ -14,7 +14,6 @@ redraws the panel that changed and never resets navigation or a form being typed
 import logging
 import os
 import re
-import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -22,44 +21,26 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+# Run from the repository root with `python -m streamlit run`, so `src.demo` imports
+# resolve from it (the Cloud Run command does the same).
+from src.demo.soc_ticketing.dashboard_charts import (
+    create_category_bar_chart,
+    create_donut_chart,
+    create_log_breakdown_chart,
+    create_log_rate_chart,
+    create_threat_map_deck,
+    create_threat_trend_chart,
+)
+from src.demo.soc_ticketing.demo_actions import (
+    inject_threat_scenario,
+    stream_benign_logs,
+)
+from src.demo.soc_ticketing.models import AUTO_CLOSED_FP_DECISION, SIMULATED_DECISION
+from src.demo.soc_ticketing.report_parser import neutralize_markdown, parse_report
+from src.demo.soc_ticketing.ticket_assistant import TicketAssistant
+from src.demo.soc_ticketing.ticketing_service import SocTicketingService
+
 logger = logging.getLogger("SocConsole")
-
-# Ensure directory is on sys.path if run directly via `streamlit run`
-_CURRENT_DIR = Path(__file__).resolve().parent
-if str(_CURRENT_DIR) not in sys.path:
-    sys.path.insert(0, str(_CURRENT_DIR))
-_SRC_DIR = _CURRENT_DIR.parent.parent
-if str(_SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(_SRC_DIR))
-
-try:
-    from .dashboard_charts import (
-        create_category_bar_chart,
-        create_donut_chart,
-        create_log_breakdown_chart,
-        create_log_rate_chart,
-        create_threat_map_deck,
-        create_threat_trend_chart,
-    )
-    from .demo_actions import inject_threat_scenario, stream_benign_logs
-    from .models import AUTO_CLOSED_FP_DECISION, SIMULATED_DECISION
-    from .report_parser import parse_report
-    from .ticket_assistant import TicketAssistant
-    from .ticketing_service import SocTicketingService
-except ImportError:
-    from dashboard_charts import (
-        create_category_bar_chart,
-        create_donut_chart,
-        create_log_breakdown_chart,
-        create_log_rate_chart,
-        create_threat_map_deck,
-        create_threat_trend_chart,
-    )
-    from demo_actions import inject_threat_scenario, stream_benign_logs
-    from models import AUTO_CLOSED_FP_DECISION, SIMULATED_DECISION
-    from report_parser import parse_report
-    from ticket_assistant import TicketAssistant
-    from ticketing_service import SocTicketingService
 
 st.set_page_config(
     page_title="SOC As-A-Service",
@@ -324,8 +305,8 @@ def render_sections(sections, empty_message: str) -> None:
         return
     for section in sections:
         with st.container(border=True):
-            st.markdown(f"**{section.title}**")
-            st.markdown(section.body)
+            st.markdown(f"**{neutralize_markdown(section.title)}**")
+            st.markdown(neutralize_markdown(section.body))
 
 
 @st.fragment
@@ -355,7 +336,7 @@ def ticket_chat(ticket: dict[str, Any]) -> None:
             with st.chat_message(
                 msg["role"], avatar="🧑‍💻" if msg["role"] == "user" else "🛡️"
             ):
-                st.markdown(msg["content"])
+                st.markdown(neutralize_markdown(msg["content"]))
 
     typed = st.chat_input("Ask about this ticket...", key=f"chat_input_{tid}")
     question = typed or question
@@ -521,8 +502,8 @@ def render_ticket_detail(ticket: dict[str, Any], archived: bool) -> None:
                 unsafe_allow_html=True,
             )
             for i, section in enumerate(parsed.evidence):
-                with st.expander(section.title, expanded=i == 0):
-                    st.markdown(section.body)
+                with st.expander(neutralize_markdown(section.title), expanded=i == 0):
+                    st.markdown(neutralize_markdown(section.body))
 
     with tab_chat:
         ticket_chat(ticket)
@@ -536,8 +517,12 @@ def render_ticket_detail(ticket: dict[str, Any], archived: bool) -> None:
             icon=":material/download:",
         )
         with st.container(border=True):
-            # Rendered without HTML: the report carries text captured from user desktops.
-            st.markdown(report or "*No structured report content recorded.*")
+            # Rendered without HTML, images or live links: the report carries text
+            # captured from user desktops.
+            st.markdown(
+                neutralize_markdown(report)
+                or "*No structured report content recorded.*"
+            )
 
     if archived:
         with st.container(border=True):

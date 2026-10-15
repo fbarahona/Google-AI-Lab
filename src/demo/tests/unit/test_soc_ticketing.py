@@ -8,7 +8,11 @@ from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 
-from src.demo.soc_ticketing.models import AUTO_CLOSED_FP_DECISION, SocTicket
+from src.demo.soc_ticketing.models import (
+    AUTO_CLOSED_FP_DECISION,
+    SIMULATED_DECISION,
+    SocTicket,
+)
 from src.demo.soc_ticketing.ticketing_service import (
     SocTicketingService,
     TicketPersistenceError,
@@ -227,3 +231,17 @@ def test_cloud_auto_closed_false_positive_fails_closed(tmp_path, monkeypatch):
     service._bq_client.insert_rows_json.side_effect = RuntimeError("403")
     with pytest.raises(TicketPersistenceError):
         service.record_auto_closed_false_positive(_ticket())
+
+
+def test_local_sample_history_is_simulated_and_not_counted(tmp_path, monkeypatch):
+    """The sample archive shown on a fresh local console never inflates the KPIs."""
+    monkeypatch.setenv("LOCAL_QUEUE_DIR", str(tmp_path))
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    service = SocTicketingService(project_id="local-demo")
+
+    history = service.fetch_historic_tickets()
+    assert history
+    assert all(t["agent_decision"] == SIMULATED_DECISION for t in history)
+    assert all(t["ticket_id"].startswith("SIM-TICKET-") for t in history)
+    assert not list((tmp_path / "history").glob("*.json"))  # nothing written
+    assert service.fetch_dashboard_metrics()["triaged_alerts"] == 0

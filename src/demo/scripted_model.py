@@ -1,5 +1,6 @@
 """
-Deterministic stand-in for Gemini used by the end-to-end pipeline test.
+Deterministic stand-in for Gemini, used by the end-to-end pipeline test and by the
+local demo runner (src/demo/local_runner.py) when no live model is requested.
 
 It routes on the tools each agent exposes, so every agent, callback, MCP server and
 the ticketing service run for real; only the model's choices are scripted. The SOC

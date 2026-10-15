@@ -85,8 +85,8 @@ It seamlessly bridges **Cloud Architecture**, **Stream Data Engineering**, **Age
 │agent             │           │agent             │           │agent             │           │agent             │
 │                  │           │                  │           │                  │           │                  │
 │Tool:             │           │Tools:            │           │Tools:            │           │Tools:            │
-│google_search     │           │BigQueryToolset,  │           │Vision OCR,       │           │Dispatch Ticket,  │
-│(OSINT IP Lookup) │           │behavioral queries│           │Signed GCS URL    │           │False Positive BQ │
+│google_search     │           │Behavioral profile│           │Vision OCR,       │           │Dispatch Ticket,  │
+│(OSINT IP Lookup) │           │(parameterized)   │           │Signed GCS URL    │           │False Positive BQ │
 └──────────────────┘           └──────────────────┘           └──────────────────┘           └─────────┬────────┘
                                                                                                        │
                                                                                                        ▼
@@ -105,17 +105,21 @@ It seamlessly bridges **Cloud Architecture**, **Stream Data Engineering**, **Age
 You can run the entire pipeline locally without deploying any GCP resources or incurring cloud costs.
 
 ### 1. Run the End-to-End Local Pipeline
+The runner scores synthetic telemetry with the detector's rules and sends the alert through the real orchestrator, MCP tool servers and security gate. A scripted model stands in for Gemini unless you pass `--live-model`.
 ```bash
-# Test Scenario A: Malicious APT attack (User: u.lewis, Lazarus Group IP, Mimikatz)
-python -m src.demo.local_runner --threat malicious
+# Test Scenario A: Malicious APT attack (User: u.lewis, Mimikatz)
+uv run python -m src.demo.local_runner --threat malicious
 
 # Test Scenario B: Benign False Positive (User: l.taylor, Admin backup script)
-python -m src.demo.local_runner --threat false_positive
+uv run python -m src.demo.local_runner --threat false_positive
+
+# Test Scenario C: Prompt injection; the gate blocks the false-positive closure
+uv run python -m src.demo.local_runner --threat injection
 ```
 
 ### 2. Launch the Local SOC Analyst Console
 ```bash
-LOCAL_MODE=true streamlit run src/demo/soc_ticketing/streamlit_soc_console.py
+LOCAL_MODE=true uv run python -m streamlit run src/demo/soc_ticketing/streamlit_soc_console.py
 ```
 Open `http://localhost:8501` to view the incident queue, inspect desktop screenshot evidence (`u.lewis.png`), review the ADK report, and adjudicate the incident.
 
@@ -197,8 +201,7 @@ graph TD
     VisualAgent["✦ visual_analysis_agent"]:::agent
 
     ToolSearch["🔧 google_search"]:::tool
-    ToolBQQuery["🔧 build_event_logs_query"]:::tool
-    ToolBQSet["🔧 BigQueryToolset"]:::tool
+    ToolBQQuery["🔧 get_entity_behavioral_profile"]:::tool
     ToolVisAnalysis["🔧 get_visual_analysis_for_user"]:::tool
     ToolGCSUri["🔧 get_gcs_uri_for_user"]:::tool
     ToolSignedUrl["🔧 generate_signed_url"]:::tool
@@ -217,7 +220,6 @@ graph TD
 
     SearchAgent -.-> ToolSearch
     BQAgent -.-> ToolBQQuery
-    BQAgent -.-> ToolBQSet
     VisualAgent -.-> ToolVisAnalysis
     VisualAgent -.-> ToolGCSUri
     VisualAgent -.-> ToolSignedUrl
@@ -237,9 +239,9 @@ graph TD
      - **Tool:** `google_search`
      - **Purpose:** Extracts public IPs and researches origin country, ASN, reputation, and threat intel.
   2. **`bq_investigation_agent`**
-     - **Description:** *"Agent that answers questions about BigQuery data by executing SQL queries."*
-     - **Tools:** `build_event_logs_query`, `BigQueryToolset`
-     - **Purpose:** Constructs and executes 24-hour parameterized behavioral queries against BigQuery dataset `Cymbal_Cyber`.
+     - **Description:** *"Agent that analyzes BigQuery behavioral telemetry by querying historical access and network events."*
+     - **Tool:** `get_entity_behavioral_profile` (MCP; no free-form SQL)
+     - **Purpose:** Runs a fixed, parameterized 24-hour behavioral profile query against BigQuery dataset `Cymbal_Cyber`.
   3. **`visual_analysis_agent`**
      - **Description:** *"Agent that analyzes user desktop screenshots using multi-modal AI to uncover forensic visual evidence."*
      - **Tools:** `get_visual_analysis_for_user`, `get_gcs_uri_for_user`, `generate_signed_url`

@@ -42,7 +42,7 @@ cp .env.example .env   # set GOOGLE_CLOUD_PROJECT, or GEMINI_API_KEY for Google 
 
 ### 2. Run the end-to-end forensic simulation
 
-The local runner generates synthetic access and network logs, detects an anomaly, runs the multi-agent investigation, and writes the adjudicated ticket:
+The local runner generates synthetic access and network logs, scores them with the detector's rules, and sends the alert through the real orchestrator, MCP tool servers and security gate, which write the ticket to the local queue. A scripted model makes the agents' choices by default, so no credentials are needed; add `--live-model` to use Gemini instead. For the injection and false-positive scenarios the scripted model deliberately tries to close the alert as a false positive, so you can watch the gate decide:
 
 ```bash
 # Scenario A: Malicious APT attack (user u.lewis, Lazarus Group IP, Mimikatz in memory)
@@ -62,7 +62,7 @@ Use `--user <id>` to target a different user.
 Inspect the incident queue, view desktop screenshot evidence, review the multi-agent investigative report, and adjudicate tickets:
 
 ```bash
-LOCAL_MODE=true uv run streamlit run src/demo/soc_ticketing/streamlit_soc_console.py
+LOCAL_MODE=true uv run python -m streamlit run src/demo/soc_ticketing/streamlit_soc_console.py
 ```
 
 Then open **http://localhost:8501** in your browser.
@@ -229,10 +229,9 @@ A rendered diagram is also available at [`src/demo/system_architecture.png`](src
 │   ├── tools.py                    # Tool implementations & compatibility facade
 │   ├── mcp_server/                 # Local MCP server ("cymbal-cyber-mcp")
 │   │   ├── __main__.py             # stdio/SSE CLI entrypoint
-│   │   ├── server.py               # Server definition & 8 registered tools
-│   │   └── tools/                  # Tool providers (BigQuery, Vision, SOC)
+│   │   └── server.py               # Server definition & 8 registered tools
 │   ├── threat_detector.py          # Scheduled micro-batch detector (Cloud Run Job)
-│   ├── threat_scanner.py           # Legacy standalone threat scanner
+│   ├── detection_rules.py          # Python twin of the BigQuery detection UDFs
 │   ├── fast_api_app.py             # FastAPI backend (Pub/Sub webhook + A2A)
 │   ├── logging_utils.py            # Structured logging utilities
 │   └── app_utils/                  # Service & A2A helpers
@@ -244,7 +243,7 @@ A rendered diagram is also available at [`src/demo/system_architecture.png`](src
 │   ├── terraform/                  # GCP Terraform IaC modules (zero-cost baseline)
 │   ├── tests/                      # unit/, integration/ and eval/ suites
 │   ├── other_code/                 # Supporting SQL queries & analyst scripts
-│   ├── local_runner.py             # Zero-cloud end-to-end demo runner
+│   ├── local_runner.py             # Zero-cloud demo: real agents, scripted or live model
 │   └── README.md                   # Demo deep dive (pipeline, detection, agents)
 ├── local_demo_data/
 │   ├── user_screenshots/           # Forensic desktop screenshots for the vision agent

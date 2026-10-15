@@ -14,7 +14,6 @@ from adk_agent.fast_api_app import app
 from adk_agent.tools import (
     DEFAULT_MAX_BYTES_BILLED,
     build_event_logs_query,
-    execute_sql,
     validate_safe_sql_query,
 )
 
@@ -95,58 +94,6 @@ def test_validate_safe_sql_query_sandboxes_dataset_references():
     unauthorized_query = "SELECT * FROM `other_tenant.financial_records.payroll`;"
     with pytest.raises(ValueError, match="Cross-dataset reference forbidden"):
         validate_safe_sql_query(unauthorized_query, allowed_dataset="Cymbal_Cyber")
-
-
-def test_execute_sql_security_gate_and_interpolation(monkeypatch):
-    """Verify execute_sql enforces INFORMATION_SCHEMA restriction, dataset sandboxing, and injects dataset dynamically."""
-    monkeypatch.setenv("LOCAL_MODE", "true")
-
-    # INFORMATION_SCHEMA blocked
-    with pytest.raises(
-        ValueError, match=re.escape("Access to INFORMATION_SCHEMA is restricted.")
-    ):
-        execute_sql("SELECT * FROM INFORMATION_SCHEMA.TABLES;")
-
-    # Cross-dataset blocked
-    with pytest.raises(ValueError, match="Cross-dataset reference forbidden"):
-        execute_sql("SELECT * FROM `other_project.tenant_x.logs`;")
-
-    # Valid bare table query interpolates dataset and succeeds in local mode
-    res = execute_sql("SELECT * FROM user_access_events WHERE user_id = 'u.lewis';")
-    assert "LOCAL_SIMULATION_SUCCESS" in res
-    assert "Cymbal_Cyber.user_access_events" in res
-
-
-def test_forbidden_dml_check_blocks_destructive_and_metadata_queries():
-    """Verify forbidden_dml_check callback intercepts destructive DML, INFORMATION_SCHEMA, and cross-dataset."""
-    from unittest.mock import MagicMock
-
-    from adk_agent.agent import forbidden_dml_check
-
-    mock_tool = MagicMock()
-    mock_tool.name = "execute_sql"
-    mock_context = MagicMock()
-
-    # Destructive blocked
-    res_drop = forbidden_dml_check(
-        mock_tool, {"query": "DROP TABLE soc_tickets;"}, mock_context
-    )
-    assert res_drop is not None
-    assert "Tool execution was blocked" in res_drop["result"]
-
-    # INFORMATION_SCHEMA blocked
-    res_meta = forbidden_dml_check(
-        mock_tool, {"query": "SELECT * FROM INFORMATION_SCHEMA.TABLES;"}, mock_context
-    )
-    assert res_meta is not None
-    assert "Access to INFORMATION_SCHEMA is restricted" in res_meta["result"]
-
-    # Cross-dataset blocked
-    res_cross = forbidden_dml_check(
-        mock_tool, {"query": "SELECT * FROM `other_tenant.secret.tbl`;"}, mock_context
-    )
-    assert res_cross is not None
-    assert "Cross-dataset reference forbidden" in res_cross["result"]
 
 
 # ==============================================================================

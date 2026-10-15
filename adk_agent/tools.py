@@ -2,6 +2,11 @@
 Tools for the Cymbal Cyber ADK Multi-Agent Framework.
 Includes BigQuery queries, GCS signed URLs, multimodal visual analysis with Gemini,
 and SOC ticketing dispatch.
+
+Every tool returns a dict with the same shape whether it runs in the MCP server or
+in-process: a result field (or "error") plus "security_flags" for the flags the
+agent's security gate reads. When a ToolContext is passed, the same flags are also
+written to session state.
 """
 
 import glob
@@ -17,34 +22,22 @@ from pathlib import Path
 from typing import Any
 
 import google.auth
+from dotenv import load_dotenv
 from google import genai
 from google.adk.tools import ToolContext
 from google.auth import impersonated_credentials
 from google.cloud import bigquery, storage
 from google.genai import types
 
-# Integrations fallback
-try:
-    from google.adk.integrations.bigquery.bigquery_toolset import BigQueryToolset
-except ImportError:
-    from google.adk.tools.bigquery import BigQueryToolset
-
-try:
-    from ..soc_ticketing.models import SocTicket
-    from ..soc_ticketing.ticketing_service import SocTicketingService
-except (ImportError, ValueError):
-    try:
-        from soc_ticketing.models import SocTicket
-        from soc_ticketing.ticketing_service import SocTicketingService
-    except ImportError:
-        from src.demo.soc_ticketing.models import SocTicket
-        from src.demo.soc_ticketing.ticketing_service import SocTicketingService
-
-from dotenv import load_dotenv
+from adk_agent import detection_rules as rules
+from src.demo.soc_ticketing.models import SocTicket
+from src.demo.soc_ticketing.ticketing_service import SocTicketingService
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 
@@ -84,20 +77,10 @@ _bq_client = None
 
 
 def get_bq_client():
+    """BigQuery client on Application Default Credentials (the service's SA in the cloud)."""
     global _bq_client
     if _bq_client is None:
-        creds = None
-        try:
-            from src.demo.soc_ticketing.ticketing_service import get_gcp_credentials
-
-            creds = get_gcp_credentials()
-        except Exception:
-            pass
-        _bq_client = (
-            bigquery.Client(project=PROJECT_ID, credentials=creds)
-            if creds
-            else bigquery.Client(project=PROJECT_ID)
-        )
+        _bq_client = bigquery.Client(project=PROJECT_ID)
     return _bq_client
 
 
@@ -116,7 +99,13 @@ def get_soc_service():
     return _soc_service
 
 
-bigquery_toolset = BigQueryToolset()
+def _set_state(tool_context: ToolContext | None, key: str, value: Any) -> None:
+    if tool_context is not None and getattr(tool_context, "state", None) is not None:
+        tool_context.state[key] = value
+
+
+def _clean_list(values: list[str] | None) -> list[str]:
+    return [str(v).strip() for v in values or [] if v and str(v).strip()]
 
 
 def _parse_alert_payload_to_row(alert_payload_str: str) -> dict:
@@ -154,7 +143,17 @@ def _parse_alert_payload_to_row(alert_payload_str: str) -> dict:
 
 
 # --- Security & SQL Injection Prevention ---
-ALLOWED_ENTITY_TYPES = {"user", "user_id", "device", "device_id", "ip", "source_ip"}
+# Accepted entity_type spellings, normalised once so the cloud query and the local
+# log scan always agree on what was asked for.
+ENTITY_TYPE_ALIASES = {
+    "user": "user",
+    "user_id": "user",
+    "device": "device",
+    "device_id": "device",
+    "ip": "ip",
+    "source_ip": "ip",
+}
+ALLOWED_ENTITY_TYPES = set(ENTITY_TYPE_ALIASES)
 ALLOWED_INTERVAL_WINDOWS = {
     "1 HOUR",
     "2 HOUR",
@@ -234,35 +233,6 @@ def validate_dataset_sandboxing(
                         f"Cross-dataset reference forbidden: query references dataset '{dataset_name}', "
                         f"but only '{allowed_dataset}' is permitted."
                     )
-
-
-def inject_dataset_into_query(query: str, dataset_id: str = DATASET_ID) -> str:
-    """
-    Dynamically injects the designated dataset name into bare table references
-    in a SQL query, ensuring un-prefixed table references are explicitly sandboxed.
-    """
-    if not query:
-        return query
-
-    known_tables = {
-        "user_access_events",
-        "network_events",
-        "soc_tickets",
-        "adk_threat_assessment",
-        "alerts",
-        "alerts_dead_letter",
-        "user_screenshots_view",
-    }
-
-    modified_query = query
-    for tbl in known_tables:
-        pattern = rf"\b(FROM|JOIN)\s+[`]?{tbl}[`]?(?=[\s;,)]|$)"
-        replacement = rf"\1 `{dataset_id}.{tbl}`"
-        modified_query = re.sub(
-            pattern, replacement, modified_query, flags=re.IGNORECASE
-        )
-
-    return modified_query
 
 
 def validate_safe_sql_query(
@@ -380,12 +350,26 @@ def normalize_severity(severity: str | None, default: str = "HIGH") -> str:
     return sev if sev in SEVERITIES else default
 
 
-def create_rich_ticket_id(user_id: str) -> str:
+def create_rich_ticket_id(user_id: str) -> dict[str, str]:
     """
     Generates a standardized, readable ticket ID that is unique per call.
     During an investigation the security gate replaces it with the alert's own ticket ID.
     """
-    return f"SOC-TICKET-{_clean_ticket_user(user_id)}-{int(time.time())}-{uuid.uuid4().hex[:6]}"
+    return {
+        "ticket_id": f"SOC-TICKET-{_clean_ticket_user(user_id)}-{int(time.time())}-{uuid.uuid4().hex[:6]}"
+    }
+
+
+def normalize_entity_type(entity_type: str) -> str:
+    """Maps an accepted entity_type spelling to "user", "device" or "ip"."""
+    if not entity_type or not isinstance(entity_type, str):
+        raise ValueError("entity_type must be a non-empty string.")
+    clean_type = ENTITY_TYPE_ALIASES.get(entity_type.strip().lower())
+    if clean_type is None:
+        raise ValueError(
+            f"Invalid entity_type '{entity_type}'. Must be one of {sorted(ALLOWED_ENTITY_TYPES)}."
+        )
+    return clean_type
 
 
 def build_event_logs_query(
@@ -403,15 +387,7 @@ def build_event_logs_query(
         tuple[str, bigquery.QueryJobConfig]: The parameterized SQL string and the job configuration
         containing the scalar query parameter.
     """
-    if not entity_type or not isinstance(entity_type, str):
-        raise ValueError("entity_type must be a non-empty string.")
-
-    clean_type = entity_type.strip().lower()
-    if clean_type not in ALLOWED_ENTITY_TYPES:
-        raise ValueError(
-            f"Invalid entity_type '{entity_type}'. Must be one of {sorted(ALLOWED_ENTITY_TYPES)}."
-        )
-
+    clean_type = normalize_entity_type(entity_type)
     clean_id = sanitize_entity_value(entity_id, field_name="entity_id")
 
     clean_window = (window_to_investigate or "24 HOUR").strip().upper()
@@ -440,15 +416,18 @@ def build_event_logs_query(
         clean_id,
     )
 
-    if clean_type in {"device", "device_id"}:
+    # network_events has no device_id: device and user traffic is found through the
+    # internal IPs their VPN sessions were assigned (the detector joins the same way).
+    session_ips = "source_ip IN (SELECT assigned_internal_ip FROM FlaggedSessions)"
+    if clean_type == "device":
         access_filter = "device_id = @entity_id"
-        network_filter = "device_id = @entity_id"
-    elif clean_type in {"ip", "source_ip"}:
+        network_filter = session_ips
+    elif clean_type == "ip":
         access_filter = "source_ip = @entity_id"
         network_filter = "source_ip = @entity_id"
     else:
         access_filter = "user_id = @entity_id"
-        network_filter = "(user_id = @entity_id OR source_ip IN (SELECT assigned_internal_ip FROM FlaggedSessions))"
+        network_filter = f"(user_id = @entity_id OR {session_ips})"
 
     query_sql = rf"""
     WITH
@@ -465,7 +444,7 @@ def build_event_logs_query(
           COUNT(*) AS total_access_events_24h,
           COUNTIF(event_type = 'login_failure') AS total_login_failures_24h,
           COUNT(DISTINCT source_ip) AS distinct_public_source_ips_24h,
-          COUNTIF(REGEXP_CONTAINS(user_agent, r'^(python-requests|curl|Go-http-client)')) AS suspicious_user_agent_logins_24h,
+          COUNTIF(REGEXP_CONTAINS(user_agent, r'{rules.SUSPICIOUS_USER_AGENT_REGEX}')) AS suspicious_user_agent_logins_24h,
           COUNT(DISTINCT user_agent) AS distinct_user_agents_used_24h
         FROM `{DATASET_ID}.user_access_events`
         WHERE DATE(event_timestamp) >= DATE_SUB(CURRENT_DATE(), INTERVAL {partition_days} DAY)
@@ -475,8 +454,8 @@ def build_event_logs_query(
     NetworkMetrics AS (
         SELECT
           COUNT(*) AS total_network_events_24h,
-          COUNTIF(permission_level_requested IN ('root', 'admin')) AS high_privilege_requests_24h,
-          COUNTIF(file_type IN ('exe', 'dll', 'ps1', 'bat', 'vbs')) AS risky_file_transfers_24h,
+          COUNTIF(permission_level_requested IN {rules.HIGH_PRIVILEGE_LEVELS!r}) AS high_privilege_requests_24h,
+          COUNTIF(file_type IN {rules.RISKY_FILE_TYPES!r}) AS risky_file_transfers_24h,
           COUNTIF(`{DATASET_ID}.is_malicious_command`(command_line)) AS malicious_commands_24h,
           COUNTIF(`{DATASET_ID}.is_malicious_domain`(network_domain)) AS malicious_dns_queries_24h,
           COUNT(DISTINCT destination_ip) AS distinct_destination_ips_24h,
@@ -536,133 +515,103 @@ def read_png_text_chunks(file_path: str) -> dict[str, str]:
     return texts
 
 
+def local_logs_dir() -> Path:
+    """Where LOCAL_MODE reads synthetic telemetry (LOCAL_LOGS_DIR, else the repo's)."""
+    return Path(os.getenv("LOCAL_LOGS_DIR") or REPO_ROOT / "local_demo_data" / "logs")
+
+
+def _read_jsonl(logs_dir: Path, combined_name: str, pattern: str) -> list[dict]:
+    files = [logs_dir / combined_name]
+    if not files[0].exists():
+        files = sorted(Path(p) for p in glob.glob(str(logs_dir / pattern)))
+    events = []
+    for path in files:
+        try:
+            with open(path, encoding="utf-8") as f:
+                events.extend(json.loads(line) for line in f if line.strip())
+        except (OSError, ValueError) as e:
+            logger.warning("Error reading local telemetry %s: %s", path, e)
+    return events
+
+
 def _compute_profile_from_local_logs(
     entity_type: str, entity_id: str
 ) -> dict[str, Any]:
-    """Computes exact behavioral profile metrics dynamically from local synthetic log files."""
-    logs_dir = os.path.join(os.getcwd(), "local_demo_data", "logs")
-    access_files = [os.path.join(logs_dir, "user_access_events.jsonl")]
-    if not os.path.exists(access_files[0]) and os.path.exists(logs_dir):
-        access_files = sorted(
-            glob.glob(os.path.join(logs_dir, "access_events*.jsonl")),
-            reverse=True,
-        )
+    """
+    LOCAL_MODE version of build_event_logs_query: the same filters and the same
+    detection rules, over the synthetic log files instead of BigQuery. The time
+    window is not applied; the local files hold only the current demo's events.
+    """
+    clean_type = normalize_entity_type(entity_type)
+    logs_dir = local_logs_dir()
+    access_events = _read_jsonl(
+        logs_dir, "user_access_events.jsonl", "access_events*.jsonl"
+    )
+    network_events = _read_jsonl(
+        logs_dir, "network_events.jsonl", "network_events*.jsonl"
+    )
 
-    network_files = [os.path.join(logs_dir, "network_events.jsonl")]
-    if not os.path.exists(network_files[0]) and os.path.exists(logs_dir):
-        network_files = sorted(
-            glob.glob(os.path.join(logs_dir, "network_events*.jsonl")),
-            reverse=True,
-        )
+    access_field = {"user": "user_id", "device": "device_id", "ip": "source_ip"}[
+        clean_type
+    ]
+    entity_access = [ev for ev in access_events if ev.get(access_field) == entity_id]
+    session_ips = {
+        ev.get("assigned_internal_ip")
+        for ev in entity_access
+        if ev.get("event_type") == "login_success" and ev.get("assigned_internal_ip")
+    }
+    if clean_type == "ip":
+        entity_network = [
+            ev for ev in network_events if ev.get("source_ip") == entity_id
+        ]
+    elif clean_type == "device":
+        entity_network = [
+            ev for ev in network_events if ev.get("source_ip") in session_ips
+        ]
+    else:
+        entity_network = [
+            ev
+            for ev in network_events
+            if ev.get("user_id") == entity_id or ev.get("source_ip") in session_ips
+        ]
 
-    total_access = 0
-    login_failures = 0
-    source_ips = set()
-    suspicious_ua = 0
-    user_agents = set()
-
-    total_network = 0
-    high_priv = 0
-    risky_files = 0
-    mal_cmds = 0
-    mal_dns = 0
-    dest_ips = set()
-    files_transferred = set()
-
-    clean_id = (entity_id or "").strip().lower()
-
-    for access_file in access_files:
-        if os.path.exists(access_file):
-            try:
-                with open(access_file, encoding="utf-8") as f:
-                    for line in f:
-                        if not line.strip():
-                            continue
-                        ev = json.loads(line)
-                        ev_user = str(ev.get("user_id") or "").lower()
-                        ev_dev = str(ev.get("device_id") or "").lower()
-                        ev_ip = str(ev.get("source_ip") or "").lower()
-
-                        matches = (
-                            (entity_type == "user" and ev_user == clean_id)
-                            or (entity_type == "device" and ev_dev == clean_id)
-                            or (entity_type == "ip" and ev_ip == clean_id)
-                        )
-                        if matches:
-                            total_access += 1
-                            if ev.get("event_type") == "login_failure":
-                                login_failures += 1
-                            if ev.get("source_ip"):
-                                source_ips.add(ev["source_ip"])
-                            ua = str(ev.get("user_agent") or "")
-                            if ua:
-                                user_agents.add(ua)
-                                if re.search(
-                                    r"^(python-requests|curl|Go-http-client)",
-                                    ua,
-                                    re.IGNORECASE,
-                                ):
-                                    suspicious_ua += 1
-            except Exception as e:
-                logger.warning("Error reading local access logs: %s", e)
-
-    for network_file in network_files:
-        if os.path.exists(network_file):
-            try:
-                with open(network_file, encoding="utf-8") as f:
-                    for line in f:
-                        if not line.strip():
-                            continue
-                        ev = json.loads(line)
-                        ev_user = str(ev.get("user_id") or "").lower()
-                        ev_ip = str(ev.get("source_ip") or "").lower()
-
-                        matches = (entity_type == "user" and ev_user == clean_id) or (
-                            entity_type == "ip" and ev_ip == clean_id
-                        )
-                        if matches:
-                            total_network += 1
-                            if ev.get("permission_level_requested") in (
-                                "root",
-                                "admin",
-                            ):
-                                high_priv += 1
-                            ft = str(ev.get("file_type") or "").lower()
-                            if ft in ("exe", "dll", "ps1", "bat", "vbs"):
-                                risky_files += 1
-                            cmd = str(ev.get("command_line") or "")
-                            if re.search(
-                                r"(?i)(powershell -enc|IEX|DownloadString|mimikatz|payload)",
-                                cmd,
-                            ):
-                                mal_cmds += 1
-                            domain = str(ev.get("network_domain") or "")
-                            if re.search(
-                                r"(\.ru|\.xyz|bad-domain|payload-downloader|c2-server)",
-                                domain,
-                            ):
-                                mal_dns += 1
-                            if ev.get("destination_ip"):
-                                dest_ips.add(ev["destination_ip"])
-                            fh = ev.get("file_hash_sha256")
-                            if fh:
-                                files_transferred.add(fh)
-            except Exception as e:
-                logger.warning("Error reading local network logs: %s", e)
-
+    user_agents = [ev.get("user_agent") for ev in entity_access if ev.get("user_agent")]
     return {
-        "total_access_events_24h": total_access,
-        "total_login_failures_24h": login_failures,
-        "distinct_public_source_ips_24h": len(source_ips),
-        "suspicious_user_agent_logins_24h": suspicious_ua,
-        "distinct_user_agents_used_24h": len(user_agents),
-        "total_network_events_24h": total_network,
-        "high_privilege_requests_24h": high_priv,
-        "risky_file_transfers_24h": risky_files,
-        "malicious_commands_24h": mal_cmds,
-        "malicious_dns_queries_24h": mal_dns,
-        "distinct_destination_ips_24h": len(dest_ips),
-        "distinct_files_transferred_24h": len(files_transferred),
+        "total_access_events_24h": len(entity_access),
+        "total_login_failures_24h": sum(
+            ev.get("event_type") == "login_failure" for ev in entity_access
+        ),
+        "distinct_public_source_ips_24h": len(
+            {ev["source_ip"] for ev in entity_access if ev.get("source_ip")}
+        ),
+        "suspicious_user_agent_logins_24h": sum(
+            rules.is_suspicious_user_agent(ua) for ua in user_agents
+        ),
+        "distinct_user_agents_used_24h": len(set(user_agents)),
+        "total_network_events_24h": len(entity_network),
+        "high_privilege_requests_24h": sum(
+            rules.is_high_privilege(ev.get("permission_level_requested"))
+            for ev in entity_network
+        ),
+        "risky_file_transfers_24h": sum(
+            rules.is_risky_file_type(ev.get("file_type")) for ev in entity_network
+        ),
+        "malicious_commands_24h": sum(
+            rules.is_malicious_command(ev.get("command_line")) for ev in entity_network
+        ),
+        "malicious_dns_queries_24h": sum(
+            rules.is_malicious_domain(ev.get("network_domain")) for ev in entity_network
+        ),
+        "distinct_destination_ips_24h": len(
+            {ev["destination_ip"] for ev in entity_network if ev.get("destination_ip")}
+        ),
+        "distinct_files_transferred_24h": len(
+            {
+                ev["file_hash_sha256"]
+                for ev in entity_network
+                if ev.get("file_hash_sha256")
+            }
+        ),
     }
 
 
@@ -725,12 +674,7 @@ def get_entity_behavioral_profile(
                 entity_id,
                 e,
             )
-            if (
-                tool_context
-                and hasattr(tool_context, "state")
-                and tool_context.state is not None
-            ):
-                tool_context.state["evidence_unavailable"] = True
+            _set_state(tool_context, "evidence_unavailable", True)
             return {
                 "status": "ERROR",
                 "error": f"BigQuery telemetry query failed: {e}",
@@ -756,18 +700,8 @@ def get_entity_behavioral_profile(
         logger.info(
             "Setting state['malicious_indicators'] = True for entity: %s", entity_id
         )
-        if (
-            tool_context
-            and hasattr(tool_context, "state")
-            and tool_context.state is not None
-        ):
-            tool_context.state["malicious_indicators"] = True
-    if (
-        tool_context
-        and hasattr(tool_context, "state")
-        and tool_context.state is not None
-    ):
-        tool_context.state["telemetry_evidence_collected"] = True
+        _set_state(tool_context, "malicious_indicators", True)
+    _set_state(tool_context, "telemetry_evidence_collected", True)
 
     res["security_flags"] = {
         "malicious_indicators": bool(has_malicious),
@@ -775,95 +709,6 @@ def get_entity_behavioral_profile(
     }
 
     return res
-
-
-def execute_sql(
-    query: str,
-    tool_context: ToolContext | None = None,
-    *,
-    allow_metadata: bool = False,
-    allowed_dataset: str | None = None,
-) -> str:
-    """
-    Executes a read-only SQL query against the BigQuery security dataset.
-    Sandboxes dataset references, blocks unauthorized access to INFORMATION_SCHEMA,
-    and enforces maximum_bytes_billed scan ceilings.
-
-    Security Policy:
-        Administrative tool for analyst queries. Sandboxing parameters (allow_metadata,
-        allowed_dataset) are keyword-only internal arguments that cannot be manipulated
-        by agent tool callers.
-
-    Args:
-        query: BigQuery SQL query to execute.
-        tool_context: ADK ToolContext for tracking execution state.
-        allow_metadata: (Internal only) Set to True only when authorized for schema introspection.
-        allowed_dataset: (Internal only) Specific dataset to restrict queries to (defaults to security dataset).
-
-    Returns:
-        JSON string of query results.
-    """
-    if not query or not isinstance(query, str):
-        raise ValueError("query must be a non-empty string.")
-
-    target_dataset = allowed_dataset or DATASET_ID
-    # Validate destructive tokens, INFORMATION_SCHEMA, and cross-dataset references
-    validate_safe_sql_query(
-        query, allow_metadata=allow_metadata, allowed_dataset=target_dataset
-    )
-
-    # Inject dataset dynamically for bare table references
-    interpolated_query = inject_dataset_into_query(query, dataset_id=target_dataset)
-
-    is_local_mode = os.getenv("LOCAL_MODE", "false").lower() == "true"
-    if is_local_mode:
-        logger.info(
-            "Local mode execute_sql executing query: %s", interpolated_query[:100]
-        )
-        return json.dumps(
-            [{"status": "LOCAL_SIMULATION_SUCCESS", "query": interpolated_query[:100]}]
-        )
-
-    try:
-        bq = get_bq_client()
-        job_config = bigquery.QueryJobConfig(
-            maximum_bytes_billed=DEFAULT_MAX_BYTES_BILLED,
-            default_dataset=f"{PROJECT_ID}.{target_dataset}",
-        )
-        query_job = bq.query(interpolated_query, job_config=job_config)
-        rows = [dict(row.items()) for row in query_job.result()]
-        return json.dumps(rows, default=str)
-    except Exception as e:
-        logger.error("execute_sql query execution failed: %s", e)
-        if (
-            tool_context
-            and hasattr(tool_context, "state")
-            and tool_context.state is not None
-        ):
-            tool_context.state["evidence_unavailable"] = True
-        raise
-
-
-def get_table_schema(dataset_id: str, table_id: str) -> str:
-    """Returns the schema of a specified BigQuery table as JSON."""
-    clean_dataset = sanitize_entity_value(dataset_id, field_name="dataset_id")
-    clean_table = sanitize_entity_value(table_id, field_name="table_id")
-    is_local_mode = os.getenv("LOCAL_MODE", "false").lower() == "true"
-    if is_local_mode:
-        return json.dumps(
-            {
-                "table": f"{clean_dataset}.{clean_table}",
-                "status": "LOCAL_SIMULATION",
-                "columns": ["event_timestamp", "user_id", "device_id", "source_ip"],
-            }
-        )
-
-    bq = get_bq_client()
-    table = bq.get_table(f"{PROJECT_ID}.{clean_dataset}.{clean_table}")
-    fields = [
-        {"name": f.name, "type": f.field_type, "mode": f.mode} for f in table.schema
-    ]
-    return json.dumps(fields)
 
 
 def _is_allowed_screenshot_uri(uri: str) -> bool:
@@ -877,28 +722,21 @@ def _is_allowed_screenshot_uri(uri: str) -> bool:
 
 def _visual_evidence_unavailable(
     err_msg: str, tool_context: ToolContext | None
-) -> str | dict[str, Any]:
+) -> dict[str, Any]:
     """Fail-closed visual analysis result: marks evidence unavailable, returns no analysis."""
-    if (
-        tool_context
-        and hasattr(tool_context, "state")
-        and tool_context.state is not None
-    ):
-        tool_context.state["evidence_unavailable"] = True
-    if tool_context is None:
-        return {
-            "error": err_msg,
-            "security_flags": {
-                "evidence_unavailable": True,
-                "prompt_injection_detected": False,
-            },
-        }
-    return err_msg
+    _set_state(tool_context, "evidence_unavailable", True)
+    return {
+        "error": err_msg,
+        "security_flags": {
+            "evidence_unavailable": True,
+            "prompt_injection_detected": False,
+        },
+    }
 
 
 def get_visual_analysis_for_user(
     gcs_uri: str, tool_context: ToolContext | None = None
-) -> str | dict[str, Any]:
+) -> dict[str, Any]:
     """
     Performs multimodal inspection of a desktop screenshot using Gemini.
     Performs OCR on terminals, identifies command prompts, and evaluates suspicious UI activity.
@@ -938,9 +776,8 @@ def get_visual_analysis_for_user(
         file_path_candidate = (
             gcs_uri.replace("file://", "") if gcs_uri.startswith("file://") else ""
         )
-        repo_root = Path(__file__).resolve().parents[1]
         repo_screenshot = (
-            repo_root / "local_demo_data" / "user_screenshots" / f"{filename}.png"
+            REPO_ROOT / "local_demo_data" / "user_screenshots" / f"{filename}.png"
         )
         if file_path_candidate and os.path.exists(file_path_candidate):
             local_path = file_path_candidate
@@ -987,46 +824,21 @@ def get_visual_analysis_for_user(
                 tool_context,
             )
 
-    # Deterministic Prompt Injection Keyword Scanner
-    INJECTION_KEYWORDS = [
-        "ai triage",
-        "classify as",
-        "instruction override",
-        "system notice to ai",
-        "override instruction",
-        "authorized red team",
-        "authorized pentest",
-        "suppress all critical",
-        "do not dispatch",
-        "do not alert",
-    ]
-    is_injection = any(kw in visual_text.lower() for kw in INJECTION_KEYWORDS)
+    # Deterministic prompt injection scan; it does not depend on the model noticing.
+    is_injection = rules.contains_prompt_injection(visual_text)
     if is_injection:
         logger.warning("PROMPT INJECTION DETECTED in visual evidence for %s", gcs_uri)
-        if (
-            tool_context
-            and hasattr(tool_context, "state")
-            and tool_context.state is not None
-        ):
-            tool_context.state["prompt_injection_detected"] = True
+        _set_state(tool_context, "prompt_injection_detected", True)
         visual_text = f"[SECURITY ALERT: PROMPT INJECTION DETECTED IN DESKTOP SCREENSHOT]\n{visual_text}"
-    if (
-        tool_context
-        and hasattr(tool_context, "state")
-        and tool_context.state is not None
-    ):
-        tool_context.state["visual_evidence_collected"] = True
+    _set_state(tool_context, "visual_evidence_collected", True)
 
-    if tool_context is None:
-        return {
-            "analysis": visual_text,
-            "security_flags": {
-                "prompt_injection_detected": bool(is_injection),
-                "evidence_unavailable": False,
-            },
-        }
-
-    return visual_text
+    return {
+        "analysis": visual_text,
+        "security_flags": {
+            "prompt_injection_detected": is_injection,
+            "evidence_unavailable": False,
+        },
+    }
 
 
 def get_gcs_uri_for_user(user: str) -> dict[str, Any]:
@@ -1082,14 +894,14 @@ def get_gcs_uri_for_user(user: str) -> dict[str, Any]:
     }
 
 
-def generate_signed_url(gcs_uri: str) -> str:
+def generate_signed_url(gcs_uri: str) -> dict[str, Any]:
     """
     Generates a secure signed URL for a GCS object to allow authorized human SOC viewing.
-    Returns an explicit error message if signing fails or the URI is invalid, ensuring
-    that a signing failure never produces a misleading success result or unauthenticated link.
+    Returns {"signed_url": ...}, or {"error": ...} if signing fails or the URI is invalid,
+    so a signing failure never produces a misleading success result or unauthenticated link.
     """
     if not gcs_uri or not gcs_uri.startswith("gs://"):
-        return f"Error: Invalid GCS URI provided: {gcs_uri!r}"
+        return {"error": f"Invalid GCS URI provided: {gcs_uri!r}"}
 
     try:
         source_credentials, _ = google.auth.default()
@@ -1107,31 +919,25 @@ def generate_signed_url(gcs_uri: str) -> str:
                 GCS_SIGNER_SERVICE_ACCOUNT,
                 imp_err,
             )
-            return f"Error: Failed to obtain impersonated signing credentials for {GCS_SIGNER_SERVICE_ACCOUNT}: {imp_err}"
+            return {
+                "error": f"Failed to obtain impersonated signing credentials for {GCS_SIGNER_SERVICE_ACCOUNT}: {imp_err}"
+            }
 
         bucket_name, object_name = gcs_uri.replace("gs://", "").split("/", 1)
         bucket = storage_client.bucket(bucket_name)
         blob = bucket.blob(object_name)
 
-        return blob.generate_signed_url(
+        url = blob.generate_signed_url(
             version="v4",
             expiration=timedelta(minutes=30),
             service_account_email=GCS_SIGNER_SERVICE_ACCOUNT,
         )
+        return {"signed_url": url}
     except Exception as e:
         logger.error(
             "Could not generate impersonated signed URL for %s: %s", gcs_uri, e
         )
-        return f"Error: Failed to generate signed URL: {e}"
-
-
-def _set_state(tool_context: ToolContext | None, key: str, value: Any) -> None:
-    if tool_context is not None and getattr(tool_context, "state", None) is not None:
-        tool_context.state[key] = value
-
-
-def _clean_list(values: list[str] | None) -> list[str]:
-    return [str(v).strip() for v in values or [] if v and str(v).strip()]
+        return {"error": f"Failed to generate signed URL: {e}"}
 
 
 def dispatch_to_soc_ticketing_system(
@@ -1144,7 +950,7 @@ def dispatch_to_soc_ticketing_system(
     mitre_tactics: list[str] | None = None,
     indicators_of_compromise: list[str] | None = None,
     tool_context: ToolContext | None = None,
-) -> str | dict[str, Any]:
+) -> dict[str, Any]:
     """
     Passes a confirmed or suspected threat incident ticket directly to the SOC Ticketing System.
     Stores the ticket in BigQuery and the GCS escalation queue for SOC analysts to review.
@@ -1180,16 +986,12 @@ def dispatch_to_soc_ticketing_system(
 
     res = get_soc_service().create_and_dispatch_ticket(ticket)
     _set_state(tool_context, "ticket_dispatched", True)
-    if tool_context is None:
-        return {
-            "status": "DISPATCHED",
-            "ticket_id": ticket.ticket_id,
-            "message": res,
-            "security_flags": {
-                "ticket_dispatched": True,
-            },
-        }
-    return res
+    return {
+        "status": "DISPATCHED",
+        "ticket_id": ticket.ticket_id,
+        "message": res,
+        "security_flags": {"ticket_dispatched": True},
+    }
 
 
 def log_false_positive(
@@ -1197,7 +999,7 @@ def log_false_positive(
     agent_comment: str,
     ticket_id: str = "",
     tool_context: ToolContext | None = None,
-) -> str | dict[str, Any]:
+) -> dict[str, Any]:
     """
     Closes the alert as a False Positive. The closure is archived as a resolved ticket
     marked as closed by the agent, so analysts can review it in the console archive.
@@ -1234,31 +1036,25 @@ def log_false_positive(
     except Exception as e:
         logger.error("Exception during false positive logging: %s", e)
         _set_state(tool_context, "evidence_unavailable", True)
-        msg = f"Failed to log false positive: {e}"
-        if tool_context is None:
-            return {
-                "status": "ERROR",
-                "error": msg,
-                "security_flags": {
-                    "evidence_unavailable": True,
-                    "false_positive_logged": False,
-                },
-            }
-        return msg
-
-    _set_state(tool_context, "false_positive_logged", True)
-    msg = f"Successfully logged alert as a False Positive (ticket {ticket.ticket_id} archived for analyst review)."
-    if tool_context is None:
         return {
-            "status": "RESOLVED_FALSE_POSITIVE",
-            "ticket_id": ticket.ticket_id,
-            "message": msg,
+            "status": "ERROR",
+            "error": f"Failed to log false positive: {e}",
             "security_flags": {
-                "false_positive_logged": True,
-                "evidence_unavailable": False,
+                "evidence_unavailable": True,
+                "false_positive_logged": False,
             },
         }
-    return msg
+
+    _set_state(tool_context, "false_positive_logged", True)
+    return {
+        "status": "RESOLVED_FALSE_POSITIVE",
+        "ticket_id": ticket.ticket_id,
+        "message": f"Successfully logged alert as a False Positive (ticket {ticket.ticket_id} archived for analyst review).",
+        "security_flags": {
+            "false_positive_logged": True,
+            "evidence_unavailable": False,
+        },
+    }
 
 
 def escalate_to_human(
@@ -1268,7 +1064,7 @@ def escalate_to_human(
     context_data: str,
     severity: str = "HIGH",
     tool_context: ToolContext | None = None,
-) -> str | dict[str, Any]:
+) -> dict[str, Any]:
     """
     Dispatches the incident ticket to the SOC ticketing queue for human analyst adjudication.
     Returns immediately with escalation confirmation without blocking the agent runner.
@@ -1306,17 +1102,12 @@ def escalate_to_human(
         ticket_id,
         agent_reason_for_escalation,
     )
-    msg = (
-        f"Incident successfully escalated to Human SOC Analyst: Ticket ID '{ticket_id}'. "
-        f"Status: ESCALATED_PENDING_REVIEW. Queue Result: {result}"
-    )
-    if tool_context is None:
-        return {
-            "status": "ESCALATED_PENDING_REVIEW",
-            "ticket_id": ticket_id,
-            "message": msg,
-            "security_flags": {
-                "escalation_dispatched": True,
-            },
-        }
-    return msg
+    return {
+        "status": "ESCALATED_PENDING_REVIEW",
+        "ticket_id": ticket_id,
+        "message": (
+            f"Incident successfully escalated to Human SOC Analyst: Ticket ID '{ticket_id}'. "
+            f"Status: ESCALATED_PENDING_REVIEW. Queue Result: {result}"
+        ),
+        "security_flags": {"escalation_dispatched": True},
+    }

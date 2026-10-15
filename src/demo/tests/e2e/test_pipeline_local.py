@@ -19,9 +19,9 @@ import adk_agent.agent as ag  # must precede anything that imports httpx
 from adk_agent.tools import ticket_id_for_alert
 from src.demo.data_generator.log_generator import SyntheticLogEngine
 from src.demo.data_generator.sinks import LocalSink
+from src.demo.scripted_model import ALERT_PREFIX, ScriptedLlm
 from src.demo.soc_ticketing.models import AUTO_CLOSED_FP_DECISION
 from src.demo.soc_ticketing.ticketing_service import SocTicketingService
-from src.demo.tests.e2e.scripted_model import ALERT_PREFIX, ScriptedLlm
 
 pytestmark = pytest.mark.asyncio
 
@@ -47,10 +47,13 @@ def pipeline(tmp_path, monkeypatch):
     from google.adk.sessions import InMemorySessionService
 
     queue = tmp_path / "queue"
-    env = {"LOCAL_MODE": "true", "LOCAL_QUEUE_DIR": str(queue)}
+    env = {
+        "LOCAL_MODE": "true",
+        "LOCAL_QUEUE_DIR": str(queue),
+        "LOCAL_LOGS_DIR": str(tmp_path / "logs"),
+    }
     for key, value in env.items():
         monkeypatch.setenv(key, value)
-    monkeypatch.chdir(tmp_path)  # tools read local logs from the working dir
 
     saved = [(a, a.model, list(a.tools)) for a in AGENTS]
     saved_params = [
@@ -101,9 +104,7 @@ def make_alert(threat_type: str, user: str, score: int) -> dict:
     access, network = SyntheticLogEngine(project_id="local-e2e").inject_threat(
         threat_type=threat_type, user_id=user
     )
-    LocalSink(
-        output_dir=os.path.join(os.getcwd(), "local_demo_data", "logs")
-    ).write_events(access, network)
+    LocalSink(output_dir=os.environ["LOCAL_LOGS_DIR"]).write_events(access, network)
     login = next(a for a in access if a.get("user_id") == user)
     window_end = _window.strftime("%Y-%m-%dT%H:%M:%SZ")
     return {

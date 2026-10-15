@@ -12,12 +12,8 @@ import logging
 import os
 import time
 
-try:
-    from .models import SIMULATED_DECISION, SocTicket
-    from .ticketing_service import SocTicketingService
-except ImportError:
-    from models import SIMULATED_DECISION, SocTicket
-    from ticketing_service import SocTicketingService
+from src.demo.soc_ticketing.models import SIMULATED_DECISION, SocTicket
+from src.demo.soc_ticketing.ticketing_service import SocTicketingService
 
 logger = logging.getLogger("SocConsole")
 
@@ -26,7 +22,7 @@ DEFAULT_RAW_LOGS_TOPIC = "cymbal_cyber_raw_logs"
 
 def _write_events(svc: SocTicketingService, acc_events, net_events) -> int:
     """Writes telemetry and returns how many events were written. Raises on failure."""
-    from demo.data_generator.sinks import LocalSink, PubSubSink
+    from src.demo.data_generator.sinks import LocalSink, PubSubSink
 
     if svc.is_cloud_enabled():
         topic = os.getenv("RAW_LOGS_TOPIC", DEFAULT_RAW_LOGS_TOPIC)
@@ -109,7 +105,7 @@ def inject_threat_scenario(
     Returns a status message. Raises if the telemetry could not be written, in which
     case no simulated ticket is created either.
     """
-    from demo.data_generator.log_generator import SyntheticLogEngine
+    from src.demo.data_generator.log_generator import SyntheticLogEngine
 
     eng = SyntheticLogEngine(project_id=svc.project_id, dataset_id=svc.dataset_id)
     acc_events, net_events = eng.inject_threat(threat_type=threat_type, user_id=user_id)
@@ -157,7 +153,7 @@ def inject_threat_scenario(
 
 def stream_benign_logs(svc: SocTicketingService, batch_size: int = 50) -> str:
     """Streams a batch of benign activity logs. Returns a status message; raises on failure."""
-    from demo.data_generator.log_generator import SyntheticLogEngine
+    from src.demo.data_generator.log_generator import SyntheticLogEngine
 
     eng = SyntheticLogEngine(project_id=svc.project_id, dataset_id=svc.dataset_id)
     acc_events, net_events = eng.generate_benign_batch(count=batch_size)

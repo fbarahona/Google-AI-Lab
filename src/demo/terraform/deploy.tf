@@ -28,8 +28,8 @@ resource "google_artifact_registry_repository" "agent_repo" {
 
 # 2. BigQuery Continuous Query Infrastructure (Gated behind enable_continuous_query)
 # BigQuery Continuous Queries require an Enterprise Edition slot reservation (billed 24/7).
-# When enable_continuous_query is false (default), the background threat_scanner.py polling
-# daemon serves as the zero-reservation, cost-free trigger path.
+# When enable_continuous_query is false (default), the threat-detector Cloud Run Job
+# (scheduled every 5 minutes in cloud_run.tf) is the zero-reservation detection path.
 resource "google_bigquery_reservation" "continuous_query_reservation" {
   count             = var.enable_continuous_query ? 1 : 0
   project           = var.project_id
@@ -73,6 +73,10 @@ resource "google_pubsub_subscription_iam_member" "dataflow_raw_sub_subscriber" {
   member       = "serviceAccount:${google_service_account.dataflow_sa[0].email}"
 }
 
+# NOTE: The Google-provided PubSub_Subscription_to_BigQuery template writes every message
+# to one table (user_access_events), so network events do not reach network_events on this
+# path. Per-type routing lives in src/demo/data_pipeline/pubsub_to_bigquery_dataflow.py; the
+# default path (enable_dataflow_streaming = false) uses BigQuery subscriptions instead.
 resource "google_dataflow_job" "pubsub_to_bigquery" {
   count                 = var.enable_dataflow_streaming ? 1 : 0
   project               = var.project_id
@@ -99,7 +103,7 @@ resource "google_dataflow_job" "pubsub_to_bigquery" {
 
 # NOTE: The legacy "threat_scanner_cron" (Cloud Scheduler -> /apps/adk_agent/trigger/scan)
 # has been retired. Detection now runs as the threat-detector Cloud Run Job, scheduled
-# every 2 minutes in cloud_run.tf (google_cloud_scheduler_job.threat_detector_schedule).
+# every 5 minutes in cloud_run.tf (google_cloud_scheduler_job.threat_detector_schedule).
 
 # 4. Upload Seed Desktop Screenshots to GCS
 locals {

@@ -3,6 +3,7 @@ Unit tests for the Scheduled Micro-Batch Threat Detector Job (adk_agent.threat_d
 Verifies module import, detection cycle execution with mocked clients, and query construction.
 """
 
+import json
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -359,3 +360,28 @@ def test_merge_query_parameterization_and_utc_formatting(mock_clients):
     assert params["start_time"].value == fixed_cutoff
     assert "min_score" in params
     assert params["min_score"].value == 150
+
+
+def test_failed_publish_skips_one_alert_and_batches_the_status_update(mock_clients):
+    """One publish timeout must not abort the run; published alerts get one UPDATE."""
+    mock_bq, mock_pub = mock_clients
+    ok_future, bad_future = MagicMock(), MagicMock()
+    bad_future.result.side_effect = TimeoutError("publish timed out")
+    mock_pub.publish.side_effect = [ok_future, bad_future, ok_future]
+    alerts = [
+        {"alert_id": f"a{i}", "payload_str": json.dumps({"alert_id": f"a{i}"})}
+        for i in range(3)
+    ]
+
+    detector = ThreatDetector(project_id="test-proj", dataset_id="Test_Dataset")
+    assert detector._publish_alerts(alerts) == 2
+
+    assert mock_bq.query.call_count == 1
+    update_sql = mock_bq.query.call_args[0][0]
+    assert "IN UNNEST(@alert_ids)" in update_sql
+    assert "status = @expected_current_status" in update_sql
+    params = {
+        p.name: p for p in mock_bq.query.call_args[1]["job_config"].query_parameters
+    }
+    assert params["alert_ids"].values == ["a0", "a2"]
+    assert params["expected_current_status"].value == "NEW"

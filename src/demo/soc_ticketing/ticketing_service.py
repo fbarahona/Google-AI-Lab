@@ -19,19 +19,17 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-try:
-    from .models import AUTO_CLOSED_FP_DECISION, SIMULATED_DECISION, SocTicket
-except ImportError:
-    from models import AUTO_CLOSED_FP_DECISION, SIMULATED_DECISION, SocTicket
+from src.demo.soc_ticketing.models import (
+    AUTO_CLOSED_FP_DECISION,
+    SIMULATED_DECISION,
+    SocTicket,
+)
 
 logger = logging.getLogger("SocTicketingService")
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCREENSHOTS_DIR = REPO_ROOT / "local_demo_data" / "user_screenshots"
-LOCAL_QUEUE_DIR = os.getenv(
-    "LOCAL_QUEUE_DIR", str(REPO_ROOT / "local_demo_data" / "escalations")
-)
-LOCAL_HISTORY_DIR = os.path.join(LOCAL_QUEUE_DIR, "history")
+DEFAULT_QUEUE_DIR = REPO_ROOT / "local_demo_data" / "escalations"
 
 SOC_TICKET_COLUMNS = frozenset(
     {
@@ -72,49 +70,6 @@ class TicketPersistenceError(RuntimeError):
     """A ticket could not be written to its system of record."""
 
 
-def get_gcp_credentials():
-    """
-    Retrieves active Google Cloud credentials with multi-layer fallback:
-    1. Standard google.auth.default() (Cloud Run metadata / ADC) verified with token refresh
-    2. GOOGLE_OAUTH_ACCESS_TOKEN environment variable
-    3. gcloud auth print-access-token subprocess
-    """
-    import google.auth
-    from google.oauth2.credentials import Credentials
-
-    # 1. Try google.auth.default() and test token validity
-    try:
-        creds, _ = google.auth.default()
-        from google.auth.transport.requests import Request
-
-        creds.refresh(Request())
-        if creds.token:
-            return creds
-    except Exception as e:
-        logger.debug("google.auth.default() token check fallback: %s", e)
-
-    # 2. Try explicit environment variable
-    token = os.getenv("GOOGLE_OAUTH_ACCESS_TOKEN")
-    if token:
-        return Credentials(token)
-
-    # 3. Try gcloud auth print-access-token
-    try:
-        import subprocess
-
-        token = subprocess.check_output(
-            ["gcloud", "auth", "print-access-token"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-        if token:
-            return Credentials(token)
-    except Exception:
-        pass
-
-    return None
-
-
 class SocTicketingService:
     def __init__(
         self,
@@ -139,7 +94,8 @@ class SocTicketingService:
 
     @property
     def queue_dir(self) -> str:
-        d = os.getenv("LOCAL_QUEUE_DIR", "./local_demo_data/escalations")
+        """Local ticket queue: LOCAL_QUEUE_DIR, else the repo's, whatever the working dir."""
+        d = os.getenv("LOCAL_QUEUE_DIR") or str(DEFAULT_QUEUE_DIR)
         os.makedirs(d, exist_ok=True)
         return d
 
@@ -149,74 +105,32 @@ class SocTicketingService:
         os.makedirs(d, exist_ok=True)
         return d
 
+    # Clients use Application Default Credentials: the service's SA in the cloud and
+    # `gcloud auth application-default login` on a workstation.
     @property
     def bq_client(self):
         if self._bq_client is None:
-            if os.getenv("LOCAL_MODE", "false").lower() == "true":
+            if self._local_mode():
                 return None
             try:
                 from google.cloud import bigquery
 
-                creds = get_gcp_credentials()
-                if creds is not None:
-                    try:
-                        self._bq_client = bigquery.Client(
-                            project=self.project_id, credentials=creds
-                        )
-                    except Exception:
-                        pass
-                if self._bq_client is None:
-                    import subprocess
-
-                    from google.oauth2.credentials import Credentials
-
-                    token = subprocess.check_output(
-                        ["gcloud", "auth", "print-access-token"],
-                        text=True,
-                        stderr=subprocess.DEVNULL,
-                    ).strip()
-                    if token:
-                        self._bq_client = bigquery.Client(
-                            project=self.project_id, credentials=Credentials(token)
-                        )
+                self._bq_client = bigquery.Client(project=self.project_id)
             except Exception as e:
-                logger.debug("BigQuery client initialization fallback: %s", e)
-                self._bq_client = None
+                logger.warning("BigQuery client unavailable: %s", e)
         return self._bq_client
 
     @property
     def storage_client(self):
         if self._storage_client is None:
-            if os.getenv("LOCAL_MODE", "false").lower() == "true":
+            if self._local_mode():
                 return None
             try:
                 from google.cloud import storage
 
-                creds = get_gcp_credentials()
-                if creds is not None:
-                    try:
-                        self._storage_client = storage.Client(
-                            project=self.project_id, credentials=creds
-                        )
-                    except Exception:
-                        pass
-                if self._storage_client is None:
-                    import subprocess
-
-                    from google.oauth2.credentials import Credentials
-
-                    token = subprocess.check_output(
-                        ["gcloud", "auth", "print-access-token"],
-                        text=True,
-                        stderr=subprocess.DEVNULL,
-                    ).strip()
-                    if token:
-                        self._storage_client = storage.Client(
-                            project=self.project_id, credentials=Credentials(token)
-                        )
+                self._storage_client = storage.Client(project=self.project_id)
             except Exception as e:
-                logger.debug("Storage client initialization fallback: %s", e)
-                self._storage_client = None
+                logger.warning("Cloud Storage client unavailable: %s", e)
         return self._storage_client
 
     def is_cloud_enabled(self) -> bool:
@@ -741,18 +655,9 @@ class SocTicketingService:
                 pass
 
         if len(historic) < 5:
-            seed_items = self._generate_seed_history()
-            for item in seed_items:
-                hist_file = os.path.join(
-                    self.history_dir, f"resolved_{item['ticket_id']}.json"
-                )
-                if not os.path.exists(hist_file):
-                    try:
-                        with open(hist_file, "w", encoding="utf-8") as f:
-                            json.dump(item, f, indent=2)
-                    except Exception:
-                        pass
-                historic.append(item)
+            # Sample history so a fresh local console is not empty. It is marked
+            # SIMULATED (badge, left out of every KPI) and never written to disk.
+            historic.extend(self._generate_seed_history())
 
         historic.sort(
             key=lambda x: x.get("adjudicated_at") or x.get("created_at") or "",
@@ -1211,10 +1116,10 @@ class SocTicketingService:
         return {"country": "External Origin", "lat": 20.0, "lon": 0.0}
 
     def _generate_seed_history(self) -> list[dict[str, Any]]:
-        """Generates realistic baseline historic tickets for the dashboard."""
+        """Sample adjudicated tickets for an empty local archive, marked SIMULATED."""
         now = datetime.now(UTC)
         screenshots_dir = str(SCREENSHOTS_DIR)
-        return [
+        samples = [
             {
                 "ticket_id": "SOC-TICKET-g.harris-1791600100",
                 "created_at": (now - timedelta(days=2, hours=3)).isoformat(),
@@ -1341,3 +1246,9 @@ class SocTicketingService:
                 "adjudicated_at": (now - timedelta(days=8, hours=1)).isoformat(),
             },
         ]
+        for sample in samples:
+            sample["ticket_id"] = sample["ticket_id"].replace(
+                "SOC-TICKET-", "SIM-TICKET-", 1
+            )
+            sample["agent_decision"] = SIMULATED_DECISION
+        return samples

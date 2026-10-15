@@ -11,12 +11,12 @@ The project features an end-to-end near real-time cybersecurity threat detection
   2. `bq_investigation_agent`: 24-hour behavioral profile queries in BigQuery (via Local MCP).
   3. `visual_analysis_agent`: Gemini multimodal vision OCR on user desktop screenshots (via Local MCP).
   4. `soc_ticketing_agent`: Incident synthesis and dispatch to SOC ticketing (via Local MCP).
-- **Local MCP Server (`adk_agent/mcp_server/`):** Decoupled Model Context Protocol tool server exposing 10 security, vision, and ticketing tools over standard I/O (`stdio`) to ADK sub-agents and external clients.
+- **Local MCP Server (`adk_agent/mcp_server/`):** Decoupled Model Context Protocol tool server exposing 8 security, vision, and ticketing tools over standard I/O (`stdio`) to ADK sub-agents and external clients.
 - **Threat Detector (`adk_agent/threat_detector.py`):** Scheduled micro-batch Cloud Run Job scanning BigQuery for newly emerging threat events and triggering agent investigations.
 - **Synthetic Log Generator (`src/demo/data_generator/`):** Generates access and network logs with ad-hoc threat injection.
 - **Data Engineering Pipelines (`src/demo/data_pipeline/`):** Ingestion pipelines, GCS loader, and BigQuery Continuous Queries.
 - **SOC Ticketing System & Console (`src/demo/soc_ticketing/`):** Persistent incident queue and interactive Streamlit console for analyst triage.
-- **Zero-Cloud Local Runner (`src/demo/local_runner.py`):** End-to-end local simulation without requiring cloud infrastructure.
+- **Zero-Cloud Local Runner (`src/demo/local_runner.py`):** Runs a scenario through the real agents, MCP servers and security gate locally, with a scripted model by default (`--live-model` for Gemini).
 - **Terraform IaC (`src/demo/terraform/`):** Infrastructure templates for Google Cloud (project `<project_name>`).
 
 ---
@@ -48,7 +48,6 @@ The project features an end-to-end near real-time cybersecurity threat detection
 │       │   ├── unit/               # Unit tests (agent structure, tools, logs, security, detector)
 │       │   ├── integration/        # Agent and server integration tests
 │       │   └── eval/               # agents-cli evaluation datasets and configs
-│       ├── user_screenshots/       # Forensic desktop screenshots for vision agent
 │       ├── local_runner.py         # Zero-cloud end-to-end demo runner
 │       └── other_code/             # Supporting SQL queries and analyst scripts
 ├── agents-cli-manifest.yaml        # agents-cli configuration (agent_directory: adk_agent)
@@ -105,18 +104,21 @@ agents-cli run "Investigate security alert for user u.lewis"
 ```
 
 ### 3. Zero-Cloud Local Demo Pipeline
-Run the complete end-to-end cybersecurity pipeline locally (synthetic log generation, BigQuery Continuous Query simulation, multi-agent triage, and local SOC dispatch):
+Run a scenario locally: synthetic logs, the detector's scoring rules, then the real multi-agent investigation and local SOC dispatch (scripted model by default, `--live-model` for Gemini):
 ```bash
-# Malicious APT attack scenario (User: u.lewis, Lazarus Group IP, Mimikatz)
-python -m src.demo.local_runner --threat malicious
+# Malicious APT attack scenario (User: u.lewis, Mimikatz)
+uv run python -m src.demo.local_runner --threat malicious
 
 # Benign False Positive scenario (User: l.taylor, Admin backup script)
-python -m src.demo.local_runner --threat false_positive
+uv run python -m src.demo.local_runner --threat false_positive
+
+# Prompt injection scenario (User: c.wilson); the security gate blocks the FP closure
+uv run python -m src.demo.local_runner --threat injection
 ```
 
 ### 4. Interactive SOC Analyst Console (Streamlit)
 ```bash
-LOCAL_MODE=true streamlit run src/demo/soc_ticketing/streamlit_soc_console.py
+LOCAL_MODE=true uv run python -m streamlit run src/demo/soc_ticketing/streamlit_soc_console.py
 ```
 Open `http://localhost:8501` to view incident queues, inspect desktop screenshot evidence, review ADK investigative reports, and adjudicate tickets.
 
