@@ -14,7 +14,7 @@ This guide covers the end-to-end cloud deployment, post-deployment operations, c
 5. [Accessing Cloud Consoles (SOC Portal & ADK Playground)](#5-accessing-cloud-consoles-soc-portal--adk-playground)
    - [Option 1: Proxied Access via gcloud (Recommended)](#option-1-proxied-access-via-gcloud-recommended)
    - [Option 2: Direct HTTPS Access](#option-2-direct-https-access)
-   - [Option 3: Programmatic Webhook Invocation](#option-3-programmatic-webhook-invocation)
+   - [Agent Webhook: Not Callable by Humans](#agent-webhook-not-callable-by-humans)
 6. [FinOps: Cost Management & Cloud Teardown](#6-finops-cost-management--cloud-teardown)
 
 ---
@@ -277,18 +277,15 @@ Open **`http://localhost:8080`** for the playground, and apply again without the
 
 ---
 
-### Option 3: Programmatic Webhook Invocation
+### Agent Webhook: Not Callable by Humans
 
-When triggering agent investigations or testing endpoints directly from the command line:
+The agent's `/apps/adk_agent/trigger/pubsub` endpoint is the Pub/Sub push target, and nothing else may call it. Cloud Run checks the ID token's audience (a plain `gcloud auth print-identity-token` user token gets `401`), and the app itself then rejects any caller other than `pubsub-invoker-sa` with `403` (`verify_incoming_oidc_token` in `adk_agent/fast_api_app.py`). The body must also be a Pub/Sub push envelope carrying an alert. A hand-made `curl` therefore cannot succeed, by design.
+
+To exercise the webhook, run the [Live Cloud Verification Workflow](#4-live-cloud-verification-workflow): the detector publishes the alert, Pub/Sub pushes it as `pubsub-invoker-sa`, and the alert reaching `DONE` in Step F proves the agent received and adjudicated it. The agent's request logs are in Cloud Logging:
 
 ```bash
-ADK_URL="$(gcloud run services describe cymbal-cyber-adk-agent --project="${PROJECT_ID}" --region="${REGION}" --format="value(status.url)")"
-TOKEN="$(gcloud auth print-identity-token)"
-
-curl -X POST "${ADK_URL}/apps/adk_agent/trigger/pubsub" \
-  -H "Authorization: Bearer ${TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{"ping": true}'
+gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="cymbal-cyber-adk-agent"' \
+  --project="${PROJECT_ID}" --freshness=1h --limit=50
 ```
 
 ---
