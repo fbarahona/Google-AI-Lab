@@ -385,3 +385,25 @@ def test_failed_publish_skips_one_alert_and_batches_the_status_update(mock_clien
     }
     assert params["alert_ids"].values == ["a0", "a2"]
     assert params["expected_current_status"].value == "NEW"
+
+
+def test_merge_correlates_windows_into_incidents(mock_clients):
+    """Only the window that opens an incident is NEW (published); the rest are CORRELATED."""
+    from adk_agent import detection_rules as rules
+
+    mock_bq, _mock_pub = mock_clients
+    fetch_job = MagicMock()
+    fetch_job.result.return_value = []
+    mock_bq.query.side_effect = [MagicMock(), fetch_job]
+
+    ThreatDetector(project_id="p", dataset_id="d")._merge_and_fetch_new_alerts()
+    merge_call = mock_bq.query.call_args_list[0]
+    merge_sql = merge_call[0][0]
+    params = {p.name: p.value for p in merge_call[1]["job_config"].query_parameters}
+
+    assert params["incident_gap_minutes"] == rules.INCIDENT_GAP_MINUTES
+    assert "FROM CorrelatedWindows" in merge_sql
+    assert "'NEW', 'CORRELATED'" in merge_sql
+    assert "S.alert_id, S.incident_id" in merge_sql
+    # The publish step still fetches NEW rows only, so CORRELATED ones never publish.
+    assert "WHERE status = 'NEW'" in mock_bq.query.call_args_list[1][0][0]

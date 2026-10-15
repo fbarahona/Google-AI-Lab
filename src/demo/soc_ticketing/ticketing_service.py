@@ -6,7 +6,8 @@ Manages the end-to-end incident ticketing lifecycle:
 2. Archives and queries historical tickets (approved genuine threats and dismissed false positives).
 3. Persists ticket state across BigQuery (Cymbal_Cyber.soc_tickets), GCS, and local file storage.
 4. Queries BigQuery directly as the Single Source of Truth for tickets and dashboard telemetry.
-5. Employs append-resolution and CTE deduplication to seamlessly handle BigQuery streaming buffers.
+5. Appends every state change to soc_tickets and reads the latest state through the
+   soc_tickets_current view, so streaming-buffer rows never need an UPDATE.
 6. Provides dynamic aggregated metrics for dashboard visualization.
 """
 
@@ -31,6 +32,13 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SCREENSHOTS_DIR = REPO_ROOT / "local_demo_data" / "user_screenshots"
 DEFAULT_QUEUE_DIR = REPO_ROOT / "local_demo_data" / "escalations"
 
+
+def _row_dict(row: Any) -> dict[str, Any]:
+    """A BigQuery row as a ticket dict, with TIMESTAMP columns as ISO-8601 strings
+    (the shape local and GCS tickets already have)."""
+    return {k: v.isoformat() if isinstance(v, datetime) else v for k, v in row.items()}
+
+
 SOC_TICKET_COLUMNS = frozenset(
     {
         "ticket_id",
@@ -54,7 +62,6 @@ SOC_TICKET_COLUMNS = frozenset(
 )
 SOC_TICKET_REQUIRED_STRINGS = (
     "ticket_id",
-    "created_at",
     "user_id",
     "device_id",
     "source_ip",
@@ -98,6 +105,11 @@ class SocTicketingService:
         d = os.getenv("LOCAL_QUEUE_DIR") or str(DEFAULT_QUEUE_DIR)
         os.makedirs(d, exist_ok=True)
         return d
+
+    @property
+    def _current_tickets(self) -> str:
+        """The soc_tickets_current view: one row per ticket, its latest state."""
+        return f"{self.project_id}.{self.dataset_id}.soc_tickets_current"
 
     @property
     def history_dir(self) -> str:
@@ -161,6 +173,11 @@ class SocTicketingService:
         for req_str in SOC_TICKET_REQUIRED_STRINGS:
             if row.get(req_str) is None:
                 row[req_str] = ""
+        # TIMESTAMP columns: an empty string is not a timestamp.
+        if not row.get("created_at"):
+            row["created_at"] = datetime.now(UTC).isoformat()
+        if not row.get("adjudicated_at"):
+            row.pop("adjudicated_at", None)
         return row
 
     def _assessment_row(self, ticket: SocTicket, **overrides: Any) -> dict[str, Any]:
@@ -292,7 +309,7 @@ class SocTicketingService:
         """
         Retrieves all active, pending incident tickets awaiting analyst review.
         Queries BigQuery Cymbal_Cyber.soc_tickets as the Single Source of Truth.
-        Uses CTE deduplication to reliably reflect the latest state even with streaming buffers.
+        Reads soc_tickets_current, the latest state of each ticket.
         Falls back to local file queue only if BigQuery is unavailable (local mode).
         """
         tickets: list[dict[str, Any]] = []
@@ -300,20 +317,7 @@ class SocTicketingService:
         if self.bq_client is not None:
             try:
                 query = f"""
-                WITH deduplicated_tickets AS (
-                  SELECT * EXCEPT(rn) FROM (
-                    SELECT *,
-                      ROW_NUMBER() OVER (
-                        PARTITION BY ticket_id
-                        ORDER BY
-                          CASE WHEN human_decision IS NOT NULL AND human_decision != '' THEN 1 ELSE 2 END,
-                          COALESCE(adjudicated_at, created_at) DESC
-                      ) AS rn
-                    FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
-                  )
-                  WHERE rn = 1
-                )
-                SELECT
+                                SELECT
                   ticket_id,
                   created_at,
                   user_id,
@@ -331,14 +335,13 @@ class SocTicketingService:
                   human_decision,
                   human_comment,
                   adjudicated_at
-                FROM deduplicated_tickets
-                WHERE (status IN ('OPEN', 'ESCALATED', 'UNDER_INVESTIGATION') OR status IS NULL)
-                  AND (human_decision IS NULL OR human_decision = '')
+                FROM `{self._current_tickets}`
+                WHERE is_pending
                 ORDER BY created_at DESC
                 LIMIT 100
                 """
                 results = list(self.bq_client.query(query).result())
-                tickets = [dict(row.items()) for row in results]
+                tickets = [_row_dict(row) for row in results]
             except Exception as e:
                 logger.warning("BigQuery fetch_new_tickets query failed: %s", e)
 
@@ -457,7 +460,7 @@ class SocTicketingService:
         if not ticket_data and self.bq_client is not None:
             try:
                 query = f"""
-                SELECT * FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
+                SELECT * FROM `{self._current_tickets}`
                 WHERE ticket_id = @ticket_id LIMIT 1
                 """
                 from google.cloud import bigquery
@@ -469,7 +472,7 @@ class SocTicketingService:
                 )
                 b_rows = list(self.bq_client.query(query, job_config=cfg).result())
                 if b_rows:
-                    ticket_data = dict(b_rows[0].items())
+                    ticket_data = _row_dict(b_rows[0])
             except Exception:
                 pass
 
@@ -597,7 +600,7 @@ class SocTicketingService:
         """
         Retrieves all archived and historical tickets (Approved Threats and False Positives).
         Queries BigQuery Cymbal_Cyber.soc_tickets as the Single Source of Truth.
-        Uses CTE deduplication to reliably reflect the latest state even with streaming buffers.
+        Reads soc_tickets_current, the latest state of each ticket.
         Falls back to local history files only if BigQuery is unavailable (local mode).
         """
         historic: list[dict[str, Any]] = []
@@ -605,20 +608,7 @@ class SocTicketingService:
         if self.bq_client is not None:
             try:
                 query = f"""
-                WITH deduplicated_tickets AS (
-                  SELECT * EXCEPT(rn) FROM (
-                    SELECT *,
-                      ROW_NUMBER() OVER (
-                        PARTITION BY ticket_id
-                        ORDER BY
-                          CASE WHEN human_decision IS NOT NULL AND human_decision != '' THEN 1 ELSE 2 END,
-                          COALESCE(adjudicated_at, created_at) DESC
-                      ) AS rn
-                    FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
-                  )
-                  WHERE rn = 1
-                )
-                SELECT
+                                SELECT
                   ticket_id,
                   created_at,
                   user_id,
@@ -636,13 +626,13 @@ class SocTicketingService:
                   human_decision,
                   human_comment,
                   adjudicated_at
-                FROM deduplicated_tickets
-                WHERE status = 'RESOLVED' OR (human_decision IS NOT NULL AND human_decision != '')
+                FROM `{self._current_tickets}`
+                WHERE status = 'RESOLVED' OR is_adjudicated
                 ORDER BY adjudicated_at DESC, created_at DESC
                 LIMIT 200
                 """
                 results = list(self.bq_client.query(query).result())
-                return [dict(row.items()) for row in results]
+                return [_row_dict(row) for row in results]
             except Exception as e:
                 logger.warning("BigQuery fetch_historic_tickets failed: %s", e)
 
@@ -693,8 +683,7 @@ class SocTicketingService:
             f"AND window_end >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), {interval_sql})"
         )
         ticket_clause = (
-            f"WHERE SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*S%Ez', created_at) >= "
-            f"TIMESTAMP_SUB(CURRENT_TIMESTAMP(), {interval_sql})"
+            f"WHERE created_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), {interval_sql})"
         )
         return (access_clause, net_clause, alert_clause, ticket_clause)
 
@@ -702,7 +691,7 @@ class SocTicketingService:
         """
         Dynamically calculates all SOC dashboard metrics directly from BigQuery tables.
         Provides clean fallback / zero counts when tables are empty.
-        Uses CTE deduplication on soc_tickets so metrics always reflect the latest state,
+        Reads soc_tickets_current so metrics always reflect the latest state,
         and leaves out simulated tickets written by the console's demo controls.
         """
         metrics: dict[str, Any] = {
@@ -746,24 +735,15 @@ class SocTicketingService:
             time_range
         )
 
+        tickets = f"`{self._current_tickets}`"
+        ticket_filter = (
+            f"{ticket_where + ' AND' if ticket_where else 'WHERE'} NOT is_simulated"
+        )
+
         # 1. Summary KPIs
         try:
             summary_sql = f"""
-            WITH deduplicated_tickets AS (
-              SELECT * EXCEPT(rn) FROM (
-                SELECT *,
-                  ROW_NUMBER() OVER (
-                    PARTITION BY ticket_id
-                    ORDER BY
-                      CASE WHEN human_decision IS NOT NULL AND human_decision != '' THEN 1 ELSE 2 END,
-                      COALESCE(adjudicated_at, created_at) DESC
-                  ) AS rn
-                FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
-              )
-              WHERE rn = 1
-                AND COALESCE(agent_decision, '') != '{SIMULATED_DECISION}'
-            ),
-            access_stats AS (
+            WITH access_stats AS (
               SELECT
                 COUNT(*) AS total_access_logs,
                 COUNT(DISTINCT user_id) AS distinct_users,
@@ -787,11 +767,11 @@ class SocTicketingService:
             ticket_stats AS (
               SELECT
                 COUNT(*) AS total_tickets,
-                COUNTIF(status = 'RESOLVED' OR (human_decision IS NOT NULL AND human_decision != '')) AS triaged_alerts,
-                COUNTIF(status IN ('OPEN', 'ESCALATED', 'UNDER_INVESTIGATION') AND (human_decision IS NULL OR human_decision = '')) AS escalated_alerts,
-                COUNTIF(agent_decision = '{AUTO_CLOSED_FP_DECISION}') AS auto_closed_alerts
-              FROM deduplicated_tickets
-              {ticket_where}
+                COUNTIF(status = 'RESOLVED' OR is_adjudicated) AS triaged_alerts,
+                COUNTIF(is_pending) AS escalated_alerts,
+                COUNTIF(is_auto_closed) AS auto_closed_alerts
+              FROM {tickets}
+              {ticket_filter}
             )
             SELECT *
             FROM access_stats
@@ -815,138 +795,42 @@ class SocTicketingService:
         except Exception as e:
             logger.warning("Error querying summary KPIs: %s", e)
 
-        # 2. Alerts by Severity
+        # 2-5. Severity, status and SLA breakdowns in one pass (GROUPING SETS), plus the
+        # top MITRE tactics, all from soc_tickets_current.
         try:
-            sev_sql = f"""
-            WITH deduplicated_tickets AS (
-              SELECT * EXCEPT(rn) FROM (
-                SELECT *,
-                  ROW_NUMBER() OVER (
-                    PARTITION BY ticket_id
-                    ORDER BY
-                      CASE WHEN human_decision IS NOT NULL AND human_decision != '' THEN 1 ELSE 2 END,
-                      COALESCE(adjudicated_at, created_at) DESC
-                  ) AS rn
-                FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
-              )
-              WHERE rn = 1
-                AND COALESCE(agent_decision, '') != '{SIMULATED_DECISION}'
-            )
-            SELECT
-              INITCAP(severity) AS severity,
-              COUNT(*) AS count
-            FROM deduplicated_tickets
-            {ticket_where}
-            GROUP BY severity
-            """
-            metrics["alerts_by_severity"] = [
-                dict(row.items()) for row in self.bq_client.query(sev_sql).result()
-            ]
-        except Exception as e:
-            logger.warning("Error querying alerts by severity: %s", e)
-
-        # 3. Alerts by Status
-        try:
-            stat_sql = f"""
-            WITH deduplicated_tickets AS (
-              SELECT * EXCEPT(rn) FROM (
-                SELECT *,
-                  ROW_NUMBER() OVER (
-                    PARTITION BY ticket_id
-                    ORDER BY
-                      CASE WHEN human_decision IS NOT NULL AND human_decision != '' THEN 1 ELSE 2 END,
-                      COALESCE(adjudicated_at, created_at) DESC
-                  ) AS rn
-                FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
-              )
-              WHERE rn = 1
-                AND COALESCE(agent_decision, '') != '{SIMULATED_DECISION}'
-            )
+            breakdown_sql = f"""
             SELECT
               CASE
-                WHEN status IN ('OPEN', 'ESCALATED', 'UNDER_INVESTIGATION') AND (human_decision IS NULL OR human_decision = '') THEN 'Open'
-                WHEN status = 'RESOLVED' AND human_decision = 'Genuine Threat' THEN 'Escalated'
-                WHEN status = 'RESOLVED' THEN 'Closed'
-                ELSE 'In Progress'
-              END AS status,
+                WHEN GROUPING(severity) = 0 THEN 'severity'
+                WHEN GROUPING(status_bucket) = 0 THEN 'status'
+                ELSE 'sla'
+              END AS dimension,
+              COALESCE(INITCAP(severity), status_bucket, sla_bucket) AS label,
               COUNT(*) AS count
-            FROM deduplicated_tickets
-            {ticket_where}
-            GROUP BY status
-            """
-            metrics["alerts_by_status"] = [
-                dict(row.items()) for row in self.bq_client.query(stat_sql).result()
-            ]
-        except Exception as e:
-            logger.warning("Error querying alerts by status: %s", e)
-
-        # 4. Alerts by SLA
-        try:
-            sla_sql = f"""
-            WITH deduplicated_tickets AS (
-              SELECT * EXCEPT(rn) FROM (
-                SELECT *,
-                  ROW_NUMBER() OVER (
-                    PARTITION BY ticket_id
-                    ORDER BY
-                      CASE WHEN human_decision IS NOT NULL AND human_decision != '' THEN 1 ELSE 2 END,
-                      COALESCE(adjudicated_at, created_at) DESC
-                  ) AS rn
-                FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
-              )
-              WHERE rn = 1
-                AND COALESCE(agent_decision, '') != '{SIMULATED_DECISION}'
+            FROM {tickets}
+            {ticket_filter}
+            GROUP BY GROUPING SETS ((severity), (status_bucket), (sla_bucket))
+            UNION ALL
+            SELECT 'category' AS dimension, label, count FROM (
+              SELECT tactic AS label, COUNT(*) AS count
+              FROM {tickets}, UNNEST(mitre_tactics) AS tactic
+              {ticket_filter}
+              GROUP BY label
+              ORDER BY count DESC
+              LIMIT 6
             )
-            SELECT
-              CASE
-                WHEN status = 'RESOLVED' THEN 'Within SLA'
-                WHEN TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*S%Ez', created_at), MINUTE) > 60 THEN 'Breached SLA'
-                WHEN TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*S%Ez', created_at), MINUTE) > 30 THEN 'Approaching SLA'
-                ELSE 'Within SLA'
-              END AS sla,
-              COUNT(*) AS count
-            FROM deduplicated_tickets
-            {ticket_where}
-            GROUP BY sla
             """
-            metrics["alerts_by_sla"] = [
-                dict(row.items()) for row in self.bq_client.query(sla_sql).result()
-            ]
+            keys = {
+                "severity": ("alerts_by_severity", "severity"),
+                "status": ("alerts_by_status", "status"),
+                "sla": ("alerts_by_sla", "sla"),
+                "category": ("alerts_by_category", "category"),
+            }
+            for row in self.bq_client.query(breakdown_sql).result():
+                metric, label_key = keys[row["dimension"]]
+                metrics[metric].append({label_key: row["label"], "count": row["count"]})
         except Exception as e:
-            logger.warning("Error querying alerts by SLA: %s", e)
-
-        # 5. Alerts by Category (MITRE tactics)
-        try:
-            cat_sql = f"""
-            WITH deduplicated_tickets AS (
-              SELECT * EXCEPT(rn) FROM (
-                SELECT *,
-                  ROW_NUMBER() OVER (
-                    PARTITION BY ticket_id
-                    ORDER BY
-                      CASE WHEN human_decision IS NOT NULL AND human_decision != '' THEN 1 ELSE 2 END,
-                      COALESCE(adjudicated_at, created_at) DESC
-                  ) AS rn
-                FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
-              )
-              WHERE rn = 1
-                AND COALESCE(agent_decision, '') != '{SIMULATED_DECISION}'
-            )
-            SELECT
-              tactic AS category,
-              COUNT(*) AS count
-            FROM deduplicated_tickets,
-            UNNEST(mitre_tactics) AS tactic
-            {ticket_where}
-            GROUP BY category
-            ORDER BY count DESC
-            LIMIT 6
-            """
-            metrics["alerts_by_category"] = [
-                dict(row.items()) for row in self.bq_client.query(cat_sql).result()
-            ]
-        except Exception as e:
-            logger.warning("Error querying alerts by category: %s", e)
+            logger.warning("Error querying ticket breakdowns: %s", e)
 
         # 6. Log Rate Trend
         try:
@@ -1028,28 +912,14 @@ class SocTicketingService:
         # 9. Geographical Threat Origins (Threat Points)
         try:
             map_sql = f"""
-            WITH deduplicated_tickets AS (
-              SELECT * EXCEPT(rn) FROM (
-                SELECT *,
-                  ROW_NUMBER() OVER (
-                    PARTITION BY ticket_id
-                    ORDER BY
-                      CASE WHEN human_decision IS NOT NULL AND human_decision != '' THEN 1 ELSE 2 END,
-                      COALESCE(adjudicated_at, created_at) DESC
-                  ) AS rn
-                FROM `{self.project_id}.{self.dataset_id}.soc_tickets`
-              )
-              WHERE rn = 1
-                AND COALESCE(agent_decision, '') != '{SIMULATED_DECISION}'
-            )
             SELECT
               user_id,
               source_ip,
               threat_score,
               severity,
               agent_reason
-            FROM deduplicated_tickets
-            {ticket_where}
+            FROM {tickets}
+            {ticket_filter}
             ORDER BY created_at DESC
             LIMIT 50
             """

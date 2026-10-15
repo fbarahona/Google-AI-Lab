@@ -9,6 +9,8 @@ bigquery.tf and fails if the two drift apart.
 """
 
 import re
+from collections.abc import Callable
+from datetime import datetime, timedelta
 from typing import Any
 
 # is_malicious_command UDF
@@ -37,6 +39,11 @@ _BENIGN_COMMAND = re.compile(BENIGN_COMMAND_REGEX)
 
 # Phrases that mark text in a desktop screenshot as an attempt to steer the triage
 # agent. Matched case-insensitively against the OCR or vision output.
+# Incident correlation (threat_detector MERGE): a scored window within this many
+# minutes of the user's latest recorded window joins that incident instead of opening
+# a new one, so one attack produces one published alert and one agent run.
+INCIDENT_GAP_MINUTES = 30
+
 PROMPT_INJECTION_KEYWORDS = (
     "ai triage",
     "classify as",
@@ -96,3 +103,36 @@ def threat_score(event: dict[str, Any]) -> int:
     elif command_line is not None and not _BENIGN_COMMAND.search(command_line):
         score += SCORE_OTHER_COMMAND
     return score
+
+
+def correlate_windows(
+    window_ends: list[datetime],
+    open_incident: tuple[str, datetime] | None = None,
+    *,
+    alert_id_for: Callable[[datetime], str],
+    window: timedelta = timedelta(minutes=2),
+    gap_minutes: int = INCIDENT_GAP_MINUTES,
+) -> list[tuple[str, str, str]]:
+    """
+    Python twin of the detector MERGE's incident correlation, for one user's
+    qualifying windows in a batch. Returns (alert_id, incident_id, status) per window,
+    oldest first. status is NEW for the window that opens an incident and CORRELATED
+    for the rest. open_incident is the user's latest recorded (incident_id, window_end).
+    """
+    if not window_ends:
+        return []
+    ordered = sorted(window_ends)
+    gap = timedelta(minutes=gap_minutes)
+    batch_incident = alert_id_for(ordered[0])
+    rows = []
+    for end in ordered:
+        alert_id = alert_id_for(end)
+        joins_open = (
+            open_incident is not None and open_incident[1] >= end - window - gap
+        )
+        incident_id = open_incident[0] if joins_open else batch_incident
+        status = (
+            "NEW" if not joins_open and alert_id == batch_incident else "CORRELATED"
+        )
+        rows.append((alert_id, incident_id, status))
+    return rows

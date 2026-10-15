@@ -4,8 +4,8 @@ This demonstration showcases a reference demo with production-style patterns for
 
 It seamlessly bridges **Cloud Architecture**, **Stream Data Engineering**, **Agentic Multi-Agent AI**, and **SOC Operations**:
 - **Synthetic Log Generator:** Modular Python tool generating access and network logs with ad-hoc threat injection (both APT attacks and administrative false positives).
-- **Zero-Cost Direct Ingestion:** Pub/Sub to BigQuery subscriptions using direct table schemas (`use_table_schema=true`, `drop_unknown_fields=true`) filtered by `attributes.event_family` (`access` and `network`), replacing expensive always-on Dataflow VMs.
-- **Budget-Optimized Detection Engine:** A scheduled micro-batch Cloud Run Job (`threat-detector`) running every 5 minutes via Cloud Scheduler, evaluating 2-minute tumbling windows closed >60s ago and idempotently executing `MERGE` on `alert_id`. Cuts always-on cost from ~$4,300/month to near zero (alert latency ~5 to 7 minutes with late-data allowance).
+- **Zero-Cost Direct Ingestion with a Data Contract:** The raw topic validates every message against a protobuf schema ([`terraform/schemas/raw_security_event.proto`](terraform/schemas/raw_security_event.proto)) at publish time. Pub/Sub to BigQuery subscriptions (`use_table_schema=true`, `drop_unknown_fields=false`) filtered by `attributes.event_family` (`access` and `network`) write straight into the tables, and a write that fails lands in `raw_events_dlq_pull_sub` instead of losing columns.
+- **Budget-Optimized Detection Engine:** A scheduled micro-batch Cloud Run Job (`threat-detector`) running every 5 minutes via Cloud Scheduler, evaluating 2-minute tumbling windows closed >60s ago and idempotently executing `MERGE` on `alert_id`. Windows are correlated into incidents (30-minute gap), so one attack publishes one alert and runs the agents once; the `incidents` view rolls the windows up. Cuts always-on cost from ~$4,300/month to near zero (alert latency ~5 to 7 minutes with late-data allowance).
 - **Optional Continuous Query & Dataflow Engines:** Continuous queries (with BigQuery reservations) and Dataflow streaming pipelines remain available as optional, on-demand toggles for high-throughput live demos.
 - **Unified Alert Contract:** All detection engines publish identical contract messages (`alert_id`, `engine`, `schema_version`, window timestamps, indicator counts) to topic `cymbal_cyber_alerts`.
 - **Dead-Letter Auto-Escalation:** Alerts failing 5 webhook delivery attempts are routed to `cymbal_cyber_alerts_dlq`, logged to BigQuery `alerts_dead_letter`, and auto-escalated to SOC tickets.
@@ -145,30 +145,35 @@ Modular CLI tool and Python API generating high-fidelity security logs:
 # gcloud auth application-default login
 
 # Generate batch benign logs locally:
-PYTHONPATH=src uv run python -m demo.data_generator.log_generator --mode benign --batch-size 100 --sink=local
+uv run python -m src.demo.data_generator.log_generator --mode benign --batch-size 100 --sink=local
 
 # Stream benign logs directly to BigQuery (requires ADC):
-PYTHONPATH=src uv run python -m demo.data_generator.log_generator --mode continuous --rate 50 --sink=bigquery
+uv run python -m src.demo.data_generator.log_generator --mode continuous --rate 50 --sink=bigquery
 
 # Upload batch logs to Cloud Storage (requires ADC):
-PYTHONPATH=src uv run python -m demo.data_generator.log_generator --mode benign --batch-size 250 --sink=gcs --bucket cymbal-cyber-raw-logs_<PROJECT_ID>
+uv run python -m src.demo.data_generator.log_generator --mode benign --batch-size 250 --sink=gcs --bucket cymbal-cyber-raw-logs_<PROJECT_ID>
 
 # Inject ad-hoc MALICIOUS threat scenario directly to BigQuery:
-PYTHONPATH=src uv run python -m demo.data_generator.log_generator --mode threat --threat-type malicious --user u.lewis --sink=bigquery
+uv run python -m src.demo.data_generator.log_generator --mode threat --threat-type malicious --user u.lewis --sink=bigquery
 
 # Or publish to Pub/Sub (requires ADC; allow 60s for BigQuery Storage Write API buffer ingestion before detection):
-PYTHONPATH=src uv run python -m demo.data_generator.log_generator --mode threat --threat-type malicious --user u.lewis --sink=pubsub
+uv run python -m src.demo.data_generator.log_generator --mode threat --threat-type malicious --user u.lewis --sink=pubsub
 echo "Allowing 60s for BigQuery streaming buffer ingestion..." && sleep 60
 uv run python -m adk_agent.threat_detector --lookback 15 --min-score 100
 
 # Inject ad-hoc FALSE POSITIVE threat scenario:
-PYTHONPATH=src uv run python -m demo.data_generator.log_generator --mode threat --threat-type false_positive --user l.taylor --sink=bigquery
+uv run python -m src.demo.data_generator.log_generator --mode threat --threat-type false_positive --user l.taylor --sink=bigquery
 ```
 
 ---
 
 ### 2. Data Pipelines to BigQuery (`src/demo/data_pipeline/`)
-- **Pub/Sub to BigQuery Direct Subscriptions [Default]:** Direct table ingestion configured in Terraform (`raw_access_to_bq` & `raw_network_to_bq`) using table schemas (`use_table_schema = true`, `drop_unknown_fields = true`) and filtered by `attributes.event_family` (`access` and `network`). Provides serverless, zero-compute-cost streaming ingestion directly into `user_access_events` and `network_events`.
+- **Pub/Sub to BigQuery Direct Subscriptions [Default]:** Direct table ingestion configured in Terraform (`raw_access_to_bq` & `raw_network_to_bq`) using table schemas (`use_table_schema = true`, `drop_unknown_fields = false`) and filtered by `attributes.event_family` (`access` and `network`). Provides serverless, zero-compute-cost streaming ingestion directly into `user_access_events` and `network_events`.
+- **Data model highlights:**
+  - *Data contract:* `cymbal_cyber_raw_logs` carries a protobuf schema. A message with a missing required field, a wrong type or an unknown field is rejected at publish. `test_raw_event_contract.py` keeps the proto, the table schemas and the generator in step.
+  - *Incidents:* the detector records every qualifying 2-minute window in `alerts` but publishes only the window that opens an incident (`status = NEW`); the rest are `CORRELATED` and share its `incident_id`. `incidents` is the rolled-up view.
+  - *Tickets:* `soc_tickets` is an append-only log with typed `TIMESTAMP` columns, partitioned by `created_at` and clustered on `status, user_id`. `soc_tickets_current` dedupes it once (`QUALIFY ROW_NUMBER()`) and adds the classifications the console groups by; the dashboard reads it with one `GROUPING SETS` query.
+  - *Screenshots:* every PNG in `local_demo_data/user_screenshots` is uploaded, and `user_screenshots_objects` is a BigLake object table over the bucket, so a new screenshot needs no SQL change.
 - **Scheduled Threat Detector (Cloud Run Job) [Default]:** [`adk_agent/threat_detector.py`](../../adk_agent/threat_detector.py)
   Scheduled micro-batch detector triggered every 5 minutes by Cloud Scheduler. Evaluates 2-minute tumbling windows closed >60s ago via idempotent BigQuery `MERGE`, publishing alert contract JSON to Pub/Sub with $0 continuous slot reservation cost (alert latency ~5 to 7 minutes with late-data allowance).
 - **Pub/Sub to BigQuery Dataflow Streaming Pipeline [Optional / Benchmark Only]:** [`data_pipeline/pubsub_to_bigquery_dataflow.py`](data_pipeline/pubsub_to_bigquery_dataflow.py)

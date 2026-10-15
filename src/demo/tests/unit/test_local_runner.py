@@ -10,6 +10,7 @@ def test_detect_builds_an_alert_for_the_injected_threat(tmp_path):
     assert alert is not None
     assert alert["user_id"] == "u.lewis"
     assert alert["alert_id"] == f"u.lewis|{alert['window_end']}"
+    assert alert["incident_id"] == alert["alert_id"]  # the first window opens it
     assert alert["total_2_min_threat_score"] >= local_runner.ALERT_MIN_SCORE
 
 

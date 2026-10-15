@@ -2,7 +2,7 @@
 
 This Terraform module provisions the complete enterprise infrastructure for the Cymbal Cyber Security AI platform:
 
-- **BigQuery Analytical Lakehouse**: Datasets (`Cymbal_Cyber`), scalar SQL UDFs (`calculate_threat_score`, `is_malicious_*`), partitioned tables (`user_access_events`, `network_events`, `alerts`, `soc_tickets`), and BigLake object tables (`user_screenshots_view`).
+- **BigQuery Analytical Lakehouse**: Datasets (`Cymbal_Cyber`), scalar SQL UDFs (`calculate_threat_score`, `is_malicious_*`), partitioned tables (`user_access_events`, `network_events`, `alerts`, `soc_tickets`), views (`soc_tickets_current`, `incidents`), a BigLake object table over the screenshots bucket (`user_screenshots_objects`) and a protobuf data contract on the raw telemetry topic.
 - **Pub/Sub Telemetry Streaming**: Event ingestion topics, BigQuery direct-write subscriptions, dead-letter queues (DLQ), and agent push subscriptions.
 - **Multi-Agent Cloud Run Services**: Containerized ADK multi-agent orchestrator (`cymbal-cyber-adk-agent`) and interactive SOC console (`cymbal-cyber-soc-console`).
 - **Scheduled Micro-Batch Threat Detector**: Cloud Run Job (`threat-detector`) invoked on a cron schedule via Cloud Scheduler.

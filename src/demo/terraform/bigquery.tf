@@ -213,6 +213,13 @@ resource "google_bigquery_table" "adk_threat_assessment" {
     }
   }
 
+  time_partitioning {
+    type  = "DAY"
+    field = "transaction_window_end"
+  }
+
+  clustering = ["user_id", "agent_decision"]
+
   schema = jsonencode([
     { name = "transaction_window_end", type = "TIMESTAMP", mode = "NULLABLE" },
     { name = "user_id", type = "STRING", mode = "NULLABLE" },
@@ -227,13 +234,14 @@ resource "google_bigquery_table" "adk_threat_assessment" {
   ])
 }
 
-# 4. soc_tickets Table
+# 4. soc_tickets Table (append-only: every state change is a new row; read the latest
+# state through soc_tickets_current)
 resource "google_bigquery_table" "soc_tickets" {
   # checkov:skip=CKV_GCP_80: "Default Google-managed encryption keys protect data at rest by default for zero-continuous-cost baseline; CMEK/CSEK is supported via var.kms_key_name"
   project             = var.project_id
   dataset_id          = google_bigquery_dataset.cyber_dataset.dataset_id
   table_id            = "soc_tickets"
-  description         = "Dedicated store for tickets passed to the SOC ticketing system."
+  description         = "Append-only ticket log for the SOC ticketing system. Query soc_tickets_current for the latest state."
   deletion_protection = false
 
   dynamic "encryption_configuration" {
@@ -243,9 +251,16 @@ resource "google_bigquery_table" "soc_tickets" {
     }
   }
 
+  time_partitioning {
+    type  = "DAY"
+    field = "created_at"
+  }
+
+  clustering = ["status", "user_id"]
+
   schema = jsonencode([
     { name = "ticket_id", type = "STRING", mode = "REQUIRED" },
-    { name = "created_at", type = "STRING", mode = "REQUIRED" },
+    { name = "created_at", type = "TIMESTAMP", mode = "REQUIRED" },
     { name = "user_id", type = "STRING", mode = "REQUIRED" },
     { name = "device_id", type = "STRING", mode = "REQUIRED" },
     { name = "source_ip", type = "STRING", mode = "REQUIRED" },
@@ -260,8 +275,53 @@ resource "google_bigquery_table" "soc_tickets" {
     { name = "structured_report", type = "STRING", mode = "REQUIRED" },
     { name = "human_decision", type = "STRING", mode = "NULLABLE" },
     { name = "human_comment", type = "STRING", mode = "NULLABLE" },
-    { name = "adjudicated_at", type = "STRING", mode = "NULLABLE" }
+    { name = "adjudicated_at", type = "TIMESTAMP", mode = "NULLABLE" }
   ])
+}
+
+# 4b. Latest state of each ticket, deduplicated once here instead of in every query,
+# plus the classifications the console's KPIs and charts group by.
+resource "google_bigquery_table" "soc_tickets_current" {
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.cyber_dataset.dataset_id
+  table_id            = "soc_tickets_current"
+  description         = "One row per ticket (its latest state) with dashboard classifications."
+  deletion_protection = false
+
+  view {
+    query          = <<-SQL
+      SELECT
+        t.*,
+        t.agent_decision = 'SIMULATED' AS is_simulated,
+        t.agent_decision = 'FALSE_POSITIVE_AUTO_CLOSED' AS is_auto_closed,
+        COALESCE(t.human_decision, '') != '' AS is_adjudicated,
+        t.status IN ('OPEN', 'ESCALATED', 'UNDER_INVESTIGATION')
+          AND COALESCE(t.human_decision, '') = '' AS is_pending,
+        CASE
+          WHEN t.status IN ('OPEN', 'ESCALATED', 'UNDER_INVESTIGATION')
+            AND COALESCE(t.human_decision, '') = '' THEN 'Open'
+          WHEN t.status = 'RESOLVED' AND t.human_decision = 'Genuine Threat' THEN 'Escalated'
+          WHEN t.status = 'RESOLVED' THEN 'Closed'
+          ELSE 'In Progress'
+        END AS status_bucket,
+        CASE
+          WHEN t.status = 'RESOLVED' THEN 'Within SLA'
+          WHEN TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), t.created_at, MINUTE) > 60 THEN 'Breached SLA'
+          WHEN TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), t.created_at, MINUTE) > 30 THEN 'Approaching SLA'
+          ELSE 'Within SLA'
+        END AS sla_bucket
+      FROM `${var.project_id}.${google_bigquery_dataset.cyber_dataset.dataset_id}.${google_bigquery_table.soc_tickets.table_id}` AS t
+      WHERE TRUE
+      -- An analyst verdict wins over any later agent row; otherwise the newest row wins.
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY t.ticket_id
+        ORDER BY
+          IF(COALESCE(t.human_decision, '') != '', 1, 2),
+          COALESCE(t.adjudicated_at, t.created_at) DESC
+      ) = 1
+    SQL
+    use_legacy_sql = false
+  }
 }
 
 # 5. agent_events Table (for BigQuery Agent Analytics Plugin)
@@ -285,32 +345,60 @@ resource "google_bigquery_table" "agent_events" {
   }
 }
 
-# 6. BigQuery View for User Screenshots
+# 6. BigLake object table over the screenshots bucket. BigQuery reads the bucket through
+# the connection's own service account (granted objectViewer in iam.tf), so a new PNG is
+# visible to the agent without any Terraform or SQL change.
+resource "google_bigquery_connection" "screenshots" {
+  project       = var.project_id
+  connection_id = "cymbal_screenshots"
+  location      = var.bigquery_location
+  friendly_name = "Cymbal Cyber screenshots (object table)"
+  description   = "Cloud resource connection BigQuery uses to list the screenshots bucket."
+  cloud_resource {}
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_bigquery_table" "user_screenshots_objects" {
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.cyber_dataset.dataset_id
+  table_id            = "user_screenshots_objects"
+  description         = "Object table: one row per desktop screenshot in the screenshots bucket."
+  deletion_protection = false
+
+  external_data_configuration {
+    connection_id   = google_bigquery_connection.screenshots.name
+    autodetect      = false
+    object_metadata = "SIMPLE"
+    source_uris     = ["gs://${google_storage_bucket.screenshots.name}/*.png"]
+  }
+
+  # Object tables have a fixed schema that BigQuery fills in.
+  lifecycle {
+    ignore_changes = [schema]
+  }
+
+  depends_on = [google_storage_bucket_iam_member.screenshots_connection_reader]
+}
+
+# 7. View linking user_id to its screenshot (what get_gcs_uri_for_user queries).
 resource "google_bigquery_table" "user_screenshots_view" {
   project             = var.project_id
   dataset_id          = google_bigquery_dataset.cyber_dataset.dataset_id
   table_id            = "user_screenshots_view"
-  description         = "View linking user_id to screenshot GCS URI in cymbal-cyber-screenshots bucket."
+  description         = "user_id -> screenshot GCS URI, derived from the user_screenshots_objects object table."
   deletion_protection = false
 
   view {
     query          = <<-SQL
       SELECT
         REGEXP_EXTRACT(uri, r'([^/]+)\.png$') AS user_id,
-        uri AS gcs_uri
-      FROM (
-        SELECT 'gs://${google_storage_bucket.screenshots.name}/' || user_id || '.png' AS uri
-        FROM UNNEST([
-          'j.doe', 'a.smith', 'm.jones', 'svc_backup', 'svc_monitoring', 'admin', 'guest', 'r.patel',
-          's.chen', 'e.williams', 'k.brown', 'd.davis', 't.miller', 'c.wilson', 'b.moore', 'l.taylor',
-          'o.anderson', 'p.thomas', 'j.jackson', 'h.white', 'v.martin', 'n.thompson', 'g.harris', 'u.lewis'
-        ]) AS user_id
-      )
+        uri AS gcs_uri,
+        updated AS screenshot_updated_at
+      FROM `${var.project_id}.${google_bigquery_dataset.cyber_dataset.dataset_id}.${google_bigquery_table.user_screenshots_objects.table_id}`
     SQL
     use_legacy_sql = false
   }
-
-  depends_on = [google_bigquery_dataset.cyber_dataset, google_storage_bucket.screenshots]
 }
 
 # 8. Detection Alerts Table (Partitioned by window_end, clustered by user_id)
@@ -340,6 +428,7 @@ resource "google_bigquery_table" "alerts" {
 
   schema = jsonencode([
     { name = "alert_id", type = "STRING", mode = "REQUIRED", description = "Primary key: user_id|window_end" },
+    { name = "incident_id", type = "STRING", mode = "NULLABLE", description = "alert_id of the window that opened this incident (correlated windows share it)" },
     { name = "engine", type = "STRING", mode = "REQUIRED", description = "Detection engine: scheduled, dataflow, cq" },
     { name = "user_id", type = "STRING", mode = "REQUIRED", description = "Target user identifier" },
     { name = "device_id", type = "STRING", mode = "REQUIRED", description = "Target device identifier" },
@@ -350,11 +439,41 @@ resource "google_bigquery_table" "alerts" {
     { name = "high_privilege_request_count", type = "INT64", mode = "NULLABLE", description = "Count of high privilege requests" },
     { name = "malicious_command_count", type = "INT64", mode = "NULLABLE", description = "Count of suspicious commands" },
     { name = "malicious_dns_count", type = "INT64", mode = "NULLABLE", description = "Count of suspicious DNS queries" },
-    { name = "status", type = "STRING", mode = "REQUIRED", description = "NEW | PUBLISHED | INVESTIGATING | RETRY_PENDING | DONE | DEAD_LETTERED" },
+    { name = "status", type = "STRING", mode = "REQUIRED", description = "NEW | PUBLISHED | INVESTIGATING | RETRY_PENDING | DONE | DEAD_LETTERED | CORRELATED (folded into an open incident, never published)" },
     { name = "detected_at", type = "TIMESTAMP", mode = "REQUIRED", description = "Timestamp when alert was evaluated" },
     { name = "updated_at", type = "TIMESTAMP", mode = "REQUIRED", description = "Timestamp of last status transition" },
     { name = "payload", type = "JSON", mode = "REQUIRED", description = "Complete contract JSON payload" }
   ])
+}
+
+# 8b. Incidents: correlated alert windows rolled up, one row per incident.
+resource "google_bigquery_table" "incidents" {
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.cyber_dataset.dataset_id
+  table_id            = "incidents"
+  description         = "One row per incident: the published alert plus every window correlated into it."
+  deletion_protection = false
+
+  view {
+    query          = <<-SQL
+      SELECT
+        incident_id,
+        ANY_VALUE(user_id) AS user_id,
+        MIN(window_start) AS first_seen,
+        MAX(window_end) AS last_seen,
+        COUNT(*) AS windows,
+        SUM(total_2_min_threat_score) AS total_threat_score,
+        MAX(total_2_min_threat_score) AS peak_window_score,
+        SUM(malicious_command_count) AS malicious_commands,
+        SUM(malicious_dns_count) AS malicious_dns_queries,
+        SUM(high_privilege_request_count) AS high_privilege_requests,
+        ANY_VALUE(IF(alert_id = incident_id, status, NULL)) AS published_alert_status
+      FROM `${var.project_id}.${google_bigquery_dataset.cyber_dataset.dataset_id}.${google_bigquery_table.alerts.table_id}`
+      WHERE incident_id IS NOT NULL
+      GROUP BY incident_id
+    SQL
+    use_legacy_sql = false
+  }
 }
 
 # 9. Alerts Dead Letter Table (Captures alerts that failed 5 delivery attempts)

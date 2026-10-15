@@ -161,7 +161,7 @@ Verify that the deployed cloud pipeline processes live security telemetry end-to
 gcloud auth application-default login
 
 # Step B: Publish synthetic malicious threat scenario to Cloud Pub/Sub
-PYTHONPATH=src uv run python -m demo.data_generator.log_generator \
+uv run python -m src.demo.data_generator.log_generator \
   --mode threat \
   --threat-type malicious \
   --user u.lewis \

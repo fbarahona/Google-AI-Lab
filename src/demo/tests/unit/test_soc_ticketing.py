@@ -3,7 +3,10 @@ Unit tests for SOC Ticketing System models and operations.
 """
 
 import os
+import re
 import shutil
+from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
@@ -16,6 +19,7 @@ from src.demo.soc_ticketing.models import (
 from src.demo.soc_ticketing.ticketing_service import (
     SocTicketingService,
     TicketPersistenceError,
+    _row_dict,
 )
 
 
@@ -245,3 +249,81 @@ def test_local_sample_history_is_simulated_and_not_counted(tmp_path, monkeypatch
     assert all(t["ticket_id"].startswith("SIM-TICKET-") for t in history)
     assert not list((tmp_path / "history").glob("*.json"))  # nothing written
     assert service.fetch_dashboard_metrics()["triaged_alerts"] == 0
+
+
+# --- soc_tickets modelling: typed timestamps and the soc_tickets_current view ---
+
+_TERRAFORM = Path(__file__).resolve().parents[2] / "terraform"
+
+
+def _view_sql(table_id: str) -> str:
+    tf = (_TERRAFORM / "bigquery.tf").read_text()
+    match = re.search(
+        rf'table_id\s*=\s*"{table_id}".*?query\s*=\s*<<-SQL\n(.*?)\n\s*SQL', tf, re.S
+    )
+    assert match, f"view {table_id} not found"
+    return match.group(1)
+
+
+def test_current_view_classifies_with_the_model_constants():
+    sql = _view_sql("soc_tickets_current")
+    assert f"agent_decision = '{SIMULATED_DECISION}' AS is_simulated" in sql
+    assert f"agent_decision = '{AUTO_CLOSED_FP_DECISION}' AS is_auto_closed" in sql
+    assert "QUALIFY ROW_NUMBER() OVER" in sql
+
+
+def test_service_reads_tickets_only_through_the_current_view():
+    source = (
+        Path(__file__).resolve().parents[2] / "soc_ticketing" / "ticketing_service.py"
+    ).read_text()
+    assert ".soc_tickets`" not in source  # every read goes through soc_tickets_current
+    assert "PARSE_TIMESTAMP" not in source  # created_at is a TIMESTAMP now
+
+
+def test_ticket_rows_carry_valid_timestamps():
+    row = SocTicketingService._soc_tickets_row(
+        {"ticket_id": "T-1", "created_at": "", "adjudicated_at": ""}
+    )
+    assert datetime.fromisoformat(row["created_at"])
+    assert "adjudicated_at" not in row  # NULL, not an empty string
+
+
+def test_bigquery_timestamps_come_back_as_iso_strings():
+    created = datetime(2026, 10, 15, 2, 0, tzinfo=UTC)
+    assert _row_dict({"ticket_id": "T-1", "created_at": created}) == {
+        "ticket_id": "T-1",
+        "created_at": "2026-10-15T02:00:00+00:00",
+    }
+
+
+def test_dashboard_breakdowns_come_from_one_grouping_sets_query(monkeypatch):
+    monkeypatch.setenv("LOCAL_MODE", "false")
+    service = SocTicketingService(project_id="p")
+    breakdown_rows = [
+        {"dimension": "severity", "label": "Critical", "count": 3},
+        {"dimension": "status", "label": "Open", "count": 2},
+        {"dimension": "sla", "label": "Within SLA", "count": 3},
+        {"dimension": "category", "label": "Credential Access", "count": 1},
+    ]
+    queries = []
+
+    def query(sql):
+        queries.append(sql)
+        job = MagicMock()
+        job.result.return_value = breakdown_rows if "GROUPING SETS" in sql else []
+        return job
+
+    service._bq_client = MagicMock()
+    service._bq_client.query.side_effect = query
+    metrics = service.fetch_dashboard_metrics("Last 7 Days")
+
+    assert metrics["alerts_by_severity"] == [{"severity": "Critical", "count": 3}]
+    assert metrics["alerts_by_status"] == [{"status": "Open", "count": 2}]
+    assert metrics["alerts_by_sla"] == [{"sla": "Within SLA", "count": 3}]
+    assert metrics["alerts_by_category"] == [
+        {"category": "Credential Access", "count": 1}
+    ]
+    ticket_queries = [q for q in queries if "soc_tickets_current" in q]
+    assert len(ticket_queries) == 3  # summary, breakdowns, map (was 6 deduped CTEs)
+    assert all("NOT is_simulated" in q for q in ticket_queries)
+    assert all("created_at >= TIMESTAMP_SUB" in q for q in ticket_queries)
