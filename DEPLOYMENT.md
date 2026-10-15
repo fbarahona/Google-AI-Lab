@@ -156,6 +156,15 @@ gcloud run jobs update threat-detector \
 
 Verify that the deployed cloud pipeline processes live security telemetry end-to-end:
 
+> **Behind a TLS-intercepting proxy** (corporate network, some devcontainers): if a step fails with `CERTIFICATE_VERIFY_FAILED` / `self-signed certificate in certificate chain`, point each client at the system CA bundle, which includes the proxy's root:
+> ```bash
+> # gRPC clients: the Pub/Sub publisher (Step B) and the console in cloud mode
+> export GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=/etc/ssl/certs/ca-certificates.crt
+> # bq ignores that variable; pass its own flag on every call (Steps F and G)
+> bq --ca_certificates_file=/etc/ssl/certs/ca-certificates.crt query ...
+> ```
+> Never disable certificate verification instead.
+
 ```bash
 # Step A: Ensure local Application Default Credentials (ADC) are active
 gcloud auth application-default login
@@ -184,10 +193,15 @@ EXECUTION="$(gcloud run jobs executions list --job=threat-detector \
 gcloud beta run jobs executions logs read "${EXECUTION}" \
   --project="${PROJECT_ID}" --region="${REGION}"
 
-# Step F: One injection is one incident: one NEW (published) window, the rest CORRELATED
+# Step F: One injection is one incident: the first window is published to the agent
+# (NEW, then DONE once adjudicated), the rest are CORRELATED under the same incident_id
 bq query --use_legacy_sql=false \
   "SELECT alert_id, incident_id, status, total_2_min_threat_score
    FROM \`${PROJECT_ID}.Cymbal_Cyber.alerts\` WHERE user_id = 'u.lewis' ORDER BY window_end"
+
+# Step G: The incidents view rolls those windows into one row
+bq query --use_legacy_sql=false \
+  "SELECT * FROM \`${PROJECT_ID}.Cymbal_Cyber.incidents\` WHERE user_id = 'u.lewis'"
 ```
 
 ---
