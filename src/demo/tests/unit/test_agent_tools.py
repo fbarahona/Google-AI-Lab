@@ -654,3 +654,66 @@ def test_cloud_device_query_joins_network_events_through_session_ips():
     network_cte = sql.split("NetworkMetrics AS")[1]
     assert "device_id" not in network_cte
     assert "SELECT assigned_internal_ip FROM FlaggedSessions" in network_cte
+
+
+def _gate(tool_name, state, args):
+    tool = MagicMock()
+    tool.name = tool_name
+    ctx = MagicMock()
+    ctx.state = State(state, {})
+    security_gate_callback(tool, args, ctx)
+    return args
+
+
+def test_security_gate_pins_the_alert_identity_over_the_model_payload():
+    """The ticket names the alerted entity, whatever the model wrote in alert_payload."""
+    args = _gate(
+        "escalate_to_human",
+        {
+            "alert_id": "u.lewis|t",
+            "user_id": "u.lewis",
+            "device_id": "ws-hr-05",
+            "source_ip": "175.45.177.32",
+            "threat_score": 600,
+            "window_end": "t",
+        },
+        {
+            "alert_payload": json.dumps({"user": "c.wilson", "threat_score": 1}),
+            "context_data": "r",
+        },
+    )
+    row = _parse_alert_payload_to_row(args["alert_payload"])
+    assert row["user_id"] == "u.lewis"
+    assert row["device_id"] == "ws-hr-05"
+    assert row["source_ip"] == "175.45.177.32"
+    assert row["total_2_min_threat_score"] == 600
+
+
+def test_playground_ticket_names_the_investigated_user():
+    """No alert (an ADK playground prompt): the user the evidence tools ran for."""
+    args = _gate(
+        "escalate_to_human",
+        {"investigated_user": "c.wilson"},
+        {"alert_payload": "investigate user c.wilson", "context_data": "r"},
+    )
+    row = _parse_alert_payload_to_row(args["alert_payload"])
+    assert row["user_id"] == "c.wilson"
+    assert row["device_id"] is None  # no trusted source: shown as "Not in alert"
+
+
+def test_state_sync_records_the_investigated_user_from_call_arguments():
+    from adk_agent.agent import sync_mcp_security_state_callback
+
+    state = State({}, {})
+    ctx = MagicMock(state=state)
+    ok = {"security_flags": {"evidence_unavailable": False}}
+    tool = MagicMock()
+    tool.name = "get_entity_behavioral_profile"
+    sync_mcp_security_state_callback(
+        tool, {"entity_type": "ip", "entity_id": "1.2.3.4"}, ctx, ok
+    )
+    assert not state.get("investigated_user")
+    sync_mcp_security_state_callback(
+        tool, {"entity_type": "user", "entity_id": "c.wilson"}, ctx, ok
+    )
+    assert state.get("investigated_user") == "c.wilson"

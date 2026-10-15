@@ -327,3 +327,43 @@ def test_dashboard_breakdowns_come_from_one_grouping_sets_query(monkeypatch):
     assert len(ticket_queries) == 3  # summary, breakdowns, map (was 6 deduped CTEs)
     assert all("NOT is_simulated" in q for q in ticket_queries)
     assert all("created_at >= TIMESTAMP_SUB" in q for q in ticket_queries)
+
+
+def test_tickets_carry_their_incident_rollup(monkeypatch):
+    """A ticket matches its incident through the alert_id hash in its ticket ID."""
+    import hashlib
+
+    monkeypatch.setenv("LOCAL_MODE", "false")
+    service = SocTicketingService(project_id="p", dataset_id="d")
+    suffix = hashlib.sha256(b"u.lewis|2026-10-15T05:00:00Z").hexdigest()[:10]
+    bq = MagicMock()
+    bq.query.return_value.result.return_value = [
+        {
+            "ticket_suffix": suffix,
+            "windows": 3,
+            "total_threat_score": 1600,
+            "peak_window_score": 830,
+        }
+    ]
+    service._bq_client = bq
+    tickets = [
+        {"ticket_id": f"SOC-TICKET-u.lewis-{suffix}", "user_id": "u.lewis"},
+        {"ticket_id": "SOC-TICKET-c.wilson-0000000000", "user_id": "c.wilson"},
+    ]
+    service._attach_incident_stats(tickets)
+    assert tickets[0]["incident_total_score"] == 1600
+    assert tickets[0]["incident_windows"] == 3
+    assert tickets[0]["incident_peak_score"] == 830
+    assert "incident_windows" not in tickets[1]
+    params = bq.query.call_args.kwargs["job_config"].query_parameters
+    assert params[0].values == ["c.wilson", "u.lewis"]
+
+
+def test_incident_lookup_failure_leaves_tickets_alone(monkeypatch):
+    monkeypatch.setenv("LOCAL_MODE", "false")
+    service = SocTicketingService(project_id="p", dataset_id="d")
+    service._bq_client = MagicMock()
+    service._bq_client.query.side_effect = RuntimeError("no view")
+    tickets = [{"ticket_id": "SOC-TICKET-u.lewis-abc", "user_id": "u.lewis"}]
+    service._attach_incident_stats(tickets)
+    assert tickets == [{"ticket_id": "SOC-TICKET-u.lewis-abc", "user_id": "u.lewis"}]

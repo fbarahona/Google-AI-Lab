@@ -384,7 +384,52 @@ class SocTicketingService:
             key=lambda x: str(x.get("created_at") or x.get("timestamp") or ""),
             reverse=True,
         )
+        if self.is_cloud_enabled():
+            self._attach_incident_stats(tickets)
         return tickets
+
+    def _attach_incident_stats(self, tickets: list[dict[str, Any]]) -> None:
+        """
+        Adds the incident roll-up (windows, total and peak score) to each ticket filed
+        for a correlated incident. A ticket's ID ends in the first 10 hex characters of
+        SHA-256(alert_id), and the published alert opens its incident (incident_id =
+        alert_id), so tickets match incidents without storing the alert_id. Best
+        effort: a ticket without a match keeps its window score only.
+        """
+        users = sorted({t["user_id"] for t in tickets if t.get("user_id")})
+        if self.bq_client is None or not users:
+            return
+        try:
+            from google.cloud import bigquery
+
+            query = f"""
+            SELECT
+              SUBSTR(TO_HEX(SHA256(incident_id)), 1, 10) AS ticket_suffix,
+              windows,
+              total_threat_score,
+              peak_window_score
+            FROM `{self.project_id}.{self.dataset_id}.incidents`
+            WHERE user_id IN UNNEST(@users)
+            """
+            cfg = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ArrayQueryParameter("users", "STRING", users)
+                ]
+            )
+            stats = {
+                row["ticket_suffix"]: _row_dict(row)
+                for row in self.bq_client.query(query, job_config=cfg).result()
+            }
+        except Exception as e:
+            logger.warning("Incident stats lookup failed: %s", e)
+            return
+        for ticket in tickets:
+            suffix = str(ticket.get("ticket_id") or "").rsplit("-", 1)[-1]
+            match = stats.get(suffix)
+            if match:
+                ticket["incident_windows"] = match["windows"]
+                ticket["incident_total_score"] = match["total_threat_score"]
+                ticket["incident_peak_score"] = match["peak_window_score"]
 
     def _backfill_ticket_to_bq(self, ticket_data: dict[str, Any]) -> None:
         """Self-healing backfill of GCS escalation ticket into BigQuery soc_tickets."""
@@ -632,7 +677,9 @@ class SocTicketingService:
                 LIMIT 200
                 """
                 results = list(self.bq_client.query(query).result())
-                return [_row_dict(row) for row in results]
+                historic = [_row_dict(row) for row in results]
+                self._attach_incident_stats(historic)
+                return historic
             except Exception as e:
                 logger.warning("BigQuery fetch_historic_tickets failed: %s", e)
 
