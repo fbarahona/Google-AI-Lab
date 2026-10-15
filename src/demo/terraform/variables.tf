@@ -135,6 +135,12 @@ variable "enable_adk_dev_ui" {
   default     = false
 }
 
+variable "adk_dev_ui_origins" {
+  description = "Browser origins the ADK web UI accepts writes from while enable_adk_dev_ui is on. The UI is opened through `gcloud run services proxy`, so the browser's origin is the local proxy, not the run.app URL."
+  type        = list(string)
+  default     = ["http://localhost:8080", "http://127.0.0.1:8080"]
+}
+
 variable "deployer_member" {
   description = "Optional IAM member (e.g. user:name@example.com or serviceAccount:sa@...) granted roles/artifactregistry.writer to build and push container images."
   type        = string

@@ -249,12 +249,9 @@ The token lasts one hour; restart the proxy to refresh it. `401` means the token
 Open **`http://localhost:8501`** in your browser to view the incident queue, triage tickets, and inspect visual evidence.
 
 #### ADK Agent Web Playground (off by default):
-The cloud agent service serves only the Pub/Sub webhook. The ADK web UI, `/run`, session and A2A APIs, and `/docs` are not routed, because they run investigations as the agent SA without the webhook's OIDC check. Even then, the playground's tools run in the MCP tool service as its own identity, exactly as in the webhook path. For a supervised demo, turn it on with the same arguments `deploy_cloud.sh` passes to Terraform plus the flag:
+The cloud agent service serves only the Pub/Sub webhook. The ADK web UI, `/run`, session and A2A APIs, and `/docs` are not routed, because they run investigations as the agent SA without the webhook's OIDC check. Even then, the playground's tools run in the MCP tool service as its own identity, exactly as in the webhook path. For a supervised demo, turn it on by deploying with the flag (Terraform reads it from the environment; a plain `deploy_cloud.sh` run turns it off again):
 ```bash
-cd src/demo/terraform
-terraform apply -var="project_id=${PROJECT_ID}" -var="region=${REGION}" \
-  -var="agent_image=<the image deploy_cloud.sh printed>" -var="enable_adk_dev_ui=true"
-cd ../../..
+TF_VAR_enable_adk_dev_ui=true ./src/demo/scripts/deploy_cloud.sh "${PROJECT_ID}"
 ```
 The flag also lets `soc-console-access` invoke the agent service, so you open it the same way as the console, with an impersonated token whose audience is the agent URL:
 ```bash
@@ -269,7 +266,7 @@ gcloud run services proxy cymbal-cyber-adk-agent \
   --token="$(gcloud auth print-identity-token \
     --impersonate-service-account="${CONSOLE_SA}" --audiences="${AGENT_URL}")"
 ```
-Open **`http://localhost:8080/dev-ui/`** for the playground, pick `adk_agent`, and paste an alert (for example `investigate user c.wilson`). Sessions live in memory on one instance, so a session can disappear if Cloud Run scales to another instance; start a new one if that happens. When the demo is over, apply again without the flag: that turns the UI off and removes the extra invoker grant. Locally, `LOCAL_MODE=true agents-cli playground` needs no flag.
+Open **`http://localhost:8080/dev-ui/`** for the playground, pick `adk_agent`, and paste an alert (for example `investigate user c.wilson`). The flag also sets `ALLOW_ORIGINS` to the proxy's local addresses (`adk_dev_ui_origins`, default ports 8080 on localhost and 127.0.0.1); without it ADK refuses to create a session ("Failed to create session") because the browser's origin is the proxy, not the run.app URL. If you proxy on another port, add it to that variable. Sessions live in memory on one instance, so a session can disappear if Cloud Run scales to another instance; start a new one if that happens. When the demo is over, deploy again without the variable: that turns the UI off and removes the extra invoker grant. Locally, `LOCAL_MODE=true agents-cli playground` needs no flag.
 
 ---
 

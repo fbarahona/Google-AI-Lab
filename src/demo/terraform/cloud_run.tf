@@ -53,6 +53,15 @@ resource "google_cloud_run_v2_service" "adk_agent_service" {
         name  = "ADK_DEV_UI"
         value = var.enable_adk_dev_ui ? "true" : "false"
       }
+      # ADK rejects cross-origin writes (creating a session, sending a message); the
+      # browser reaches the UI through the local proxy, so trust that origin.
+      dynamic "env" {
+        for_each = var.enable_adk_dev_ui ? [join(",", var.adk_dev_ui_origins)] : []
+        content {
+          name  = "ALLOW_ORIGINS"
+          value = env.value
+        }
+      }
       env {
         name  = "LOCAL_MODE"
         value = "false"
