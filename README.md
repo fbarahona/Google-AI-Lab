@@ -35,7 +35,7 @@ The local quickstart runs the full pipeline as a **zero-cloud simulation**: no i
 
 ```bash
 uv sync
-cp .env.example .env   # set GOOGLE_CLOUD_PROJECT, or GEMINI_API_KEY for Google AI Studio
+cp .env.example .env   # set GOOGLE_CLOUD_PROJECT, or GEMINI_API_KEY for Google AI Studio (local only; Cloud Run uses Vertex AI)
 ```
 
 `.env.example` documents the supported variables, including `GEMINI_MODEL` (default `gemini-3.8-flash`) and `ADK_ALLOW_CONFIG_STDIO_MCP_SERVERS=true`, which the ADK needs to launch the local MCP server.

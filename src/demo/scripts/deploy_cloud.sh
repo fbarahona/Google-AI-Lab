@@ -43,16 +43,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 TERRAFORM_DIR="${REPO_ROOT}/src/demo/terraform"
 
-# Load GEMINI_API_KEY from .env if present and not already exported in environment
-if [ -z "${GEMINI_API_KEY:-}" ] && [ -f "${REPO_ROOT}/.env" ]; then
-  GEMINI_API_KEY="$(grep -E '^GEMINI_API_KEY=' "${REPO_ROOT}/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)"
-fi
-
-if [ -z "${GEMINI_API_KEY:-}" ]; then
-  echo "WARNING: GEMINI_API_KEY is unset. The agent will rely on Vertex AI / Application Default Credentials."
-else
-  echo "GEMINI_API_KEY detected and will be injected into Cloud Run."
-fi
+# The deployed services call Gemini on Vertex AI with their service accounts. No API key
+# is read or passed to Terraform, so none ends up in Cloud Run env or Terraform state.
 
 # Terraform authenticates with Application Default Credentials, which the provider refreshes
 # itself. A static GOOGLE_OAUTH_ACCESS_TOKEN would take precedence and expire after about an
@@ -90,6 +82,7 @@ if command -v gcloud >/dev/null 2>&1; then
 fi
 
 ARTIFACT_REPO="${ARTIFACT_REPO:-cymbal-cyber}"
+BUILD_SOURCE_BUCKET="${PROJECT_ID}_cloudbuild"
 IMAGE_REPO="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REPO}/cymbal-cyber-agent"
 
 # Tag images with the git commit so every deployed image traces back to its source.
@@ -168,10 +161,20 @@ if command -v terraform >/dev/null 2>&1 && [ -d "${TERRAFORM_DIR}" ]; then
     -var="region=${REGION}" \
     "${DEPLOYER_VAR[@]}"
 
-  # 1b. Provision repository build & push IAM permissions (now guaranteed to succeed because repo exists)
+  # 1b. Cloud Build stages source in this bucket; the build identity may read only it.
+  if command -v gcloud >/dev/null 2>&1 && ! gcloud storage buckets describe "gs://${BUILD_SOURCE_BUCKET}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+    echo "Creating Cloud Build source bucket gs://${BUILD_SOURCE_BUCKET}..."
+    gcloud storage buckets create "gs://${BUILD_SOURCE_BUCKET}" \
+      --project="${PROJECT_ID}" \
+      --location=US \
+      --uniform-bucket-level-access \
+      --public-access-prevention
+  fi
+
+  # 1c. Provision repository build & push IAM permissions (now guaranteed to succeed because repo exists)
   TARGET_IAM_OPTS=(
     -target=google_artifact_registry_repository_iam_member.compute_sa_writer
-    -target=google_project_iam_member.compute_sa_storage_viewer
+    -target=google_storage_bucket_iam_member.compute_sa_build_source_viewer
     -target=google_project_iam_member.compute_sa_log_writer
     -target=google_artifact_registry_repository_iam_member.cloudbuild_sa_writer
   )
@@ -213,6 +216,7 @@ elif command -v gcloud >/dev/null 2>&1; then
   until BUILD_ID=$(gcloud builds submit \
     --project="${PROJECT_ID}" \
     --tag="${IMAGE_TAG}" \
+    --gcs-source-staging-dir="gs://${BUILD_SOURCE_BUCKET}/source" \
     --async \
     --format="value(id)" \
     "${REPO_ROOT}" | tr -d '[:space:]') && [ -n "${BUILD_ID}" ]; do
@@ -260,7 +264,6 @@ if command -v terraform >/dev/null 2>&1 && [ -d "${TERRAFORM_DIR}" ]; then
     -var="project_id=${PROJECT_ID}" \
     -var="region=${REGION}" \
     -var="agent_image=${IMAGE_TAG}" \
-    -var="gemini_api_key=${GEMINI_API_KEY:-}" \
     "${DEPLOYER_VAR[@]}"; do
     if [ "${TF_APPLY_ATTEMPT}" -ge "${TF_APPLY_MAX_ATTEMPTS}" ]; then
       echo "Error: Terraform apply failed after ${TF_APPLY_MAX_ATTEMPTS} attempts."
@@ -273,41 +276,29 @@ if command -v terraform >/dev/null 2>&1 && [ -d "${TERRAFORM_DIR}" ]; then
   done
 fi
 
-# 3. Direct update of Cloud Run Service & Job (ensures active revision rollout)
+# 4. Roll the new image out. Terraform owns every other setting of these workloads (it
+# ignores only the image), so this changes the image and nothing else, and any failure
+# stops the script before it reports success.
 if command -v gcloud >/dev/null 2>&1; then
-  echo "================================================================="
-  echo "Updating Cloud Run Service: cymbal-cyber-adk-agent"
-  echo "================================================================="
-  gcloud run deploy cymbal-cyber-adk-agent \
-    --project="${PROJECT_ID}" \
-    --region="${REGION}" \
-    --image="${IMAGE_TAG}" 2>/dev/null || true
+  for service in cymbal-cyber-adk-agent cymbal-cyber-soc-console; do
+    echo "================================================================="
+    echo "Rolling out ${IMAGE_TAG} to Cloud Run service: ${service}"
+    echo "================================================================="
+    gcloud run services update "${service}" \
+      --project="${PROJECT_ID}" \
+      --region="${REGION}" \
+      --image="${IMAGE_TAG}" \
+      --quiet
+  done
 
   echo "================================================================="
-  echo "Updating Cloud Run Job: threat-detector"
+  echo "Rolling out ${IMAGE_TAG} to Cloud Run job: threat-detector"
   echo "================================================================="
   gcloud run jobs update threat-detector \
     --project="${PROJECT_ID}" \
     --region="${REGION}" \
-    --image="${IMAGE_TAG}" 2>/dev/null || true
-  echo "================================================================="
-  echo "Updating Cloud Run Service: cymbal-cyber-soc-console"
-  echo "================================================================="
-  gcloud run deploy cymbal-cyber-soc-console \
-    --project="${PROJECT_ID}" \
-    --region="${REGION}" \
     --image="${IMAGE_TAG}" \
-    --service-account="cymbal-soc-console-sa@${PROJECT_ID}.iam.gserviceaccount.com" \
-    --command="python" \
-    --args="-m,streamlit,run,src/demo/soc_ticketing/streamlit_soc_console.py,--server.port=8080,--server.address=0.0.0.0,--server.enableCORS=false,--server.enableXsrfProtection=false,--browser.gatherUsageStats=false" \
-    --set-env-vars="PROJECT_ID=${PROJECT_ID},GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=${REGION},BIGQUERY_DATASET=Cymbal_Cyber,ESCALATION_BUCKET=cymbal-cyber-adk-escalations-bucket_${PROJECT_ID},SCREENSHOTS_BUCKET=cymbal-cyber-screenshots_${PROJECT_ID},RAW_LOGS_TOPIC=cymbal_cyber_raw_logs,LOCAL_MODE=false" \
-    --port=8080 \
-    --cpu=1 \
-    --memory=2Gi \
-    --min-instances=0 \
-    --max-instances=5 \
-    --no-allow-unauthenticated \
-    --quiet 2>/dev/null || true
+    --quiet
 fi
 
 echo "================================================================="

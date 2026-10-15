@@ -22,6 +22,7 @@ In enterprise security engineering, granting broad administrative roles across a
 │    - ZERO administrative, IAM mutation, or storage deletion permissions     │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ 3. Continuous Query Workload Identity (`bq-continuous-query-sa`)            │
+│    - Created only when enable_continuous_query = true                       │
 │    - Headless BigQuery Continuous Query stream processing                   │
 │    - Least-Privilege: BigQuery jobUser, dataset READER, publisher on alerts │
 │    - ZERO storage access, ZERO Vertex AI access, ZERO token creation        │
@@ -43,7 +44,11 @@ In enterprise security engineering, granting broad administrative roles across a
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ 5. Pub/Sub Push Invoker Identity (`pubsub-invoker-sa`)                      │
 │    - OIDC token identity for authenticating push subscription delivery      │
-│    - ZERO ambient project roles                                             │
+│    - run.invoker on the agent service only; ZERO ambient project roles      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 5b. Scheduler Identity (`threat-detector-scheduler-sa`)                     │
+│    - Cloud Scheduler OAuth identity that starts the threat-detector job     │
+│    - run.invoker on that job only; ZERO ambient project roles               │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ 6. Tool Isolation Layer: Local Model Context Protocol (MCP) Server          │
 │    - Dedicated stdio tool server (`adk_agent/mcp_server`)                   │
@@ -193,10 +198,10 @@ The Local MCP server operates over standard I/O (`stdio`) or Server-Sent Events 
 
 ## 4. Scoped Workload Identities & Resource-Level Bindings
 
-To enforce the principle of least privilege, background automation is split into **three dedicated service accounts** rather than relying on a single monolithic identity:
+To enforce the principle of least privilege, background automation is split into **dedicated service accounts**, one per trust path, rather than relying on a single monolithic identity:
 
 ### 4A. Continuous Query Workload Identity (`bq-continuous-query-sa`)
-- **Purpose:** Executes headless BigQuery continuous streaming queries and writes alerts to Pub/Sub.
+- **Purpose:** Executes headless BigQuery continuous streaming queries and writes alerts to Pub/Sub. Terraform creates it, with its bindings, only when `enable_continuous_query = true`.
 - **Project Roles:** `roles/bigquery.jobUser` (run jobs), `roles/logging.logWriter`, `roles/serviceusage.serviceUsageConsumer`.
 - **Resource Bindings:**
   - `READER` access on BigQuery dataset `Cymbal_Cyber`
@@ -205,7 +210,7 @@ To enforce the principle of least privilege, background automation is split into
 
 ### 4B. ADK Multi-Agent Runtime Identity (`cymbal-adk-agent-sa`)
 - **Purpose:** Executes the ADK multi-agent team, background threat scanner daemon, visual inspection, and SOC ticket dispatch.
-- **Project Roles:** `roles/bigquery.jobUser`, `roles/bigquery.connectionUser`, `roles/aiplatform.user`, `roles/logging.logWriter`, `roles/serviceusage.serviceUsageConsumer`.
+- **Project Roles:** `roles/bigquery.jobUser`, `roles/aiplatform.user` (every Gemini call, agents and vision, goes through Vertex AI as this identity; there is no API key), `roles/logging.logWriter`, `roles/serviceusage.serviceUsageConsumer`.
 - **Resource Bindings (Least-Privilege Scoped):**
   - `READER` access on BigQuery dataset `Cymbal_Cyber` (reads event tables, views and UDFs for investigations). No dataset-level write: the agent cannot modify the raw event tables it investigates.
   - Table-level `roles/bigquery.dataEditor` on `soc_tickets` and `adk_threat_assessment` (incident tickets and triage decisions), `alerts` (status updates), and `agent_events` (ADK analytics plugin rows; its per-event views are disabled because they would need dataset-level create).
@@ -225,8 +230,20 @@ To enforce the principle of least privilege, background automation is split into
 - **Zero Access:** No screenshots bucket access (the console shows bundled demo screenshots or the agent's signed URLs), no token creation, no write access to the raw event tables.
 
 ### 4C. Pub/Sub Push Invoker Identity (`pubsub-invoker-sa`)
-- **Purpose:** Provides the OIDC identity used by Pub/Sub push subscription (`adk_agent_trigger`) to authenticate delivery to the agent webhook endpoint.
-- **Roles:** Holds zero ambient project roles by default.
+- **Purpose:** Provides the OIDC identity used by Pub/Sub push subscription (`adk_agent_trigger`) to authenticate delivery to the agent webhook endpoint. The webhook rejects any other caller (`EXPECTED_INVOKER_EMAIL`).
+- **Roles:** `roles/run.invoker` on `cymbal-cyber-adk-agent` only. Zero ambient project roles.
+
+### 4D. Scheduler Identity (`threat-detector-scheduler-sa`)
+- **Purpose:** OAuth identity Cloud Scheduler uses to start the `threat-detector` job every 5 minutes. Separate from the push identity, so neither trust path can be used for the other.
+- **Roles:** `roles/run.invoker` on the `threat-detector` job only. Zero ambient project roles.
+
+### 4E. Agent Service Exposure
+- In the cloud the agent service serves only `POST /trigger/pubsub` (and its `/apps/adk_agent/trigger/pubsub` alias), which verifies the Pub/Sub OIDC token. The ADK web UI, `/run`, session, builder and A2A APIs, and the OpenAPI docs are not routed, because they would run investigations as the agent SA without that check.
+- `enable_adk_dev_ui = true` (Terraform) sets `ADK_DEV_UI=true` and turns them back on for a supervised demo; Cloud Run IAM still limits callers to the deployer and the push identity. Locally (`LOCAL_MODE=true`) they are on by default.
+
+### 4F. Build Identity and Container Image
+- Cloud Build runs as the Compute Engine default service account. It holds `roles/storage.objectViewer` on the build source bucket (`<project>_cloudbuild`) only, not project-wide, so it cannot read tickets, screenshots or Terraform state.
+- The image runs as an unprivileged user (uid 10001) that can write only `local_demo_data/`, contains runtime dependencies only (`uv sync --no-dev`), copies only the runtime packages, and pins its base images by digest. `.dockerignore` keeps Terraform state, tfvars and `.env` files out of local builds.
 
 ### CLI Setup for Scoped Workloads:
 ```bash
@@ -271,7 +288,12 @@ gcloud iam service-accounts add-iam-policy-binding "${AGENT_SA}" \
 # 3. Create Pub/Sub Push Invoker Service Account
 gcloud iam service-accounts create pubsub-invoker-sa \
     --project="${PROJECT_ID}" \
-    --display-name="Cymbal Cyber Pub/Sub Invoker SA"
+    --display-name="Cymbal Cyber Pub/Sub Push Invoker SA"
+
+# 4. Create the Scheduler Service Account (starts the threat-detector job)
+gcloud iam service-accounts create threat-detector-scheduler-sa \
+    --project="${PROJECT_ID}" \
+    --display-name="Cymbal Cyber Threat Detector Scheduler SA"
 ```
 
 ---

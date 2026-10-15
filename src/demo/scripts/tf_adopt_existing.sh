@@ -45,8 +45,8 @@ adopt google_artifact_registry_repository.agent_repo \
   "projects/${PROJECT_ID}/locations/${REGION}/repositories/${ARTIFACT_REPO}" \
   gcloud artifacts repositories describe "${ARTIFACT_REPO}" --location="${REGION}" --project="${PROJECT_ID}"
 
+# bq-continuous-query-sa is created only with enable_continuous_query, so it is not adopted.
 for pair in \
-  "bq-continuous-query-sa:google_service_account.continuous_query_sa" \
   "cymbal-adk-agent-sa:google_service_account.agent_sa" \
   "cymbal-soc-console-sa:google_service_account.soc_console_sa" \
   "pubsub-invoker-sa:google_service_account.invoker_sa" \
