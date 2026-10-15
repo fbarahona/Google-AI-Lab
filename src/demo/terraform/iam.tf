@@ -273,6 +273,19 @@ resource "google_service_account" "scheduler_sa" {
   depends_on = [google_project_service.required]
 }
 
+# 3c. Console Access Identity (humans)
+# Role: Analysts open the SOC console through `gcloud run services proxy` with an ID token
+# minted for this account, audience = the console URL. User ID tokens from gcloud carry the
+# OAuth client as audience, which Cloud Run can reject with 401. Invoker on the console only.
+resource "google_service_account" "console_access_sa" {
+  project      = var.project_id
+  account_id   = var.console_access_service_account_id
+  display_name = "SOC console access (humans)"
+  description  = "Analysts impersonate this identity to open the SOC console; invoker on the console only."
+
+  depends_on = [google_project_service.required]
+}
+
 # Allow Invoker SA to invoke the Cloud Run Agent Service (Pub/Sub push webhook)
 resource "google_cloud_run_v2_service_iam_member" "agent_invoker" {
   name     = google_cloud_run_v2_service.adk_agent_service.name
@@ -310,6 +323,24 @@ resource "google_cloud_run_v2_service_iam_member" "soc_console_deployer_invoker"
   name     = google_cloud_run_v2_service.soc_console_service.name
   role     = "roles/run.invoker"
   member   = var.deployer_member
+}
+
+
+# Allow the console access identity to invoke the SOC Console
+resource "google_cloud_run_v2_service_iam_member" "soc_console_access_invoker" {
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.soc_console_service.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.console_access_sa.email}"
+}
+
+# Allow the deployer and listed analysts to mint ID tokens as the console access identity
+resource "google_service_account_iam_member" "console_access_token_creators" {
+  for_each           = toset(compact(concat([var.deployer_member], var.console_access_members)))
+  service_account_id = google_service_account.console_access_sa.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = each.value
 }
 
 

@@ -57,6 +57,18 @@ variable "scheduler_service_account_id" {
   default     = "threat-detector-scheduler-sa"
 }
 
+variable "console_access_service_account_id" {
+  description = "ID for the identity analysts impersonate to open the SOC console through gcloud run services proxy."
+  type        = string
+  default     = "soc-console-access"
+}
+
+variable "console_access_members" {
+  description = "Extra IAM members (e.g. user:analyst@example.com) allowed to impersonate the console access identity. deployer_member is always included."
+  type        = list(string)
+  default     = []
+}
+
 variable "dataflow_service_account_id" {
   description = "ID for the dedicated Dataflow streaming ingestion pipeline service account."
   type        = string
