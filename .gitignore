@@ -222,6 +222,7 @@ local_demo_data/logs/
 local_demo_data/escalations/*.json
 local_demo_data/escalations/*.jsonl
 local_demo_data/escalations/history/*.json
+local_demo_data/escalations/telemetry/*.jsonl
 src/demo/scripts/fernando.sh
 
 # Streamlit
