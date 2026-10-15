@@ -113,6 +113,25 @@ def _profile_from(said: str) -> dict[str, int]:
     return profile
 
 
+def fp_rationale(user_text: str) -> str:
+    """The scripted false-positive argument, citing the telemetry it rests on."""
+    said = _agent_said(user_text)
+    profile = _profile_from(said.get("bq_investigation_agent", ""))
+    if not profile:
+        return "Closing as a false positive: no telemetry findings were returned."
+    findings = ", ".join(
+        f"{profile[key]} {label.lower()}"
+        for key, label in PROFILE_METRICS
+        if key in profile
+    )
+    return (
+        f"Closing as a false positive. Telemetry (24h): {findings}. "
+        "The score comes from routine administrative activity rather than "
+        "confirmed malicious indicators. Scripted local model; the security gate "
+        "makes the final call."
+    )
+
+
 def build_report(alert: dict[str, Any], user_text: str, verdict: str) -> str:
     """
     A deterministic incident report in the same six sections the live model writes,
@@ -290,8 +309,7 @@ class ScriptedLlm(BaseLlm):
                         "log_false_positive",
                         {
                             "alert_payload": json.dumps(alert),
-                            "agent_comment": "Scripted policy: close as a false "
-                            "positive (the security gate decides)",
+                            "agent_comment": fp_rationale(user_text),
                         },
                     )
                 elif gate_blocked and "escalate_to_human" not in calls:

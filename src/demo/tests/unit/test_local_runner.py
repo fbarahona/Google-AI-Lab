@@ -59,3 +59,15 @@ def test_scripted_report_is_built_from_the_investigation():
     assert "T1110 Brute Force" in report and "T1059.001 PowerShell" in report
     assert "T1071.004" not in report  # no malicious DNS, so no C2 technique
     assert "Isolate host `ws-hr-05`" in report
+
+
+def test_scripted_fp_rationale_cites_the_telemetry():
+    from src.demo.scripted_model import fp_rationale, telemetry_summary
+
+    summary = telemetry_summary("l.taylor", {"total_login_failures_24h": 2})
+    transcript = (
+        "[bq_investigation_agent] said:\n<<<BEGIN_QUOTED_AGENT_CONTENT>>>\n"
+        f"{summary}\n<<<END_QUOTED_AGENT_CONTENT>>>"
+    )
+    assert "2 login failures" in fp_rationale(transcript)
+    assert "no telemetry findings" in fp_rationale("")
