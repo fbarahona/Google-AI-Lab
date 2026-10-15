@@ -619,7 +619,7 @@ def overview_page() -> None:
         time_filter = st.segmented_control(
             "Time range",
             TIME_RANGES,
-            format_func=TIME_RANGE_LABELS.get,
+            format_func=lambda k: TIME_RANGE_LABELS.get(k, str(k)),
             default="All Time",
             required=True,
             key="time_filter",

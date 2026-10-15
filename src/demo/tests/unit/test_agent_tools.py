@@ -421,7 +421,7 @@ async def test_default_deny_callback_escalates_when_unresolved(tmp_path, monkeyp
     callback_ctx.state = state_obj
 
     toolset = ag.default_deny_mcp
-    saved_env = dict(toolset._connection_params.server_params.env)
+    saved_env = dict(toolset._connection_params.server_params.env or {})
     toolset._connection_params.server_params.env.update(
         {"LOCAL_QUEUE_DIR": str(tmp_path), "LOCAL_MODE": "true"}
     )

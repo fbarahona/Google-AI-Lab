@@ -27,12 +27,11 @@ The project features an end-to-end near real-time cybersecurity threat detection
 /workspaces/Google/
 ├── adk_agent/                      # Canonical ADK Multi-Agent package
 │   ├── agent.py                    # Multi-agent orchestrator & 4 sub-agents
-│   ├── tools.py                    # Legacy tool implementations & compatibility facade
+│   ├── tools.py                    # Tool implementations (BigQuery, Vision, SOC ticketing)
 │   ├── mcp_server/                 # Local Model Context Protocol (MCP) server
 │   │   ├── __init__.py             # Package init and server factory
 │   │   ├── __main__.py             # stdio/SSE execution entrypoint
-│   │   ├── server.py               # MCPServer instance & tool registrations
-│   │   └── tools/                  # Modular tool providers (BigQuery, Vision, SOC)
+│   │   └── server.py               # MCPServer instance & tool registrations (wraps tools.py)
 │   ├── threat_detector.py          # Scheduled micro-batch detector Cloud Run Job
 │   ├── logging_utils.py            # Structured logging utilities
 │   ├── fast_api_app.py             # FastAPI backend server (webhook + A2A)
