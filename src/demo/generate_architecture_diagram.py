@@ -1,8 +1,9 @@
 """
 Script to generate System Architecture Diagram as both SVG and PNG image files.
-Based on src/demo/README.md for Google Cloud Platform (<PROJECT_ID>).
+Based on README.md & CLOUD_SECURITY.md reference architecture for Google Cloud Platform (<PROJECT_ID>).
 """
 
+import math
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -12,13 +13,48 @@ SVG_PATH = OUTPUT_DIR / "system_architecture.svg"
 PNG_PATH = OUTPUT_DIR / "system_architecture.png"
 
 
+def get_font(font_type="sans", size=14, bold=False):
+    """Safely load font with fallbacks."""
+    font_candidates = []
+    if font_type == "mono":
+        if bold:
+            font_candidates = [
+                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf",
+            ]
+        else:
+            font_candidates = [
+                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+            ]
+    else:
+        if bold:
+            font_candidates = [
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            ]
+        else:
+            font_candidates = [
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            ]
+
+    for cand in font_candidates:
+        if Path(cand).exists():
+            try:
+                return ImageFont.truetype(cand, size)
+            except Exception:
+                continue
+    return ImageFont.load_default()
+
+
 def create_svg():
-    svg_content = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 1200" width="1560" height="1200">
+    svg_content = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1560" width="1600" height="1560">
   <defs>
     <!-- Background Gradient -->
     <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0b0f19"/>
-      <stop offset="50%" stop-color="#111827"/>
+      <stop offset="0%" stop-color="#070a13"/>
+      <stop offset="50%" stop-color="#0f172a"/>
       <stop offset="100%" stop-color="#090d16"/>
     </linearGradient>
 
@@ -28,9 +64,9 @@ def create_svg():
       <stop offset="100%" stop-color="#1e1b4b"/>
     </linearGradient>
 
-    <linearGradient id="pipelineGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#1e293b"/>
-      <stop offset="100%" stop-color="#0f172a"/>
+    <linearGradient id="pubsubGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0c4a6e"/>
+      <stop offset="100%" stop-color="#082f49"/>
     </linearGradient>
 
     <linearGradient id="bqGrad" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -39,13 +75,23 @@ def create_svg():
     </linearGradient>
 
     <linearGradient id="detectGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#3b2d12"/>
-      <stop offset="100%" stop-color="#1c1917"/>
+      <stop offset="0%" stop-color="#064e3b"/>
+      <stop offset="100%" stop-color="#022c22"/>
+    </linearGradient>
+
+    <linearGradient id="alertTopicGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#042f2e"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+
+    <linearGradient id="dlqGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4c0519"/>
+      <stop offset="100%" stop-color="#1f131a"/>
     </linearGradient>
 
     <linearGradient id="adkGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#064e3b"/>
-      <stop offset="100%" stop-color="#022c22"/>
+      <stop offset="0%" stop-color="#022c22"/>
+      <stop offset="100%" stop-color="#064e3b"/>
     </linearGradient>
 
     <linearGradient id="agentSearchGrad" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -65,15 +111,20 @@ def create_svg():
 
     <linearGradient id="agentSocGrad" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#7c2d12"/>
-      <stop offset="100%" stop-color="#451a03"/>
+      <stop offset="100%" stop-color="#431407"/>
+    </linearGradient>
+
+    <linearGradient id="mcpGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b0764"/>
+      <stop offset="100%" stop-color="#1e1035"/>
     </linearGradient>
 
     <linearGradient id="socConsoleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#881337"/>
+      <stop offset="0%" stop-color="#4c0519"/>
       <stop offset="100%" stop-color="#1f131a"/>
     </linearGradient>
 
-    <!-- Drop Shadow Filters -->
+    <!-- Filters -->
     <filter id="shadow" x="-10%" y="-10%" width="125%" height="125%">
       <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#000000" flood-opacity="0.5"/>
     </filter>
@@ -86,9 +137,9 @@ def create_svg():
       <feDropShadow dx="0" dy="0" stdDeviation="8" flood-color="#10b981" flood-opacity="0.35"/>
     </filter>
 
-    <!-- Markers for arrows -->
+    <!-- Markers -->
     <marker id="arrowPurple" markerWidth="10" markerHeight="10" refX="7" refY="3.5" orient="auto">
-      <polygon points="0 0, 8 3.5, 0 7" fill="#a855f7"/>
+      <polygon points="0 0, 8 3.5, 0 7" fill="#c084fc"/>
     </marker>
     <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="7" refY="3.5" orient="auto">
       <polygon points="0 0, 8 3.5, 0 7" fill="#38bdf8"/>
@@ -102,255 +153,346 @@ def create_svg():
     <marker id="arrowRed" markerWidth="10" markerHeight="10" refX="7" refY="3.5" orient="auto">
       <polygon points="0 0, 8 3.5, 0 7" fill="#f43f5e"/>
     </marker>
-    <marker id="arrowOrange" markerWidth="10" markerHeight="10" refX="7" refY="3.5" orient="auto">
-      <polygon points="0 0, 8 3.5, 0 7" fill="#fb923c"/>
-    </marker>
   </defs>
 
   <style>
-    .title { font-family: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif; font-weight: 800; font-size: 27px; fill: #f8fafc; }
-    .subtitle { font-family: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif; font-weight: 500; font-size: 14px; fill: #94a3b8; }
-    .card-title { font-family: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif; font-weight: 700; font-size: 17px; fill: #ffffff; }
+    .title { font-family: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif; font-weight: 800; font-size: 26px; fill: #f8fafc; }
+    .subtitle { font-family: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif; font-weight: 500; font-size: 13.5px; fill: #94a3b8; }
+    .card-title { font-family: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif; font-weight: 700; font-size: 16px; fill: #ffffff; }
     .card-sub { font-family: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif; font-weight: 500; font-size: 12px; fill: #cbd5e1; }
-    .card-mono { font-family: 'DejaVu Sans Mono', Consolas, Monaco, monospace; font-size: 11.5px; fill: #93c5fd; }
+    .card-mono { font-family: 'DejaVu Sans Mono', Consolas, Monaco, monospace; font-size: 11px; fill: #93c5fd; }
     .badge { font-family: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 11px; font-weight: 600; }
-    .flow-label { font-family: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif; font-weight: 600; font-size: 11.5px; fill: #cbd5e1; }
-    .agent-header { font-family: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif; font-weight: 700; font-size: 15px; fill: #ffffff; }
-    .agent-desc { font-family: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 11.5px; fill: #cbd5e1; }
+    .flow-label { font-family: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif; font-weight: 600; font-size: 11.5px; }
+    .agent-header { font-family: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif; font-weight: 700; font-size: 14.5px; fill: #ffffff; }
+    .agent-desc { font-family: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 11px; fill: #cbd5e1; }
     .pill-text { font-family: 'DejaVu Sans Mono', Consolas, monospace; font-size: 10.5px; font-weight: 600; }
+    .chip-text { font-family: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 10px; font-weight: 700; }
   </style>
 
   <!-- Background -->
-  <rect width="1560" height="1200" fill="url(#bgGrad)"/>
+  <rect width="1600" height="1560" fill="url(#bgGrad)"/>
 
   <!-- Subtle Grid Pattern Lines -->
-  <g opacity="0.05" stroke="#ffffff" stroke-width="1">
-    <line x1="0" y1="150" x2="1560" y2="150"/>
-    <line x1="0" y1="330" x2="1560" y2="330"/>
-    <line x1="0" y1="520" x2="1560" y2="520"/>
-    <line x1="0" y1="670" x2="1560" y2="670"/>
-    <line x1="0" y1="920" x2="1560" y2="920"/>
-    <line x1="260" y1="0" x2="260" y2="1200"/>
-    <line x1="780" y1="0" x2="780" y2="1200"/>
-    <line x1="1300" y1="0" x2="1300" y2="1200"/>
+  <g opacity="0.04" stroke="#ffffff" stroke-width="1">
+    <line x1="0" y1="120" x2="1600" y2="120"/>
+    <line x1="0" y1="250" x2="1600" y2="250"/>
+    <line x1="0" y1="395" x2="1600" y2="395"/>
+    <line x1="0" y1="570" x2="1600" y2="570"/>
+    <line x1="0" y1="705" x2="1600" y2="705"/>
+    <line x1="0" y1="850" x2="1600" y2="850"/>
+    <line x1="0" y1="1175" x2="1600" y2="1175"/>
+    <line x1="0" y1="1405" x2="1600" y2="1405"/>
+    <line x1="200" y1="0" x2="200" y2="1560"/>
+    <line x1="800" y1="0" x2="800" y2="1560"/>
+    <line x1="1400" y1="0" x2="1400" y2="1560"/>
   </g>
 
   <!-- ==================== HEADER ==================== -->
-  <g transform="translate(60, 45)">
+  <g transform="translate(100, 35)">
     <rect x="-10" y="-8" width="56" height="56" rx="14" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
-    <text x="5" y="28" font-size="28">🛡️</text>
+    <text x="18" y="27" font-family="'Inter', sans-serif" font-weight="800" font-size="16" fill="#38bdf8" text-anchor="middle">SOC</text>
     <text x="65" y="20" class="title">Enterprise Real-Time Cybersecurity AI: Cloud Architecture &amp; ADK SOC</text>
-    <text x="65" y="42" class="subtitle">Google Cloud Platform (<tspan fill="#38bdf8" font-weight="700"><PROJECT_ID></tspan>) • BigQuery Continuous Lakehouse • Google ADK Multi-Agent System • Gemini Vision</text>
+    <text x="65" y="42" class="subtitle">Google Cloud Platform (<tspan fill="#38bdf8" font-weight="700">&lt;PROJECT_ID&gt;</tspan>) • BigQuery Security Lakehouse • ADK Multi-Agent Team • Model Context Protocol (MCP)</text>
   </g>
 
-  <!-- ==================== 1. SYNTHETIC LOG GENERATOR LAYER ==================== -->
-  <g transform="translate(540, 115)" filter="url(#shadow)">
-    <rect width="480" height="92" rx="16" fill="url(#generatorGrad)" stroke="#a855f7" stroke-width="2" filter="url(#cardGlowPurple)"/>
-    <text x="25" y="32" class="card-title">⚙️ Synthetic Log Generator &amp; Threat Injector</text>
-    <text x="25" y="54" class="card-mono">src.demo.data_generator.log_generator</text>
+  <!-- ==================== TIER 1: SYNTHETIC LOG GENERATOR LAYER ==================== -->
+  <g transform="translate(500, 115)" filter="url(#shadow)">
+    <rect width="600" height="90" rx="16" fill="url(#generatorGrad)" stroke="#c084fc" stroke-width="2" filter="url(#cardGlowPurple)"/>
+    <!-- Chip -->
+    <rect x="25" y="16" width="48" height="18" rx="4" fill="#3b0764" stroke="#c084fc" stroke-width="1"/>
+    <text x="49" y="29" class="chip-text" fill="#e9d5ff" text-anchor="middle">GEN</text>
+    <text x="82" y="30" class="card-title">Synthetic Log Generator (CLI &amp; Threat Injection)</text>
+    <text x="25" y="50" class="card-mono">src.demo.data_generator.log_generator • event_family: access | network</text>
 
     <!-- Pills for Generator modes -->
-    <rect x="25" y="64" width="86" height="20" rx="6" fill="#3b0764" stroke="#c084fc" stroke-width="1"/>
-    <text x="35" y="78" class="badge" fill="#e9d5ff">Benign Mode</text>
+    <rect x="25" y="60" width="160" height="20" rx="5" fill="#4c0519" stroke="#f43f5e" stroke-width="1"/>
+    <text x="35" y="74" class="badge" fill="#fecdd3">APT Malicious Scenario</text>
 
-    <rect x="119" y="64" width="102" height="20" rx="6" fill="#3b0764" stroke="#c084fc" stroke-width="1"/>
-    <text x="127" y="78" class="badge" fill="#e9d5ff">Continuous Stream</text>
+    <rect x="195" y="60" width="180" height="20" rx="5" fill="#422006" stroke="#f59e0b" stroke-width="1"/>
+    <text x="205" y="74" class="badge" fill="#fef08a">Admin False-Positive Noise</text>
 
-    <rect x="229" y="64" width="112" height="20" rx="6" fill="#4c0519" stroke="#f43f5e" stroke-width="1"/>
-    <text x="237" y="78" class="badge" fill="#fecdd3">Malicious Scenario</text>
-
-    <rect x="349" y="64" width="105" height="20" rx="6" fill="#422006" stroke="#f59e0b" stroke-width="1"/>
-    <text x="357" y="78" class="badge" fill="#fef08a">False-Positive Test</text>
+    <rect x="385" y="60" width="185" height="20" rx="5" fill="#3b0764" stroke="#c084fc" stroke-width="1"/>
+    <text x="395" y="74" class="badge" fill="#e9d5ff">Continuous Benign Stream</text>
   </g>
 
-  <!-- Connectors from Generator to 3 Sinks -->
-  <path d="M 620 207 L 620 235 L 290 235 L 290 265" fill="none" stroke="#a855f7" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#arrowPurple)"/>
-  <path d="M 780 207 L 780 265" fill="none" stroke="#a855f7" stroke-width="2.5" marker-end="url(#arrowPurple)"/>
-  <path d="M 940 207 L 940 235 L 1270 235 L 1270 265" fill="none" stroke="#a855f7" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#arrowPurple)"/>
+  <!-- Connector from Generator down to Pub/Sub Raw Logs -->
+  <path d="M 800 205 L 800 248" fill="none" stroke="#c084fc" stroke-width="2.5" marker-end="url(#arrowPurple)"/>
+  <rect x="680" y="217" width="240" height="20" rx="5" fill="#1e1b4b" stroke="#c084fc" stroke-width="1"/>
+  <text x="800" y="231" class="flow-label" fill="#e9d5ff" text-anchor="middle">Publishes JSON Security Telemetry</text>
 
-  <text x="295" y="248" class="flow-label" fill="#c084fc">Batch Uploads</text>
-  <text x="790" y="244" class="flow-label" fill="#c084fc">Pub/Sub Ingestion</text>
-  <text x="1150" y="248" class="flow-label" fill="#c084fc">Direct Streaming</text>
-
-  <!-- ==================== 2. INGESTION & PIPELINE LAYER ==================== -->
-  <!-- Sink 1: Google Cloud Storage -->
-  <g transform="translate(100, 270)" filter="url(#shadow)">
-    <rect width="380" height="100" rx="14" fill="url(#pipelineGrad)" stroke="#38bdf8" stroke-width="1.8"/>
-    <text x="20" y="30" class="card-title">🗄️ Google Cloud Storage</text>
-    <text x="20" y="52" class="card-mono">gs://cymbal-cyber-raw-logs_<PROJECT_ID></text>
-    <rect x="20" y="65" width="340" height="24" rx="6" fill="#082f49" stroke="#0284c7" stroke-width="1"/>
-    <text x="30" y="81" class="card-sub" fill="#7dd3fc">⚡ Batch Loader: <tspan class="card-mono" fill="#bae6fd">gcs_to_bigquery_loader.py</tspan></text>
+  <!-- ==================== TIER 2: PUBSUB RAW LOGS EVENT BUS ==================== -->
+  <g transform="translate(500, 250)" filter="url(#shadow)">
+    <rect width="600" height="78" rx="14" fill="url(#pubsubGrad)" stroke="#38bdf8" stroke-width="2"/>
+    <rect x="25" y="16" width="60" height="18" rx="4" fill="#082f49" stroke="#0ea5e9" stroke-width="1"/>
+    <text x="55" y="29" class="chip-text" fill="#7dd3fc" text-anchor="middle">PUBSUB</text>
+    <text x="94" y="30" class="card-title">Topic: cymbal_cyber_raw_logs</text>
+    <text x="25" y="50" class="card-mono">Serverless Event Bus • Partitioned Telemetry Ingestion</text>
+    <text x="25" y="66" class="card-sub" fill="#7dd3fc">Dual Direct BigQuery Subscriptions • Filtered by event_family attribute • $0 Compute</text>
   </g>
 
-  <!-- Sink 2: Cloud Pub/Sub Direct BigQuery Ingestion -->
-  <g transform="translate(590, 270)" filter="url(#shadow)">
-    <rect width="380" height="100" rx="14" fill="url(#pipelineGrad)" stroke="#0ea5e9" stroke-width="1.8"/>
-    <text x="20" y="30" class="card-title">📨 Pub/Sub BQ Subscriptions [Default]</text>
-    <text x="20" y="52" class="card-mono">raw_access_to_bq &amp; raw_network_to_bq</text>
-    <rect x="20" y="65" width="340" height="24" rx="6" fill="#082f49" stroke="#0284c7" stroke-width="1"/>
-    <text x="30" y="81" class="card-sub" fill="#7dd3fc">⚡ Direct $0 Ingest • <tspan class="card-mono" fill="#bae6fd">[Optional: Dataflow Beam]</tspan></text>
-  </g>
+  <!-- Dual Connectors from Pub/Sub to BigQuery Tables -->
+  <path d="M 620 328 L 620 360 L 450 360 L 450 393" fill="none" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrowBlue)"/>
+  <path d="M 980 328 L 980 360 L 1150 360 L 1150 393" fill="none" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrowBlue)"/>
 
-  <!-- Sink 3: Direct BigQuery Streaming -->
-  <g transform="translate(1080, 270)" filter="url(#shadow)">
-    <rect width="380" height="100" rx="14" fill="url(#pipelineGrad)" stroke="#06b6d4" stroke-width="1.8"/>
-    <text x="20" y="30" class="card-title">⚡ Direct BQ Streaming</text>
-    <text x="20" y="52" class="card-mono">BigQuery Storage Write API</text>
-    <rect x="20" y="65" width="340" height="24" rx="6" fill="#042f2e" stroke="#0d9488" stroke-width="1"/>
-    <text x="30" y="81" class="card-sub" fill="#5eead4">🚀 Ultra-low latency micro-batch ingestion</text>
-  </g>
+  <rect x="250" y="348" width="350" height="22" rx="5" fill="#0c4a6e" stroke="#38bdf8" stroke-width="1"/>
+  <text x="425" y="363" class="flow-label" fill="#7dd3fc" text-anchor="middle">raw_access_to_bq [event_family="access"] ($0 Compute)</text>
 
-  <!-- Connectors from Sinks to BigQuery Lakehouse -->
-  <path d="M 290 370 L 290 410 L 460 410 L 460 435" fill="none" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrowBlue)"/>
-  <path d="M 780 370 L 780 435" fill="none" stroke="#38bdf8" stroke-width="2.5" marker-end="url(#arrowBlue)"/>
-  <path d="M 1270 370 L 1270 410 L 1100 410 L 1100 435" fill="none" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrowBlue)"/>
+  <rect x="990" y="348" width="350" height="22" rx="5" fill="#0c4a6e" stroke="#38bdf8" stroke-width="1"/>
+  <text x="1165" y="363" class="flow-label" fill="#7dd3fc" text-anchor="middle">raw_network_to_bq [event_family="network"] ($0 Compute)</text>
 
-  <!-- ==================== 3. BIGQUERY CENTRAL LAKEHOUSE ==================== -->
-  <g transform="translate(200, 440)" filter="url(#shadow)">
-    <rect width="1160" height="110" rx="18" fill="url(#bqGrad)" stroke="#60a5fa" stroke-width="2"/>
-    <text x="30" y="35" class="card-title">📊 BigQuery Enterprise Security Lakehouse (Dataset: <tspan fill="#93c5fd">Cymbal_Cyber</tspan>)</text>
-    <text x="30" y="57" class="card-sub">Time-partitioned and clustered analytics tables for real-time threat intelligence and investigation</text>
+  <!-- ==================== TIER 3: BIGQUERY LAKEHOUSE ==================== -->
+  <g transform="translate(100, 395)" filter="url(#shadow)">
+    <rect width="1400" height="125" rx="18" fill="url(#bqGrad)" stroke="#60a5fa" stroke-width="2"/>
+    <rect x="30" y="18" width="44" height="18" rx="4" fill="#1e3a8a" stroke="#60a5fa" stroke-width="1"/>
+    <text x="52" y="31" class="chip-text" fill="#93c5fd" text-anchor="middle">BQ</text>
+    <text x="84" y="32" class="card-title">Enterprise Security Lakehouse (Dataset: <tspan fill="#93c5fd">Cymbal_Cyber</tspan>)</text>
+    <text x="30" y="52" class="card-sub">Time-partitioned and clustered analytics tables • SSOT for Telemetry, Alerts &amp; SOC Tickets • $0 Continuous Slot Cost</text>
 
     <!-- Table badges -->
-    <g transform="translate(30, 68)">
-      <!-- Table 1 -->
-      <rect x="0" y="0" width="200" height="30" rx="8" fill="#1e293b" stroke="#3b82f6" stroke-width="1.2"/>
-      <text x="12" y="19" class="pill-text" fill="#60a5fa">📄 user_access_events</text>
+    <g transform="translate(25, 66)">
+      <rect x="0" y="0" width="215" height="32" rx="8" fill="#1e293b" stroke="#3b82f6" stroke-width="1.2"/>
+      <text x="12" y="20" class="pill-text" fill="#60a5fa">user_access_events [DAY]</text>
 
-      <!-- Table 2 -->
-      <rect x="215" y="0" width="180" height="30" rx="8" fill="#1e293b" stroke="#3b82f6" stroke-width="1.2"/>
-      <text x="12" y="19" class="pill-text" fill="#60a5fa">🌐 network_events</text>
+      <rect x="230" y="0" width="195" height="32" rx="8" fill="#1e293b" stroke="#3b82f6" stroke-width="1.2"/>
+      <text x="12" y="20" class="pill-text" fill="#60a5fa">network_events [DAY]</text>
 
-      <!-- Table 3 -->
-      <rect x="410" y="0" width="230" height="30" rx="8" fill="#1e293b" stroke="#38bdf8" stroke-width="1.2"/>
-      <text x="12" y="19" class="pill-text" fill="#7dd3fc">🛡️ adk_threat_assessment</text>
+      <rect x="440" y="0" width="215" height="32" rx="8" fill="#1e293b" stroke="#38bdf8" stroke-width="1.2"/>
+      <text x="12" y="20" class="pill-text" fill="#7dd3fc">alerts [DAY, Clustered]</text>
 
-      <!-- Table 4 -->
-      <rect x="655" y="0" width="165" height="30" rx="8" fill="#1e293b" stroke="#f43f5e" stroke-width="1.2"/>
-      <text x="12" y="19" class="pill-text" fill="#fda4af">🎟️ soc_tickets</text>
+      <rect x="670" y="0" width="225" height="32" rx="8" fill="#3f0713" stroke="#f43f5e" stroke-width="1.2"/>
+      <text x="12" y="20" class="pill-text" fill="#fda4af">alerts_dead_letter [DLQ]</text>
 
-      <!-- Table 5 -->
-      <rect x="835" y="0" width="260" height="30" rx="8" fill="#1e293b" stroke="#a855f7" stroke-width="1.2"/>
-      <text x="12" y="19" class="pill-text" fill="#d8b4fe">🖼️ user_screenshots_view</text>
+      <rect x="910" y="0" width="235" height="32" rx="8" fill="#1e293b" stroke="#34d399" stroke-width="1.2"/>
+      <text x="12" y="20" class="pill-text" fill="#6ee7b7">adk_threat_assessment</text>
+
+      <rect x="1160" y="0" width="190" height="32" rx="8" fill="#1e293b" stroke="#fb923c" stroke-width="1.2"/>
+      <text x="12" y="20" class="pill-text" fill="#fdba74">soc_tickets [SSOT]</text>
     </g>
   </g>
 
-  <!-- Connectors from BigQuery to Detection Engines -->
-  <path d="M 520 550 L 520 585" fill="none" stroke="#f59e0b" stroke-width="2.5" marker-end="url(#arrowYellow)"/>
-  <path d="M 1040 550 L 1040 585" fill="none" stroke="#f59e0b" stroke-width="2.5" marker-end="url(#arrowYellow)"/>
+  <!-- Connector from BigQuery down to Scheduled Detector -->
+  <path d="M 800 520 L 800 568" fill="none" stroke="#f59e0b" stroke-width="2.5" marker-end="url(#arrowYellow)"/>
+  <rect x="580" y="533" width="440" height="22" rx="5" fill="#1c1917" stroke="#f59e0b" stroke-width="1"/>
+  <text x="800" y="548" class="flow-label" fill="#fde68a" text-anchor="middle">Cloud Scheduler (every 5m) • Closed 2m Tumbling Window MERGE</text>
 
-  <!-- ==================== 4. DETECTION & STREAM ANALYTICS ENGINES ==================== -->
-  <!-- Engine 1: Scheduled Threat Detector (Cloud Run Job) -->
-  <g transform="translate(240, 590)" filter="url(#shadow)">
-    <rect width="500" height="85" rx="14" fill="url(#detectGrad)" stroke="#10b981" stroke-width="1.8"/>
-    <text x="25" y="30" class="card-title">🎯 Scheduled Threat Detector (Cloud Run Job) [Default]</text>
-    <text x="25" y="50" class="card-mono">adk_agent.threat_detector (2m Cloud Scheduler)</text>
-    <text x="25" y="70" class="card-sub" fill="#6ee7b7">Closed 2m windows • Idempotent MERGE • $0 idle reservation cost</text>
+  <!-- ==================== TIER 4: CLOUD RUN JOB: THREAT DETECTOR ==================== -->
+  <g transform="translate(460, 570)" filter="url(#shadow)">
+    <rect width="680" height="85" rx="14" fill="url(#detectGrad)" stroke="#10b981" stroke-width="2"/>
+    <rect x="25" y="16" width="65" height="18" rx="4" fill="#064e3b" stroke="#10b981" stroke-width="1"/>
+    <text x="57" y="29" class="chip-text" fill="#a7f3d0" text-anchor="middle">CR-JOB</text>
+    <text x="100" y="28" class="card-title">threat-detector (Cloud Scheduler Triggered)</text>
+    <text x="25" y="48" class="card-mono">adk_agent.threat_detector (TIMESTAMP_BUCKET 2m + MERGE)</text>
+    <text x="25" y="68" class="card-sub" fill="#6ee7b7">Evaluates 2m tumbling windows • Scores &gt;= 100 • $0 continuous slot cost • Updates alerts table</text>
   </g>
 
-  <!-- Engine 2: BigQuery Continuous Query [Optional / Benchmark Only] -->
-  <g transform="translate(820, 590)" filter="url(#shadow)">
-    <rect width="500" height="85" rx="14" fill="url(#detectGrad)" stroke="#f59e0b" stroke-width="1.8"/>
-    <text x="25" y="30" class="card-title">⚡ BigQuery Continuous Query [Optional / Benchmark Only]</text>
-    <text x="25" y="50" class="card-mono">continuous_query.sql (Enterprise Slot Reservation)</text>
-    <text x="25" y="70" class="card-sub" fill="#fde68a">Temporal tumbling window (2m) • Exports alerts &gt;= 100 to Pub/Sub</text>
+  <!-- Connector from Threat Detector down to Alerts Topic -->
+  <path d="M 720 655 L 720 680 L 600 680 L 600 703" fill="none" stroke="#10b981" stroke-width="2.5" marker-end="url(#arrowGreen)"/>
+  <rect x="540" y="668" width="310" height="22" rx="5" fill="#064e3b" stroke="#10b981" stroke-width="1"/>
+  <text x="695" y="683" class="flow-label" fill="#6ee7b7" text-anchor="middle">Publishes Alert Contract JSON (Score &gt;= 100)</text>
+
+  <!-- ==================== TIER 5: ALERTS TOPIC & DEAD-LETTER QUEUE ==================== -->
+  <!-- Primary Alert Topic -->
+  <g transform="translate(280, 705)" filter="url(#shadow)">
+    <rect width="640" height="85" rx="14" fill="url(#alertTopicGrad)" stroke="#34d399" stroke-width="2"/>
+    <rect x="20" y="16" width="60" height="18" rx="4" fill="#042f2e" stroke="#34d399" stroke-width="1"/>
+    <text x="50" y="29" class="chip-text" fill="#a7f3d0" text-anchor="middle">ALERTS</text>
+    <text x="88" y="28" class="card-title">Topic: cymbal_cyber_alerts</text>
+    <text x="20" y="48" class="card-sub" fill="#cbd5e1">Primary real-time alert dispatch bus • Delivers Alert Contract JSON to Orchestrator</text>
+    <g transform="translate(20, 56)">
+      <rect x="0" y="0" width="150" height="20" rx="5" fill="#064e3b" stroke="#10b981" stroke-width="1"/>
+      <text x="10" y="14" class="badge" fill="#a7f3d0">Push Subscription</text>
+
+      <rect x="160" y="0" width="185" height="20" rx="5" fill="#082f49" stroke="#0ea5e9" stroke-width="1"/>
+      <text x="170" y="14" class="badge" fill="#bae6fd">roles/run.invoker (OIDC)</text>
+
+      <rect x="355" y="0" width="235" height="20" rx="5" fill="#1e293b" stroke="#64748b" stroke-width="1"/>
+      <text x="365" y="14" class="badge" fill="#f1f5f9">Native Cloud Run Auth Token</text>
+    </g>
   </g>
 
-  <!-- Connectors from Detection Engines to ADK Orchestrator -->
-  <path d="M 490 675 L 490 705 L 670 705 L 670 725" fill="none" stroke="#10b981" stroke-width="2.5" marker-end="url(#arrowGreen)"/>
-  <path d="M 1070 675 L 1070 705 L 890 705 L 890 725" fill="none" stroke="#10b981" stroke-width="2.5" marker-end="url(#arrowGreen)"/>
-  <text x="740" y="715" class="badge" fill="#6ee7b7" text-anchor="middle">Dispatches Alert Triggers</text>
+  <!-- Dead-Letter Topic (DLQ) -->
+  <g transform="translate(990, 705)" filter="url(#shadow)">
+    <rect width="510" height="85" rx="14" fill="url(#dlqGrad)" stroke="#f43f5e" stroke-width="2"/>
+    <rect x="20" y="16" width="46" height="18" rx="4" fill="#4c0519" stroke="#f43f5e" stroke-width="1"/>
+    <text x="43" y="29" class="chip-text" fill="#fecdd3" text-anchor="middle">DLQ</text>
+    <text x="74" y="28" class="card-title">Topic: cymbal_cyber_alerts_dlq</text>
+    <text x="20" y="48" class="card-sub" fill="#fda4af">Dead-letter queue for failed push deliveries • Subscription -> DLQ Table</text>
+    <g transform="translate(20, 56)">
+      <rect x="0" y="0" width="180" height="20" rx="5" fill="#4c0519" stroke="#f43f5e" stroke-width="1"/>
+      <text x="10" y="14" class="badge" fill="#fecdd3">Delivery Failed 5 Times</text>
 
-  <!-- ==================== 5. ADK MULTI-AGENT ORCHESTRATOR ==================== -->
-  <g transform="translate(420, 730)" filter="url(#shadow)">
-    <rect width="720" height="82" rx="18" fill="url(#adkGrad)" stroke="#10b981" stroke-width="2.2" filter="url(#cardGlowGreen)"/>
-    <text x="30" y="33" class="card-title">🤖 Google ADK Multi-Agent Orchestrator</text>
-    <text x="30" y="53" class="card-sub" fill="#a7f3d0">Autonomous coordination of specialized agent tools, session state, and investigation memory</text>
-    <text x="30" y="70" class="card-mono" fill="#6ee7b7">Framework: google-adk &gt;= 2.11.0 • Gemini 1.5/2.0 on Vertex AI</text>
+      <rect x="190" y="0" width="260" height="20" rx="5" fill="#451a03" stroke="#ea580c" stroke-width="1"/>
+      <text x="200" y="14" class="badge" fill="#fed7aa">Next Run: Auto-Escalate to SOC</text>
+    </g>
   </g>
 
-  <!-- Connectors from Orchestrator down to 4 Sub-Agents -->
-  <path d="M 520 812 L 520 840 L 220 840 L 220 865" fill="none" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrowBlue)"/>
-  <path d="M 670 812 L 670 840 L 590 840 L 590 865" fill="none" stroke="#818cf8" stroke-width="2" marker-end="url(#arrowBlue)"/>
-  <path d="M 870 812 L 870 840 L 970 840 L 970 865" fill="none" stroke="#34d399" stroke-width="2" marker-end="url(#arrowGreen)"/>
-  <path d="M 1040 812 L 1040 840 L 1340 840 L 1340 865" fill="none" stroke="#fb923c" stroke-width="2" marker-end="url(#arrowOrange)"/>
+  <!-- Connectors in Tier 5 -->
+  <!-- Main Alert to DLQ -->
+  <path d="M 920 747 L 988 747" fill="none" stroke="#f43f5e" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#arrowRed)"/>
+  <rect x="926" y="725" width="56" height="18" rx="4" fill="#3f0713" stroke="#f43f5e" stroke-width="1"/>
+  <text x="954" y="738" class="chip-text" fill="#fecdd3" text-anchor="middle">Failed 5x</text>
 
-  <!-- ==================== 6. THE 4 SPECIALIZED SUB-AGENTS ==================== -->
-  <!-- Agent 1: google_search_agent -->
-  <g transform="translate(60, 870)" filter="url(#shadow)">
-    <rect width="320" height="155" rx="14" fill="url(#agentSearchGrad)" stroke="#38bdf8" stroke-width="1.8"/>
-    <text x="18" y="28" class="agent-header">🔎 google_search_agent</text>
-    <text x="18" y="48" class="badge" fill="#bae6fd">OSINT &amp; Public Threat Intelligence</text>
-    <line x1="18" y1="58" x2="302" y2="58" stroke="#0284c7" stroke-width="1"/>
+  <!-- Main Alert to Orchestrator -->
+  <path d="M 600 790 L 600 848" fill="none" stroke="#10b981" stroke-width="2.5" marker-end="url(#arrowGreen)"/>
+  <rect x="450" y="810" width="300" height="22" rx="5" fill="#064e3b" stroke="#10b981" stroke-width="1"/>
+  <text x="600" y="825" class="flow-label" fill="#6ee7b7" text-anchor="middle">Push Webhook (Verified OIDC Bearer Token)</text>
 
-    <text x="18" y="78" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Role:</tspan> Investigates external IPs &amp; C2 domains</text>
-    <text x="18" y="96" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Target:</tspan> Geolocation, foreign ASN, Tor exits</text>
+  <!-- ==================== TIER 6: ADK MULTI-AGENT ORCHESTRATOR ==================== -->
+  <g transform="translate(100, 850)" filter="url(#shadow)">
+    <rect width="1400" height="270" rx="18" fill="url(#adkGrad)" stroke="#10b981" stroke-width="2.2" filter="url(#cardGlowGreen)"/>
+    <rect x="30" y="18" width="50" height="18" rx="4" fill="#064e3b" stroke="#10b981" stroke-width="1"/>
+    <text x="55" y="31" class="chip-text" fill="#a7f3d0" text-anchor="middle">ADK</text>
+    <text x="90" y="30" class="card-title">ADK Multi-Agent Orchestrator (Cloud Run Webhook: FastAPI)</text>
+    <text x="30" y="48" class="card-sub" fill="#a7f3d0">Autonomous Multi-Agent Investigation • Gemini 3.8 Flash • Checks alerts.status (!=DONE) • Transitions INVESTIGATING -> DONE</text>
 
-    <rect x="18" y="112" width="284" height="28" rx="6" fill="#082f49" stroke="#0ea5e9" stroke-width="1"/>
-    <text x="28" y="130" class="pill-text" fill="#7dd3fc">🛠️ Tool: google_search</text>
+    <!-- 4 Sub-Agent Cards -->
+    <!-- Agent 1: google_search_agent -->
+    <g transform="translate(20, 60)">
+      <rect width="325" height="190" rx="12" fill="url(#agentSearchGrad)" stroke="#38bdf8" stroke-width="1.5"/>
+      <rect x="16" y="14" width="52" height="16" rx="4" fill="#082f49" stroke="#38bdf8" stroke-width="1"/>
+      <text x="42" y="26" class="chip-text" fill="#7dd3fc" text-anchor="middle">OSINT</text>
+      <text x="76" y="26" class="agent-header">google_search_agent</text>
+      <rect x="16" y="36" width="180" height="18" rx="4" fill="#082f49" stroke="#0ea5e9" stroke-width="1"/>
+      <text x="24" y="49" class="badge" fill="#7dd3fc">OSINT Public Threat Intel</text>
+      <line x1="16" y1="62" x2="309" y2="62" stroke="#0284c7" stroke-width="1"/>
+      <text x="16" y="80" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Role:</tspan> Investigates external IPs &amp; C2 domains</text>
+      <text x="16" y="98" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Intel:</tspan> Tor exit nodes, foreign ASN, malware</text>
+      <text x="16" y="116" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Type:</tspan> Native ADK Toolset (no database access)</text>
+      <rect x="16" y="132" width="293" height="42" rx="6" fill="#082f49" stroke="#0ea5e9" stroke-width="1"/>
+      <text x="26" y="152" class="pill-text" fill="#7dd3fc">Native Tool: google_search</text>
+      <text x="26" y="166" class="card-sub" fill="#bae6fd">Zero Cloud Run dependency</text>
+    </g>
+
+    <!-- Agent 2: bq_investigation_agent -->
+    <g transform="translate(365, 60)">
+      <rect width="325" height="190" rx="12" fill="url(#agentBqGrad)" stroke="#818cf8" stroke-width="1.5"/>
+      <rect x="16" y="14" width="36" height="16" rx="4" fill="#1e1b4b" stroke="#818cf8" stroke-width="1"/>
+      <text x="34" y="26" class="chip-text" fill="#c7d2fe" text-anchor="middle">BQ</text>
+      <text x="60" y="26" class="agent-header">bq_investigation_agent</text>
+      <rect x="16" y="36" width="190" height="18" rx="4" fill="#1e1b4b" stroke="#6366f1" stroke-width="1"/>
+      <text x="24" y="49" class="badge" fill="#c7d2fe">BigQuery Behavioral Baseline</text>
+      <line x1="16" y1="62" x2="309" y2="62" stroke="#4338ca" stroke-width="1"/>
+      <text x="16" y="80" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Role:</tspan> Queries 24h entity telemetry profile</text>
+      <text x="16" y="98" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Audit:</tspan> Failed logins, privilege escalation, lateral move</text>
+      <text x="16" y="116" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Scope:</tspan> Parameterized queries (1GB ceiling)</text>
+      <rect x="16" y="132" width="293" height="42" rx="6" fill="#1e1b4b" stroke="#6366f1" stroke-width="1"/>
+      <text x="26" y="152" class="pill-text" fill="#a5b4fc">MCP: get_entity_behavioral_profile</text>
+      <text x="26" y="166" class="card-sub" fill="#c7d2fe">Scoped via tool_filter</text>
+    </g>
+
+    <!-- Agent 3: visual_analysis_agent -->
+    <g transform="translate(710, 60)">
+      <rect width="325" height="190" rx="12" fill="url(#agentVisionGrad)" stroke="#34d399" stroke-width="1.5"/>
+      <rect x="16" y="14" width="58" height="16" rx="4" fill="#042f2e" stroke="#34d399" stroke-width="1"/>
+      <text x="45" y="26" class="chip-text" fill="#a7f3d0" text-anchor="middle">VISION</text>
+      <text x="82" y="26" class="agent-header">visual_analysis_agent</text>
+      <rect x="16" y="36" width="195" height="18" rx="4" fill="#042f2e" stroke="#10b981" stroke-width="1"/>
+      <text x="24" y="49" class="badge" fill="#a7f3d0">Gemini Multimodal Vision OCR</text>
+      <line x1="16" y1="62" x2="309" y2="62" stroke="#047857" stroke-width="1"/>
+      <text x="16" y="80" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Role:</tspan> Desktop screenshot forensic inspection</text>
+      <text x="16" y="98" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Detect:</tspan> Mimikatz, PowerShell, payload downloads</text>
+      <text x="16" y="116" class="agent-desc"><tspan font-weight="700" fill="#ffffff">URLs:</tspan> Short-lived V4 signed URLs for analysts</text>
+      <rect x="16" y="132" width="293" height="42" rx="6" fill="#042f2e" stroke="#10b981" stroke-width="1"/>
+      <text x="26" y="152" class="pill-text" fill="#6ee7b7">MCP: Vision OCR &amp; Signed URLs</text>
+      <text x="26" y="166" class="card-sub" fill="#a7f3d0">get_visual_analysis_for_user</text>
+    </g>
+
+    <!-- Agent 4: soc_ticketing_agent -->
+    <g transform="translate(1055, 60)">
+      <rect width="325" height="190" rx="12" fill="url(#agentSocGrad)" stroke="#fb923c" stroke-width="1.5"/>
+      <rect x="16" y="14" width="40" height="16" rx="4" fill="#451a03" stroke="#fb923c" stroke-width="1"/>
+      <text x="36" y="26" class="chip-text" fill="#fed7aa" text-anchor="middle">SOC</text>
+      <text x="64" y="26" class="agent-header">soc_ticketing_agent</text>
+      <rect x="16" y="36" width="180" height="18" rx="4" fill="#451a03" stroke="#ea580c" stroke-width="1"/>
+      <text x="24" y="49" class="badge" fill="#fed7aa">Triage, Escalation &amp; Dispatch</text>
+      <line x1="16" y1="62" x2="309" y2="62" stroke="#c2410c" stroke-width="1"/>
+      <text x="16" y="80" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Role:</tspan> Synthesizes evidence &amp; determines action</text>
+      <text x="16" y="98" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Action:</tspan> High-conf incident dispatch or FP closure</text>
+      <text x="16" y="116" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Safety:</tspan> Security gate verifies deterministic ID</text>
+      <rect x="16" y="132" width="293" height="42" rx="6" fill="#451a03" stroke="#ea580c" stroke-width="1"/>
+      <text x="26" y="152" class="pill-text" fill="#fdba74">MCP: dispatch_to_soc, log_fp</text>
+      <text x="26" y="166" class="card-sub" fill="#fed7aa">Auditable ticket resolution</text>
+    </g>
   </g>
 
-  <!-- Agent 2: bq_investigation_agent -->
-  <g transform="translate(430, 870)" filter="url(#shadow)">
-    <rect width="320" height="155" rx="14" fill="url(#agentBqGrad)" stroke="#818cf8" stroke-width="1.8"/>
-    <text x="18" y="28" class="agent-header">🗄️ bq_investigation_agent</text>
-    <text x="18" y="48" class="badge" fill="#c7d2fe">BigQuery Historical Profiling</text>
-    <line x1="18" y1="58" x2="302" y2="58" stroke="#4338ca" stroke-width="1"/>
+  <!-- Connector from Orchestrator down to MCP Tool Service -->
+  <path d="M 800 1120 L 800 1173" fill="none" stroke="#c084fc" stroke-width="2.5" marker-end="url(#arrowPurple)"/>
+  <rect x="570" y="1136" width="460" height="22" rx="5" fill="#2e1065" stroke="#c084fc" stroke-width="1"/>
+  <text x="800" y="1151" class="flow-label" fill="#e9d5ff" text-anchor="middle">MCP over HTTPS + ID token (agent SA: run.invoker only)</text>
 
-    <text x="18" y="78" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Role:</tspan> Queries 24h behavioural activity baseline</text>
-    <text x="18" y="96" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Target:</tspan> Failed auth, privilege esc, lateral move</text>
+  <!-- ==================== TIER 7: DECOUPLED MCP TOOL SERVICE ==================== -->
+  <g transform="translate(100, 1175)" filter="url(#shadow)">
+    <rect width="1400" height="180" rx="18" fill="url(#mcpGrad)" stroke="#c084fc" stroke-width="2"/>
+    <rect x="30" y="18" width="50" height="18" rx="4" fill="#3b0764" stroke="#c084fc" stroke-width="1"/>
+    <text x="55" y="31" class="chip-text" fill="#e9d5ff" text-anchor="middle">MCP</text>
+    <text x="90" y="30" class="card-title">MCP Tool Service (Cloud Run: cymbal-cyber-mcp) — Principle of Least Privilege Boundary</text>
+    <text x="30" y="48" class="card-sub" fill="#e9d5ff">Dedicated Tools SA: <tspan fill="#38bdf8" font-weight="700">cymbal-mcp-tools-sa</tspan> • Transports: HTTPS (Cloud Run) / stdio (Local) • Fixed Parameterized Operations (No free-form SQL)</text>
 
-    <rect x="18" y="112" width="284" height="28" rx="6" fill="#1e1b4b" stroke="#6366f1" stroke-width="1"/>
-    <text x="28" y="130" class="pill-text" fill="#a5b4fc">🛠️ Tools: behavioral profile (MCP)</text>
+    <!-- 4 Tool Categories Pillars -->
+    <!-- Pillar 1: BigQuery -->
+    <g transform="translate(20, 60)">
+      <rect width="325" height="105" rx="10" fill="#1e1b4b" stroke="#818cf8" stroke-width="1.2"/>
+      <text x="16" y="24" class="card-title" font-size="13">BigQuery Telemetry</text>
+      <text x="16" y="44" class="pill-text" fill="#a5b4fc">• get_entity_behavioral_profile</text>
+      <text x="16" y="62" class="card-sub" fill="#cbd5e1">24h baseline query (user / IP)</text>
+      <text x="16" y="80" class="card-sub" fill="#cbd5e1">1 GB maximum_bytes_billed ceiling</text>
+      <text x="16" y="96" class="badge" fill="#818cf8">Read-Only Evidence Access</text>
+    </g>
+
+    <!-- Pillar 2: Vision -->
+    <g transform="translate(365, 60)">
+      <rect width="325" height="105" rx="10" fill="#042f2e" stroke="#34d399" stroke-width="1.2"/>
+      <text x="16" y="24" class="card-title" font-size="13">Multimodal Vision OCR</text>
+      <text x="16" y="44" class="pill-text" fill="#6ee7b7">• get_visual_analysis_for_user</text>
+      <text x="16" y="60" class="pill-text" fill="#6ee7b7">• get_gcs_uri_for_user</text>
+      <text x="16" y="76" class="pill-text" fill="#6ee7b7">• generate_signed_url (V4 signed)</text>
+      <text x="16" y="96" class="badge" fill="#34d399">Gemini Vision on GCS Evidence</text>
+    </g>
+
+    <!-- Pillar 3: SOC Ticketing -->
+    <g transform="translate(710, 60)">
+      <rect width="325" height="105" rx="10" fill="#451a03" stroke="#ea580c" stroke-width="1.2"/>
+      <text x="16" y="24" class="card-title" font-size="13">SOC Ticketing Operations</text>
+      <text x="16" y="44" class="pill-text" fill="#fdba74">• dispatch_to_soc_ticketing_system</text>
+      <text x="16" y="60" class="pill-text" fill="#fdba74">• log_false_positive (Archive FP)</text>
+      <text x="16" y="76" class="pill-text" fill="#fdba74">• create_rich_ticket_id (Gate verified)</text>
+      <text x="16" y="96" class="badge" fill="#fb923c">Auditable Ticket Writes</text>
+    </g>
+
+    <!-- Pillar 4: Security Guardrails -->
+    <g transform="translate(1055, 60)">
+      <rect width="325" height="105" rx="10" fill="#3f0713" stroke="#f43f5e" stroke-width="1.2"/>
+      <text x="16" y="24" class="card-title" font-size="13">Platform Guardrails</text>
+      <text x="16" y="44" class="pill-text" fill="#fda4af">• auto_escalate_unresolved_alert</text>
+      <text x="16" y="62" class="card-sub" fill="#fecdd3">Fixed server-side (DEFAULT_DENY)</text>
+      <text x="16" y="78" class="pill-text" fill="#fda4af">• escalate_to_human (GCS payload)</text>
+      <text x="16" y="96" class="badge" fill="#f43f5e">Default-Deny Escalation</text>
+    </g>
   </g>
 
-  <!-- Agent 3: visual_analysis_agent -->
-  <g transform="translate(800, 870)" filter="url(#shadow)">
-    <rect width="320" height="155" rx="14" fill="url(#agentVisionGrad)" stroke="#34d399" stroke-width="1.8"/>
-    <text x="18" y="28" class="agent-header">👁️ visual_analysis_agent</text>
-    <text x="18" y="48" class="badge" fill="#a7f3d0">Gemini Multimodal Forensic OCR</text>
-    <line x1="18" y1="58" x2="302" y2="58" stroke="#047857" stroke-width="1"/>
+  <!-- Connector from MCP Tool Service down to SOC Ticketing System -->
+  <path d="M 800 1355 L 800 1403" fill="none" stroke="#f43f5e" stroke-width="2.5" marker-end="url(#arrowRed)"/>
+  <rect x="580" y="1368" width="440" height="22" rx="5" fill="#3f0713" stroke="#f43f5e" stroke-width="1"/>
+  <text x="800" y="1383" class="flow-label" fill="#fda4af" text-anchor="middle">Dispatches Incidents &amp; Writes soc_tickets Table</text>
 
-    <text x="18" y="78" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Role:</tspan> Forensics on user workstation screenshots</text>
-    <text x="18" y="96" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Target:</tspan> Mimikatz, PowerShell, payload downloads</text>
+  <!-- ==================== TIER 8: SOC TICKETING & ANALYST CONSOLE ==================== -->
+  <g transform="translate(100, 1405)" filter="url(#shadow)">
+    <rect width="1400" height="125" rx="18" fill="url(#socConsoleGrad)" stroke="#f43f5e" stroke-width="2"/>
+    <rect x="30" y="18" width="50" height="18" rx="4" fill="#4c0519" stroke="#f43f5e" stroke-width="1"/>
+    <text x="55" y="31" class="chip-text" fill="#fecdd3" text-anchor="middle">SOC</text>
+    <text x="90" y="32" class="card-title">SOC Ticketing System &amp; Streamlit Analyst Console</text>
+    <text x="30" y="52" class="card-mono">src.demo.soc_ticketing • streamlit_soc_console.py (Local port 8501)</text>
 
-    <rect x="18" y="112" width="284" height="28" rx="6" fill="#022c22" stroke="#10b981" stroke-width="1"/>
-    <text x="28" y="130" class="pill-text" fill="#6ee7b7">🛠️ Tools: Vision OCR, Signed URLs</text>
-  </g>
+    <!-- 3 Pillars inside Console -->
+    <g transform="translate(25, 66)">
+      <rect x="0" y="0" width="430" height="42" rx="8" fill="#3f0713" stroke="#be123c" stroke-width="1.2"/>
+      <text x="16" y="26" class="pill-text" fill="#fecdd3">Incident Queue: soc_tickets + GCS Escalations</text>
 
-  <!-- Agent 4: soc_ticketing_agent -->
-  <g transform="translate(1180, 870)" filter="url(#shadow)">
-    <rect width="320" height="155" rx="14" fill="url(#agentSocGrad)" stroke="#fb923c" stroke-width="1.8"/>
-    <text x="18" y="28" class="agent-header">📋 soc_ticketing_agent</text>
-    <text x="18" y="48" class="badge" fill="#fed7aa">Triage, Escalation &amp; Dispatch</text>
-    <line x1="18" y1="58" x2="302" y2="58" stroke="#c2410c" stroke-width="1"/>
+      <rect x="455" y="0" width="430" height="42" rx="8" fill="#3f0713" stroke="#be123c" stroke-width="1.2"/>
+      <text x="16" y="26" class="pill-text" fill="#fecdd3">Webhook Integrations: Slack / Jira / ServiceNow</text>
 
-    <text x="18" y="78" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Role:</tspan> Synthesizes evidence &amp; determines action</text>
-    <text x="18" y="96" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Target:</tspan> Dispatches incident ticket or flags FP</text>
-
-    <rect x="18" y="112" width="284" height="28" rx="6" fill="#451a03" stroke="#ea580c" stroke-width="1"/>
-    <text x="28" y="130" class="pill-text" fill="#fdba74">🛠️ Tools: dispatch_to_soc, log_fp</text>
-  </g>
-
-  <!-- Connector from SOC Agent down to Ticketing & Console -->
-  <path d="M 1340 1025 L 1340 1055 L 1050 1055 L 1050 1075" fill="none" stroke="#f43f5e" stroke-width="2.5" marker-end="url(#arrowRed)"/>
-  <text x="1200" y="1050" class="flow-label" fill="#fda4af">Dispatches Incident Package</text>
-
-  <!-- ==================== 7. SOC TICKETING & ANALYST CONSOLE ==================== -->
-  <g transform="translate(180, 1080)" filter="url(#shadow)">
-    <rect width="1200" height="95" rx="16" fill="url(#socConsoleGrad)" stroke="#f43f5e" stroke-width="2"/>
-    <text x="25" y="32" class="card-title">🚨 SOC Ticketing System &amp; Streamlit Analyst Console</text>
-    <text x="25" y="52" class="card-mono">src.demo.soc_ticketing • streamlit_soc_console.py</text>
-
-    <g transform="translate(25, 62)">
-      <rect x="0" y="0" width="360" height="24" rx="6" fill="#3f0713" stroke="#be123c" stroke-width="1"/>
-      <text x="10" y="16" class="pill-text" fill="#fecdd3">📦 Storage: soc_tickets + GCS Escalations</text>
-
-      <rect x="380" y="0" width="360" height="24" rx="6" fill="#3f0713" stroke="#be123c" stroke-width="1"/>
-      <text x="10" y="16" class="pill-text" fill="#fecdd3">🔗 Webhooks: Slack / Jira / ServiceNow</text>
-
-      <rect x="760" y="0" width="380" height="24" rx="6" fill="#3f0713" stroke="#be123c" stroke-width="1"/>
-      <text x="10" y="16" class="pill-text" fill="#fecdd3">🖥️ Console: Forensic Triage &amp; Signed Screens</text>
+      <rect x="910" y="0" width="455" height="42" rx="8" fill="#3f0713" stroke="#be123c" stroke-width="1.2"/>
+      <text x="16" y="26" class="pill-text" fill="#fecdd3">Streamlit Console: Interactive Triage &amp; Evidence</text>
     </g>
   </g>
 </svg>
@@ -360,560 +502,868 @@ def create_svg():
     print(f"Generated SVG: {SVG_PATH}")
 
 
-def draw_arrow(draw, points, color, width=2, arrow_size=8, direction="down"):
-    # Draw line segments
+def draw_arrow(draw, points, color, width=2, arrow_size=7):
+    """Draw a polyline path with an arrow head pointing in direction of last segment."""
     for i in range(len(points) - 1):
         draw.line([points[i], points[i + 1]], fill=color, width=width)
 
-    # Draw arrowhead at the end point
-    end_x, end_y = points[-1]
-    if direction == "down":
-        arrow = [
-            (end_x - arrow_size, end_y - arrow_size * 1.3),
-            (end_x + arrow_size, end_y - arrow_size * 1.3),
-            (end_x, end_y),
-        ]
-    elif direction == "up":
-        arrow = [
-            (end_x - arrow_size, end_y + arrow_size * 1.3),
-            (end_x + arrow_size, end_y + arrow_size * 1.3),
-            (end_x, end_y),
-        ]
-    elif direction == "right":
-        arrow = [
-            (end_x - arrow_size * 1.3, end_y - arrow_size),
-            (end_x - arrow_size * 1.3, end_y + arrow_size),
-            (end_x, end_y),
-        ]
-    elif direction == "left":
-        arrow = [
-            (end_x + arrow_size * 1.3, end_y - arrow_size),
-            (end_x + arrow_size * 1.3, end_y + arrow_size),
-            (end_x, end_y),
-        ]
-    draw.polygon(arrow, fill=color)
+    x1, y1 = points[-2]
+    x2, y2 = points[-1]
+    angle = math.atan2(y2 - y1, x2 - x1)
+
+    tip = (x2, y2)
+    left = (
+        x2 - arrow_size * 1.6 * math.cos(angle) + arrow_size * math.sin(angle),
+        y2 - arrow_size * 1.6 * math.sin(angle) - arrow_size * math.cos(angle),
+    )
+    right = (
+        x2 - arrow_size * 1.6 * math.cos(angle) - arrow_size * math.sin(angle),
+        y2 - arrow_size * 1.6 * math.sin(angle) + arrow_size * math.cos(angle),
+    )
+    draw.polygon([tip, left, right], fill=color)
+
+
+def draw_centered_text(draw, xy, text, font, fill):
+    """Draw text centered at xy."""
+    bbox = draw.textbbox((0, 0), text, font=font)
+    w = bbox[2] - bbox[0]
+    h = bbox[3] - bbox[1]
+    x, y = xy
+    draw.text((x - w / 2, y - h / 2), text, font=font, fill=fill)
+
+
+def draw_badge(draw, box, text, font, bg_color, border_color, text_color, radius=5):
+    """Draw rounded badge with centered text."""
+    draw.rounded_rectangle(
+        box, radius=radius, fill=bg_color, outline=border_color, width=1
+    )
+    bx1, by1, bx2, by2 = box
+    draw_centered_text(
+        draw, ((bx1 + bx2) / 2, (by1 + by2) / 2 - 1), text, font, text_color
+    )
 
 
 def create_png():
-    width, height = 1560, 1220
-    img = Image.new("RGBA", (width, height), (11, 15, 25, 255))
+    width, height = 1600, 1560
+    img = Image.new("RGBA", (width, height), (9, 13, 22, 255))
     draw = ImageDraw.Draw(img)
 
     # Fonts
-    font_sans = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    font_bold = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    font_mono = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
+    title_font = get_font("sans", 22, bold=True)
+    sub_font = get_font("sans", 12.5, bold=False)
+    card_title_font = get_font("sans", 15.5, bold=True)
+    card_sub_font = get_font("sans", 11.5, bold=False)
+    card_mono_font = get_font("mono", 10.5, bold=False)
+    badge_font = get_font("sans", 10.5, bold=True)
+    label_font = get_font("sans", 10.5, bold=True)
+    pill_mono_font = get_font("mono", 10, bold=True)
+    chip_font = get_font("sans", 9.5, bold=True)
 
-    title_font = ImageFont.truetype(font_bold, 23)
-    sub_font = ImageFont.truetype(font_sans, 13)
-    card_title_font = ImageFont.truetype(font_bold, 16)
-    card_sub_font = ImageFont.truetype(font_sans, 12)
-    card_mono_font = ImageFont.truetype(font_mono, 11)
-    badge_font = ImageFont.truetype(font_bold, 11)
-    label_font = ImageFont.truetype(font_bold, 11)
+    # Subtle grid background lines
+    for y in [115, 250, 395, 570, 705, 850, 1175, 1405]:
+        draw.line([(0, y), (width, y)], fill=(30, 41, 59, 70), width=1)
+    for x in [200, 800, 1400]:
+        draw.line([(x, 0), (x, height)], fill=(30, 41, 59, 70), width=1)
 
-    # Grid background lines
-    for y in [150, 330, 520, 670, 920]:
-        draw.line([(0, y), (width, y)], fill=(30, 41, 59, 100), width=1)
-    for x in [260, 780, 1300]:
-        draw.line([(x, 0), (x, height)], fill=(30, 41, 59, 100), width=1)
-
-    # Header
+    # ==================== HEADER ====================
     draw.rounded_rectangle(
-        [(60, 35), (120, 85)],
+        [(90, 28), (145, 80)],
         radius=12,
         fill=(30, 41, 59),
         outline=(56, 189, 248),
         width=2,
     )
-    draw.text(
-        (72, 47), "SOC", fill=(56, 189, 248), font=ImageFont.truetype(font_bold, 18)
+    draw_centered_text(
+        draw, (117, 54), "SOC", get_font("sans", 16, bold=True), (56, 189, 248)
     )
+
     draw.text(
-        (140, 38),
+        (160, 32),
         "Enterprise Real-Time Cybersecurity AI: Cloud Architecture & ADK SOC",
         fill=(248, 250, 252),
         font=title_font,
     )
     draw.text(
-        (140, 68),
-        "Google Cloud Platform (<PROJECT_ID>) | BigQuery Lakehouse | Google ADK Multi-Agent System | Gemini Vision",
+        (160, 62),
+        "Google Cloud Platform (<PROJECT_ID>) • BigQuery Security Lakehouse • ADK Multi-Agent Team • Model Context Protocol (MCP)",
         fill=(148, 163, 184),
         font=sub_font,
     )
 
-    # 1. Synthetic Log Generator Layer
+    # ==================== TIER 1: SYNTHETIC LOG GENERATOR LAYER ====================
     draw.rounded_rectangle(
-        [(520, 115), (1040, 210)],
+        [(500, 115), (1100, 205)],
         radius=16,
         fill=(30, 27, 75),
-        outline=(168, 85, 247),
+        outline=(192, 132, 252),
         width=2,
     )
+    draw_badge(
+        draw,
+        (525, 126, 575, 144),
+        "GEN",
+        chip_font,
+        (59, 7, 100),
+        (192, 132, 252),
+        (233, 213, 255),
+        radius=4,
+    )
     draw.text(
-        (545, 125),
-        "Synthetic Log Generator & Threat Injector",
+        (585, 126),
+        "Synthetic Log Generator (CLI & Threat Injection)",
         fill=(255, 255, 255),
         font=card_title_font,
     )
     draw.text(
-        (545, 148),
-        "src.demo.data_generator.log_generator",
-        fill=(192, 132, 252),
+        (525, 148),
+        "src.demo.data_generator.log_generator • event_family: access | network",
+        fill=(216, 180, 254),
         font=card_mono_font,
     )
 
-    # Badges
-    badges = [
-        ("Benign Mode", 545, 95, (59, 7, 100), (233, 213, 255)),
-        ("Continuous Stream", 650, 125, (59, 7, 100), (233, 213, 255)),
-        ("Malicious Scenario", 785, 125, (76, 5, 25), (254, 205, 211)),
-        ("False-Positive Test", 920, 110, (66, 32, 6), (254, 240, 138)),
-    ]
-    for text, bx, bw, bg, fg in badges:
-        draw.rounded_rectangle(
-            [(bx, 172), (bx + bw, 195)], radius=5, fill=bg, outline=fg, width=1
-        )
-        draw.text((bx + 8, 177), text, fill=fg, font=badge_font)
+    draw_badge(
+        draw,
+        (525, 172, 690, 194),
+        "APT Malicious Scenario",
+        badge_font,
+        (76, 5, 25),
+        (244, 63, 94),
+        (254, 205, 211),
+    )
+    draw_badge(
+        draw,
+        (700, 172, 885, 194),
+        "Admin False-Positive Noise",
+        badge_font,
+        (66, 32, 6),
+        (245, 158, 11),
+        (254, 240, 138),
+    )
+    draw_badge(
+        draw,
+        (895, 172, 1075, 194),
+        "Continuous Benign Stream",
+        badge_font,
+        (59, 7, 100),
+        (192, 132, 252),
+        (233, 213, 255),
+    )
 
-    # Flow lines from Generator
+    # Connector to Pub/Sub Raw Logs
     draw_arrow(
         draw,
-        [(610, 210), (610, 235), (290, 235), (290, 270)],
-        color=(168, 85, 247),
+        [(800, 205), (800, 250)],
+        color=(192, 132, 252),
         width=2,
-        direction="down",
+        arrow_size=7,
     )
-    draw_arrow(
-        draw, [(780, 210), (780, 270)], color=(168, 85, 247), width=3, direction="down"
-    )
-    draw_arrow(
+    draw_badge(
         draw,
-        [(950, 210), (950, 235), (1270, 235), (1270, 270)],
-        color=(168, 85, 247),
-        width=2,
-        direction="down",
+        (675, 217, 925, 239),
+        "Publishes JSON Security Telemetry",
+        label_font,
+        (30, 27, 75),
+        (192, 132, 252),
+        (233, 213, 255),
+        radius=5,
     )
 
-    draw.text((300, 242), "Batch Uploads", fill=(192, 132, 252), font=label_font)
-    draw.text((790, 242), "Pub/Sub Streaming", fill=(192, 132, 252), font=label_font)
-    draw.text((1150, 242), "Direct Streaming", fill=(192, 132, 252), font=label_font)
-
-    # 2. Ingestion & Pipeline Layer
-    # GCS
+    # ==================== TIER 2: PUBSUB RAW LOGS EVENT BUS ====================
     draw.rounded_rectangle(
-        [(100, 270), (480, 370)],
+        [(500, 250), (1100, 328)],
         radius=14,
-        fill=(15, 23, 42),
+        fill=(12, 74, 110),
         outline=(56, 189, 248),
         width=2,
     )
-    draw.text(
-        (120, 282), "Google Cloud Storage", fill=(255, 255, 255), font=card_title_font
+    draw_badge(
+        draw,
+        (525, 260, 590, 278),
+        "PUBSUB",
+        chip_font,
+        (8, 47, 73),
+        (56, 189, 248),
+        (125, 211, 252),
+        radius=4,
     )
     draw.text(
-        (120, 308),
-        "gs://cymbal-cyber-raw-logs_<PROJECT_ID>",
-        fill=(147, 197, 253),
-        font=card_mono_font,
-    )
-    draw.rounded_rectangle(
-        [(120, 332), (460, 356)],
-        radius=6,
-        fill=(8, 47, 73),
-        outline=(2, 132, 199),
-        width=1,
-    )
-    draw.text(
-        (130, 337),
-        "Batch Loader: gcs_to_bigquery_loader.py",
-        fill=(186, 230, 253),
-        font=card_mono_font,
-    )
-
-    # PubSub
-    draw.rounded_rectangle(
-        [(590, 270), (970, 370)],
-        radius=14,
-        fill=(15, 23, 42),
-        outline=(14, 165, 233),
-        width=2,
-    )
-    draw.text(
-        (610, 282),
-        "Pub/Sub BQ Subscriptions [Default: $0 Compute]",
+        (600, 260),
+        "Topic: cymbal_cyber_raw_logs",
         fill=(255, 255, 255),
         font=card_title_font,
     )
     draw.text(
-        (610, 308),
-        "raw_access_to_bq & raw_network_to_bq",
-        fill=(147, 197, 253),
-        font=card_mono_font,
-    )
-    draw.rounded_rectangle(
-        [(610, 332), (950, 356)],
-        radius=6,
-        fill=(8, 47, 73),
-        outline=(2, 132, 199),
-        width=1,
-    )
-    draw.text(
-        (620, 337),
-        "Direct Ingest | [Optional: Dataflow Beam]",
+        (525, 282),
+        "Serverless Event Bus • Partitioned Telemetry Ingestion",
         fill=(186, 230, 253),
         font=card_mono_font,
     )
-
-    # Direct BQ
-    draw.rounded_rectangle(
-        [(1080, 270), (1460, 370)],
-        radius=14,
-        fill=(15, 23, 42),
-        outline=(6, 182, 212),
-        width=2,
-    )
     draw.text(
-        (1100, 282), "Direct BQ Streaming", fill=(255, 255, 255), font=card_title_font
-    )
-    draw.text(
-        (1100, 308),
-        "BigQuery Storage Write API",
+        (525, 302),
+        "Dual Direct BigQuery Subscriptions • Filtered by event_family attribute • $0 Compute",
         fill=(147, 197, 253),
-        font=card_mono_font,
-    )
-    draw.rounded_rectangle(
-        [(1100, 332), (1440, 356)],
-        radius=6,
-        fill=(4, 47, 46),
-        outline=(13, 148, 136),
-        width=1,
-    )
-    draw.text(
-        (1110, 337),
-        "Ultra-low latency micro-batch streaming",
-        fill=(94, 234, 212),
-        font=card_mono_font,
+        font=card_sub_font,
     )
 
-    # Connectors to BigQuery
+    # Dual Connectors to BigQuery
     draw_arrow(
         draw,
-        [(290, 370), (290, 410), (460, 410), (460, 440)],
+        [(620, 328), (620, 360), (450, 360), (450, 395)],
         color=(56, 189, 248),
         width=2,
-        direction="down",
-    )
-    draw_arrow(
-        draw, [(780, 370), (780, 440)], color=(56, 189, 248), width=3, direction="down"
+        arrow_size=7,
     )
     draw_arrow(
         draw,
-        [(1270, 370), (1270, 410), (1100, 410), (1100, 440)],
+        [(980, 328), (980, 360), (1150, 360), (1150, 395)],
         color=(56, 189, 248),
         width=2,
-        direction="down",
+        arrow_size=7,
     )
 
-    # 3. BigQuery Lakehouse
+    draw_badge(
+        draw,
+        (250, 348, 600, 372),
+        "raw_access_to_bq [event_family=\"access\"] ($0 Ingest)",
+        label_font,
+        (12, 74, 110),
+        (56, 189, 248),
+        (125, 211, 252),
+        radius=5,
+    )
+    draw_badge(
+        draw,
+        (990, 348, 1340, 372),
+        "raw_network_to_bq [event_family=\"network\"] ($0 Ingest)",
+        label_font,
+        (12, 74, 110),
+        (56, 189, 248),
+        (125, 211, 252),
+        radius=5,
+    )
+
+    # ==================== TIER 3: BIGQUERY LAKEHOUSE ====================
     draw.rounded_rectangle(
-        [(200, 440), (1360, 550)],
+        [(100, 395), (1500, 520)],
         radius=18,
         fill=(15, 23, 42),
         outline=(96, 165, 250),
         width=2,
     )
+    draw_badge(
+        draw,
+        (130, 408, 175, 426),
+        "BQ",
+        chip_font,
+        (30, 58, 138),
+        (96, 165, 250),
+        (147, 197, 253),
+        radius=4,
+    )
     draw.text(
-        (230, 452),
-        "BigQuery Enterprise Security Lakehouse (Dataset: Cymbal_Cyber)",
+        (185, 408),
+        "Enterprise Security Lakehouse (Dataset: Cymbal_Cyber)",
         fill=(255, 255, 255),
         font=card_title_font,
     )
     draw.text(
-        (230, 476),
-        "Time-partitioned and clustered analytics tables for real-time threat intelligence",
+        (130, 430),
+        "Time-partitioned and clustered analytics tables • SSOT for Telemetry, Alerts & SOC Tickets • $0 Continuous Slot Cost",
         fill=(148, 163, 184),
         font=card_sub_font,
     )
 
     bq_tables = [
-        ("user_access_events", 230, 190, (59, 130, 246)),
-        ("network_events", 440, 165, (59, 130, 246)),
-        ("adk_threat_assessment", 625, 215, (56, 189, 248)),
-        ("soc_tickets", 860, 140, (244, 63, 94)),
-        ("user_screenshots_view", 1020, 220, (168, 85, 247)),
+        ("user_access_events [DAY]", 125, 215, (30, 41, 59), (59, 130, 246), (96, 165, 250)),
+        ("network_events [DAY]", 355, 195, (30, 41, 59), (59, 130, 246), (96, 165, 250)),
+        ("alerts [DAY, Clustered]", 565, 215, (30, 41, 59), (56, 189, 248), (125, 211, 252)),
+        ("alerts_dead_letter [DLQ]", 795, 225, (63, 7, 19), (244, 63, 94), (254, 205, 211)),
+        ("adk_threat_assessment", 1035, 225, (30, 41, 59), (16, 185, 129), (110, 231, 183)),
+        ("soc_tickets [SSOT]", 1275, 200, (30, 41, 59), (251, 146, 60), (253, 186, 116)),
     ]
-    for tbl, tx, tw, stroke_col in bq_tables:
-        draw.rounded_rectangle(
-            [(tx, 502), (tx + tw, 532)],
+    for tbl, tx, tw, bg_c, stroke_c, text_c in bq_tables:
+        draw_badge(
+            draw,
+            (tx, 460, tx + tw, 495),
+            tbl,
+            pill_mono_font,
+            bg_c,
+            stroke_c,
+            text_c,
             radius=8,
-            fill=(30, 41, 59),
-            outline=stroke_col,
-            width=1,
         )
-        draw.text((tx + 12, 512), tbl, fill=(241, 245, 249), font=card_mono_font)
 
-    # Connectors to Detection Engines
-    draw_arrow(
-        draw, [(520, 550), (520, 590)], color=(245, 158, 11), width=3, direction="down"
-    )
+    # Connector to Threat Detector
     draw_arrow(
         draw,
-        [(1040, 550), (1040, 590)],
+        [(800, 520), (800, 570)],
         color=(245, 158, 11),
-        width=3,
-        direction="down",
+        width=2,
+        arrow_size=7,
+    )
+    draw_badge(
+        draw,
+        (560, 533, 1040, 557),
+        "Cloud Scheduler (every 5m) • Closed 2m Tumbling Window MERGE",
+        label_font,
+        (28, 25, 23),
+        (245, 158, 11),
+        (253, 230, 138),
+        radius=5,
     )
 
-    # 4. Detection Engines
-    # Scheduled Detector (Default)
+    # ==================== TIER 4: CLOUD RUN JOB: THREAT DETECTOR ====================
     draw.rounded_rectangle(
-        [(240, 590), (740, 675)],
+        [(460, 570), (1140, 655)],
         radius=14,
-        fill=(2, 44, 34),
+        fill=(6, 78, 59),
         outline=(16, 185, 129),
         width=2,
     )
+    draw_badge(
+        draw,
+        (485, 582, 550, 600),
+        "CR-JOB",
+        chip_font,
+        (2, 44, 34),
+        (16, 185, 129),
+        (167, 243, 208),
+        radius=4,
+    )
     draw.text(
-        (265, 602),
-        "Scheduled Threat Detector [Default: $0 Idle]",
+        (560, 582),
+        "threat-detector (Cloud Scheduler Triggered)",
         fill=(255, 255, 255),
         font=card_title_font,
     )
     draw.text(
-        (265, 626),
-        "adk_agent.threat_detector (Cloud Run Job)",
+        (485, 604),
+        "adk_agent.threat_detector (TIMESTAMP_BUCKET 2m + MERGE)",
         fill=(110, 231, 183),
         font=card_mono_font,
     )
     draw.text(
-        (265, 648),
-        "Closed 2m windows -> Idempotent MERGE -> Pub/Sub",
+        (485, 624),
+        "Evaluates 2m tumbling windows • Scores >= 100 • $0 continuous slot cost • Updates alerts table",
         fill=(167, 243, 208),
         font=card_sub_font,
     )
 
-    # Continuous Query (Optional)
+    # Connector from Threat Detector down to Alerts Topic
+    draw_arrow(
+        draw,
+        [(720, 655), (720, 680), (600, 680), (600, 705)],
+        color=(16, 185, 129),
+        width=2,
+        arrow_size=7,
+    )
+    draw_badge(
+        draw,
+        (530, 668, 850, 692),
+        "Publishes Alert Contract JSON (Score >= 100)",
+        label_font,
+        (6, 78, 59),
+        (16, 185, 129),
+        (167, 243, 208),
+        radius=5,
+    )
+
+    # ==================== TIER 5: ALERTS TOPIC & DEAD-LETTER QUEUE ====================
+    # Primary Alert Topic
     draw.rounded_rectangle(
-        [(820, 590), (1320, 675)],
+        [(280, 705), (920, 790)],
         radius=14,
-        fill=(28, 25, 23),
-        outline=(245, 158, 11),
+        fill=(4, 47, 46),
+        outline=(52, 211, 153),
         width=2,
     )
+    draw_badge(
+        draw,
+        (300, 716, 365, 734),
+        "ALERTS",
+        chip_font,
+        (2, 44, 34),
+        (52, 211, 153),
+        (167, 243, 208),
+        radius=4,
+    )
     draw.text(
-        (845, 602),
-        "BQ Continuous Query [Optional / Benchmark]",
+        (375, 716),
+        "Topic: cymbal_cyber_alerts",
         fill=(255, 255, 255),
         font=card_title_font,
     )
     draw.text(
-        (845, 626),
-        "continuous_query.sql (Enterprise Reservation)",
-        fill=(253, 230, 138),
-        font=card_mono_font,
-    )
-    draw.text(
-        (845, 648),
-        "Tumbling window (2m) -> Exports alerts >= 100 to Pub/Sub",
-        fill=(214, 211, 209),
+        (300, 737),
+        "Primary real-time alert dispatch bus • Delivers Alert Contract JSON to Orchestrator",
+        fill=(203, 213, 225),
         font=card_sub_font,
     )
-
-    # Connectors to ADK Orchestrator
-    draw_arrow(
+    draw_badge(
         draw,
-        [(490, 675), (490, 705), (670, 705), (670, 730)],
-        color=(16, 185, 129),
-        width=3,
-        direction="down",
+        (300, 758, 445, 780),
+        "Push Subscription",
+        badge_font,
+        (6, 78, 59),
+        (16, 185, 129),
+        (167, 243, 208),
     )
-    draw_arrow(
+    draw_badge(
         draw,
-        [(1070, 675), (1070, 705), (890, 705), (890, 730)],
-        color=(16, 185, 129),
-        width=3,
-        direction="down",
+        (455, 758, 645, 780),
+        "roles/run.invoker (OIDC)",
+        badge_font,
+        (8, 47, 73),
+        (14, 165, 233),
+        (186, 230, 253),
+    )
+    draw_badge(
+        draw,
+        (655, 758, 895, 780),
+        "Native Cloud Run Auth Token",
+        badge_font,
+        (30, 41, 59),
+        (100, 116, 139),
+        (241, 245, 249),
+    )
+
+    # Dead-Letter Topic (DLQ)
+    draw.rounded_rectangle(
+        [(990, 705), (1500, 790)],
+        radius=14,
+        fill=(63, 7, 19),
+        outline=(244, 63, 94),
+        width=2,
+    )
+    draw_badge(
+        draw,
+        (1010, 716, 1055, 734),
+        "DLQ",
+        chip_font,
+        (76, 5, 25),
+        (244, 63, 94),
+        (254, 205, 211),
+        radius=4,
     )
     draw.text(
-        (700, 692), "Dispatches Alert Triggers", fill=(110, 231, 183), font=label_font
+        (1065, 716),
+        "Topic: cymbal_cyber_alerts_dlq",
+        fill=(255, 255, 255),
+        font=card_title_font,
+    )
+    draw.text(
+        (1010, 737),
+        "Dead-letter queue for failed push deliveries • Subscription -> DLQ Table",
+        fill=(254, 205, 211),
+        font=card_sub_font,
+    )
+    draw_badge(
+        draw,
+        (1010, 758, 1195, 780),
+        "Delivery Failed 5 Times",
+        badge_font,
+        (76, 5, 25),
+        (244, 63, 94),
+        (254, 205, 211),
+    )
+    draw_badge(
+        draw,
+        (1205, 758, 1475, 780),
+        "Next Run: Auto-Escalate to SOC",
+        badge_font,
+        (69, 26, 3),
+        (234, 88, 12),
+        (254, 215, 170),
     )
 
-    # 5. ADK Multi-Agent Orchestrator
+    # Connector: Main Alert to DLQ
+    draw_arrow(
+        draw,
+        [(920, 747), (990, 747)],
+        color=(244, 63, 94),
+        width=2,
+        arrow_size=6,
+    )
+    draw_badge(
+        draw,
+        (926, 725, 984, 743),
+        "Failed 5x",
+        chip_font,
+        (63, 7, 19),
+        (244, 63, 94),
+        (254, 205, 211),
+        radius=4,
+    )
+
+    # Connector: Main Alert to Orchestrator
+    draw_arrow(
+        draw,
+        [(600, 790), (600, 850)],
+        color=(16, 185, 129),
+        width=2,
+        arrow_size=7,
+    )
+    draw_badge(
+        draw,
+        (450, 810, 750, 834),
+        "Push Webhook (Verified OIDC Bearer Token)",
+        label_font,
+        (6, 78, 59),
+        (16, 185, 129),
+        (167, 243, 208),
+        radius=5,
+    )
+
+    # ==================== TIER 6: ADK MULTI-AGENT ORCHESTRATOR ====================
     draw.rounded_rectangle(
-        [(420, 730), (1140, 812)],
+        [(100, 850), (1500, 1120)],
         radius=18,
         fill=(2, 44, 34),
         outline=(16, 185, 129),
         width=2,
     )
+    draw_badge(
+        draw,
+        (130, 862, 180, 880),
+        "ADK",
+        chip_font,
+        (6, 78, 59),
+        (16, 185, 129),
+        (167, 243, 208),
+        radius=4,
+    )
     draw.text(
-        (450, 742),
-        "Google ADK Multi-Agent Orchestrator",
+        (190, 862),
+        "ADK Multi-Agent Orchestrator (Cloud Run Webhook: FastAPI)",
         fill=(255, 255, 255),
         font=card_title_font,
     )
     draw.text(
-        (450, 766),
-        "Coordinates specialized agents, session state, and investigation memory",
+        (130, 884),
+        "Autonomous Multi-Agent Investigation • Gemini 3.8 Flash • Checks alerts.status (!=DONE) • Transitions INVESTIGATING -> DONE",
         fill=(167, 243, 208),
         font=card_sub_font,
     )
-    draw.text(
-        (450, 786),
-        "Framework: google-adk >= 2.11.0 | Gemini Models on Vertex AI",
-        fill=(110, 231, 183),
-        font=card_mono_font,
-    )
 
-    # Connectors to 4 Sub-Agents
-    draw_arrow(
-        draw,
-        [(520, 812), (520, 840), (220, 840), (220, 870)],
-        color=(56, 189, 248),
-        width=2,
-        direction="down",
-    )
-    draw_arrow(
-        draw,
-        [(670, 812), (670, 840), (590, 840), (590, 870)],
-        color=(129, 140, 248),
-        width=2,
-        direction="down",
-    )
-    draw_arrow(
-        draw,
-        [(870, 812), (870, 840), (960, 840), (960, 870)],
-        color=(52, 211, 153),
-        width=2,
-        direction="down",
-    )
-    draw_arrow(
-        draw,
-        [(1040, 812), (1040, 840), (1340, 840), (1340, 870)],
-        color=(251, 146, 60),
-        width=2,
-        direction="down",
-    )
-
-    # 6. Four Sub-Agents
-    agents_info = [
+    # 4 Sub-Agents Cards
+    agents = [
         (
-            60,
+            120,
+            "OSINT",
             "google_search_agent",
-            "OSINT Threat Intelligence",
-            "Investigates IPs & C2 domains",
-            "Tool: google_search",
+            "OSINT Public Threat Intel",
+            "Investigates external IPs & C2 domains",
+            "Tor exit nodes, foreign ASN, malware",
+            "Native ADK Toolset (no database access)",
+            "Native Tool: google_search",
+            "Zero Cloud Run dependency",
             (8, 47, 73),
             (56, 189, 248),
+            (125, 211, 252),
         ),
         (
-            430,
+            465,
+            "BQ",
             "bq_investigation_agent",
-            "Behavioral Profiling",
-            "Queries 24h user activity logs",
-            "Tools: behavioral profile (MCP)",
+            "BigQuery Behavioral Baseline",
+            "Queries 24h entity telemetry profile",
+            "Failed logins, sudo escalations, lateral moves",
+            "Parameterized queries (1GB ceiling)",
+            "MCP: get_entity_behavioral_profile",
+            "Scoped via tool_filter",
             (30, 27, 75),
             (129, 140, 248),
+            (199, 210, 254),
         ),
         (
-            800,
+            810,
+            "VISION",
             "visual_analysis_agent",
-            "Gemini Multimodal OCR",
-            "Forensics on desktop screenshots",
-            "Tools: Vision OCR, Signed URLs",
+            "Gemini Multimodal Vision OCR",
+            "Desktop screenshot forensic inspection",
+            "Mimikatz, PowerShell, payload downloads",
+            "Short-lived V4 signed URLs for analysts",
+            "MCP: Vision OCR & Signed URLs",
+            "get_visual_analysis_for_user",
             (4, 47, 46),
             (52, 211, 153),
+            (167, 243, 208),
         ),
         (
-            1180,
+            1155,
+            "SOC",
             "soc_ticketing_agent",
-            "Triage & Escalation",
-            "Synthesizes evidence & dispatches",
-            "Tools: dispatch_to_soc, log_fp",
-            (69, 26, 3),
+            "Triage, Escalation & Dispatch",
+            "Synthesizes evidence & determines action",
+            "High-conf incident dispatch or FP closure",
+            "Security gate verifies deterministic ID",
+            "MCP: dispatch_to_soc, log_fp",
+            "Auditable ticket resolution",
+            (67, 20, 7),
             (251, 146, 60),
+            (254, 215, 170),
         ),
     ]
 
-    for ax, name, role_badge, desc, tools, bg_col, stroke_col in agents_info:
+    for (
+        ax,
+        chip_tag,
+        name,
+        badge_text,
+        desc1,
+        desc2,
+        desc3,
+        tool_text,
+        tool_sub,
+        bg_c,
+        stroke_c,
+        text_c,
+    ) in agents:
         draw.rounded_rectangle(
-            [(ax, 870), (ax + 320, 1025)],
-            radius=14,
-            fill=bg_col,
-            outline=stroke_col,
-            width=2,
-        )
-        draw.text((ax + 16, 882), name, fill=(255, 255, 255), font=card_title_font)
-        draw.text((ax + 16, 908), role_badge, fill=stroke_col, font=badge_font)
-        draw.line([(ax + 16, 924), (ax + 304, 924)], fill=(100, 116, 139), width=1)
-        draw.text((ax + 16, 934), desc, fill=(226, 232, 240), font=card_sub_font)
-
-        # Tool box
-        draw.rounded_rectangle(
-            [(ax + 16, 970), (ax + 304, 1005)],
-            radius=6,
-            fill=(15, 23, 42),
-            outline=stroke_col,
+            [(ax, 910), (ax + 325, 1100)],
+            radius=12,
+            fill=bg_c,
+            outline=stroke_c,
             width=1,
         )
-        draw.text((ax + 26, 982), tools, fill=stroke_col, font=card_mono_font)
+        draw_badge(
+            draw,
+            (ax + 14, 920, ax + 14 + len(chip_tag) * 9 + 12, 936),
+            chip_tag,
+            chip_font,
+            bg_c,
+            stroke_c,
+            text_c,
+            radius=4,
+        )
+        draw.text(
+            (ax + 20 + len(chip_tag) * 9 + 12, 920),
+            name,
+            fill=(255, 255, 255),
+            font=get_font("sans", 13, bold=True),
+        )
+        draw_badge(
+            draw,
+            (ax + 14, 944, ax + 215, 964),
+            badge_text,
+            get_font("sans", 9.5, bold=True),
+            bg_c,
+            stroke_c,
+            text_c,
+            radius=4,
+        )
+        draw.line([(ax + 14, 972), (ax + 311, 972)], fill=(71, 85, 105), width=1)
+        draw.text((ax + 14, 980), f"Role: {desc1}", fill=(241, 245, 249), font=card_sub_font)
+        draw.text((ax + 14, 998), f"Intel: {desc2}", fill=(203, 213, 225), font=card_sub_font)
+        draw.text((ax + 14, 1016), f"Scope: {desc3}", fill=(148, 163, 184), font=card_sub_font)
 
-    # Connector from SOC Agent to Ticketing System
+        # Tool Box inside Agent
+        draw.rounded_rectangle(
+            [(ax + 14, 1038), (ax + 311, 1086)],
+            radius=6,
+            fill=(15, 23, 42),
+            outline=stroke_c,
+            width=1,
+        )
+        draw.text((ax + 20, 1046), tool_text, fill=text_c, font=pill_mono_font)
+        draw.text((ax + 20, 1065), tool_sub, fill=(148, 163, 184), font=card_sub_font)
+
+    # Connector from Orchestrator down to MCP Tool Service
     draw_arrow(
         draw,
-        [(1340, 1025), (1340, 1050), (1050, 1050), (1050, 1075)],
-        color=(244, 63, 94),
-        width=3,
-        direction="down",
+        [(800, 1120), (800, 1175)],
+        color=(192, 132, 252),
+        width=2,
+        arrow_size=7,
     )
-    draw.text(
-        (1110, 1035),
-        "Dispatches Incident Package",
-        fill=(254, 205, 211),
-        font=label_font,
+    draw_badge(
+        draw,
+        (560, 1136, 1040, 1160),
+        "MCP over HTTPS + ID token (agent SA: run.invoker only)",
+        label_font,
+        (46, 16, 101),
+        (192, 132, 252),
+        (233, 213, 255),
+        radius=5,
     )
 
-    # 7. SOC Ticketing & Console
+    # ==================== TIER 7: DECOUPLED MCP TOOL SERVICE ====================
     draw.rounded_rectangle(
-        [(180, 1075), (1380, 1175)],
-        radius=16,
+        [(100, 1175), (1500, 1355)],
+        radius=18,
+        fill=(46, 16, 101),
+        outline=(192, 132, 252),
+        width=2,
+    )
+    draw_badge(
+        draw,
+        (130, 1187, 180, 1205),
+        "MCP",
+        chip_font,
+        (59, 7, 100),
+        (192, 132, 252),
+        (233, 213, 255),
+        radius=4,
+    )
+    draw.text(
+        (190, 1187),
+        "MCP Tool Service (Cloud Run: cymbal-cyber-mcp) — Principle of Least Privilege Boundary",
+        fill=(255, 255, 255),
+        font=card_title_font,
+    )
+    draw.text(
+        (130, 1209),
+        "Dedicated Tools SA: cymbal-mcp-tools-sa • Transports: HTTPS (Cloud Run) / stdio (Local) • Fixed Parameterized Operations (No free-form SQL)",
+        fill=(233, 213, 255),
+        font=card_sub_font,
+    )
+
+    # 4 MCP Tool Pillars
+    pillars = [
+        (
+            120,
+            "BigQuery Telemetry",
+            "• get_entity_behavioral_profile",
+            "24h baseline query (user / IP)",
+            "1 GB maximum_bytes_billed ceiling",
+            "Read-Only Evidence Access",
+            (30, 27, 75),
+            (129, 140, 248),
+            (199, 210, 254),
+        ),
+        (
+            465,
+            "Multimodal Vision OCR",
+            "• get_visual_analysis_for_user",
+            "• get_gcs_uri_for_user",
+            "• generate_signed_url (V4 signed)",
+            "Gemini Vision on GCS Evidence",
+            (4, 47, 46),
+            (52, 211, 153),
+            (167, 243, 208),
+        ),
+        (
+            810,
+            "SOC Ticketing Operations",
+            "• dispatch_to_soc_ticketing_system",
+            "• log_false_positive (Archive FP)",
+            "• create_rich_ticket_id (Gate verified)",
+            "Auditable Ticket Writes",
+            (69, 26, 3),
+            (234, 88, 12),
+            (254, 215, 170),
+        ),
+        (
+            1155,
+            "Platform Guardrails",
+            "• auto_escalate_unresolved_alert",
+            "Fixed server-side (DEFAULT_DENY)",
+            "• escalate_to_human (GCS payload)",
+            "Default-Deny Escalation",
+            (63, 7, 19),
+            (244, 63, 94),
+            (254, 205, 211),
+        ),
+    ]
+
+    for px, ptitle, pt1, pt2, pt3, pbadge, bg_c, stroke_c, text_c in pillars:
+        draw.rounded_rectangle(
+            [(px, 1235), (px + 325, 1340)],
+            radius=10,
+            fill=bg_c,
+            outline=stroke_c,
+            width=1,
+        )
+        draw.text((px + 14, 1245), ptitle, fill=(255, 255, 255), font=get_font("sans", 12.5, bold=True))
+        draw.text((px + 14, 1267), pt1, fill=text_c, font=pill_mono_font)
+        draw.text((px + 14, 1285), pt2, fill=(203, 213, 225), font=card_sub_font)
+        draw.text((px + 14, 1301), pt3, fill=(148, 163, 184), font=card_sub_font)
+        draw_badge(
+            draw,
+            (px + 14, 1318, px + 210, 1334),
+            pbadge,
+            get_font("sans", 8.5, bold=True),
+            bg_c,
+            stroke_c,
+            text_c,
+            radius=3,
+        )
+
+    # Connector from MCP Tool Service down to SOC Ticketing System
+    draw_arrow(
+        draw,
+        [(800, 1355), (800, 1405)],
+        color=(244, 63, 94),
+        width=2,
+        arrow_size=7,
+    )
+    draw_badge(
+        draw,
+        (570, 1368, 1030, 1392),
+        "Dispatches Incidents & Writes soc_tickets Table",
+        label_font,
+        (63, 7, 19),
+        (244, 63, 94),
+        (254, 205, 211),
+        radius=5,
+    )
+
+    # ==================== TIER 8: SOC TICKETING & ANALYST CONSOLE ====================
+    draw.rounded_rectangle(
+        [(100, 1405), (1500, 1530)],
+        radius=18,
         fill=(31, 19, 26),
         outline=(244, 63, 94),
         width=2,
     )
+    draw_badge(
+        draw,
+        (130, 1417, 180, 1435),
+        "SOC",
+        chip_font,
+        (76, 5, 25),
+        (244, 63, 94),
+        (254, 205, 211),
+        radius=4,
+    )
     draw.text(
-        (205, 1088),
+        (190, 1417),
         "SOC Ticketing System & Streamlit Analyst Console",
         fill=(255, 255, 255),
         font=card_title_font,
     )
     draw.text(
-        (205, 1110),
-        "src.demo.soc_ticketing | streamlit_soc_console.py",
+        (130, 1439),
+        "src.demo.soc_ticketing • streamlit_soc_console.py (Local port 8501)",
         fill=(251, 113, 133),
         font=card_mono_font,
     )
 
-    pills = [
-        ("Storage: soc_tickets + GCS Escalations", 205, 360),
-        ("Webhooks: Slack / Jira / ServiceNow", 585, 360),
-        ("Console: Forensic Triage & Screenshots", 965, 390),
+    soc_boxes = [
+        ("Incident Queue: soc_tickets + GCS Escalations", 125, 430),
+        ("Webhook Integrations: Slack / Jira / ServiceNow", 575, 430),
+        ("Streamlit Console: Interactive Triage & Evidence", 1025, 450),
     ]
-    for ptext, px, pw in pills:
-        draw.rounded_rectangle(
-            [(px, 1134), (px + pw, 1158)],
-            radius=6,
-            fill=(63, 7, 19),
-            outline=(190, 18, 60),
-            width=1,
+    for stext, sx, sw in soc_boxes:
+        draw_badge(
+            draw,
+            (sx, 1465, sx + sw, 1510),
+            stext,
+            pill_mono_font,
+            (63, 7, 19),
+            (190, 18, 60),
+            (254, 205, 211),
+            radius=8,
         )
-        draw.text((px + 10, 1140), ptext, fill=(254, 205, 211), font=card_mono_font)
 
     img.save(PNG_PATH, "PNG")
     print(f"Generated PNG: {PNG_PATH}")
 
 
-if __name__ == "__main__":
+def main():
     create_svg()
     create_png()
+
+
+if __name__ == "__main__":
+    main()
