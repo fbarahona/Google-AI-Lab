@@ -281,7 +281,7 @@ To enforce the principle of least privilege, background automation is split into
 
 ### 4E. Agent Service Exposure
 - In the cloud the agent service serves only `POST /trigger/pubsub` (and its `/apps/adk_agent/trigger/pubsub` alias), which verifies the Pub/Sub OIDC token. The ADK web UI, `/run`, session, builder and A2A APIs, and the OpenAPI docs are not routed, because they would run investigations as the agent SA without that check.
-- `enable_adk_dev_ui = true` (Terraform) sets `ADK_DEV_UI=true` and turns them back on for a supervised demo; Cloud Run IAM still limits callers to the deployer and the push identity. Locally (`LOCAL_MODE=true`) they are on by default.
+- `enable_adk_dev_ui = true` (Terraform) sets `ADK_DEV_UI=true` and turns them back on for a supervised demo. Cloud Run IAM still limits callers to the deployer, the push identity and, only while the flag is on, `soc-console-access` (so analysts can open it through the impersonated-token proxy). The playground's tool calls still go through the MCP tool service. Locally (`LOCAL_MODE=true`) they are on by default.
 
 ### 4F. Build Identity and Container Image
 - Cloud Build runs as the Compute Engine default service account. It holds `roles/storage.objectViewer` on the build source bucket (`<project>_cloudbuild`) only, not project-wide, so it cannot read tickets, screenshots or Terraform state.
