@@ -134,3 +134,56 @@ def test_mcp_service_runs_as_its_own_sa_and_admits_only_the_agent():
     assert "google_service_account.agent_sa.email" in mcp
     assert "MCP_SERVER_URL" in services["adk_agent_service"]
     assert "allUsers" not in tf
+
+
+def test_dev_ui_trusts_the_proxy_origin_only_while_enabled():
+    """Through `gcloud run services proxy` the browser's origin is localhost, so ADK
+    refuses to create sessions unless ALLOW_ORIGINS names it."""
+    from pathlib import Path
+
+    tf_dir = Path(__file__).resolve().parents[2] / "terraform"
+    agent = _tf_resources(
+        (tf_dir / "cloud_run.tf").read_text(), "google_cloud_run_v2_service"
+    )["adk_agent_service"]
+    assert '"ALLOW_ORIGINS"' in agent
+    assert 'var.enable_adk_dev_ui ? [join(",", var.adk_dev_ui_origins)] : []' in agent
+    assert '"http://localhost:8080"' in (tf_dir / "variables.tf").read_text()
+
+
+def test_dev_ui_creates_sessions_from_the_proxy_origin():
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    script = """
+from fastapi.testclient import TestClient
+import adk_agent.fast_api_app as f
+c = TestClient(f.app, base_url="https://cymbal-cyber-adk-agent-x-ue.a.run.app")
+r = c.post("/apps/adk_agent/users/u/sessions", json={},
+           headers={"Origin": "http://127.0.0.1:8080"})
+print(r.status_code)
+"""
+    root = Path(__file__).resolve().parents[4]
+    base = {
+        **os.environ,
+        "LOCAL_MODE": "true",
+        "ADK_DEV_UI": "true",
+        "OTEL_TO_CLOUD": "false",
+        "PYTHONPATH": str(root),
+    }
+
+    def status(origins: str) -> str:
+        env = {**base, "ALLOW_ORIGINS": origins}
+        out = subprocess.run(
+            [sys.executable, "-c", script],
+            env=env,
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        return out.stdout.strip().splitlines()[-1]
+
+    assert status("") == "403"
+    assert status("http://localhost:8080,http://127.0.0.1:8080") == "200"
