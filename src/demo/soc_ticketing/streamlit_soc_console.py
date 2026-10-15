@@ -21,7 +21,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-# Run from the repository root with `python -m streamlit run`, so `src.demo` imports
+# Run from the repository root with `uv run python -m streamlit run`, so `src.demo` imports
 # resolve from it (the Cloud Run command does the same).
 from src.demo.soc_ticketing.dashboard_charts import (
     create_category_bar_chart,
@@ -1073,7 +1073,7 @@ with st.sidebar:
             st.rerun()
         if not service.is_cloud_enabled():
             st.caption(
-                "Local mode: `python -m src.demo.local_runner --threat malicious` runs the full pipeline."
+                "Local mode: `uv run python -m src.demo.local_runner --threat malicious` runs the full pipeline."
             )
 
 navigation = st.navigation(list(PAGES.values()), position="hidden")
