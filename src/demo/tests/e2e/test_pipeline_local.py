@@ -37,7 +37,10 @@ def _mcp_toolsets(agent):
     return [t for t in agent.tools if isinstance(t, ag.ScopedMcpToolset)]
 
 
-ALL_TOOLSETS = [ts for agent in AGENTS for ts in _mcp_toolsets(agent)]
+# The default-deny callback's toolset is attached to no agent but runs a server too.
+ALL_TOOLSETS = [ts for agent in AGENTS for ts in _mcp_toolsets(agent)] + [
+    ag.default_deny_mcp
+]
 
 
 @pytest.fixture

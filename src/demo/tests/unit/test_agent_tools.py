@@ -2,6 +2,7 @@
 Unit tests for ADK Agent tools, safety callbacks, SQL parameterization, and signed URL generation.
 """
 
+import json
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -9,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from google.adk.sessions.state import State
 
+import adk_agent.agent as ag
 from adk_agent.agent import (
     before_orchestrator_starts,
     default_deny_soc_callback,
@@ -406,7 +408,8 @@ def test_before_orchestrator_starts_resets_flags_and_seeds_state():
     assert "c.wilson" in state_obj.get("ticket_id")
 
 
-def test_default_deny_callback_escalates_when_unresolved(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_default_deny_callback_escalates_when_unresolved(tmp_path, monkeypatch):
     """Verify that default_deny_soc_callback escalates unresolved alerts using seeded user metadata."""
     monkeypatch.setenv("LOCAL_QUEUE_DIR", str(tmp_path))
     monkeypatch.setenv("LOCAL_MODE", "true")
@@ -417,18 +420,32 @@ def test_default_deny_callback_escalates_when_unresolved(tmp_path, monkeypatch):
     state_obj["threat_score"] = 1850
     callback_ctx.state = state_obj
 
-    default_deny_soc_callback(callback_ctx)
+    toolset = ag.default_deny_mcp
+    saved_env = dict(toolset._connection_params.server_params.env)
+    toolset._connection_params.server_params.env.update(
+        {"LOCAL_QUEUE_DIR": str(tmp_path), "LOCAL_MODE": "true"}
+    )
+    try:
+        await default_deny_soc_callback(callback_ctx)
+    finally:
+        await toolset.close()
+        toolset._connection_params.server_params.env = saved_env
     assert state_obj.get("escalation_dispatched") is True
+    (ticket_file,) = tmp_path.glob("human_escalation_information_*.json")
+    ticket = json.loads(ticket_file.read_text())
+    assert ticket["agent_decision"] == "AUTO_ESCALATED_DEFAULT_DENY"
+    assert ticket["severity"] == "CRITICAL"
 
 
-def test_default_deny_callback_permits_clean_false_positive():
+@pytest.mark.asyncio
+async def test_default_deny_callback_permits_clean_false_positive():
     """Verify that default_deny_soc_callback does not trigger when false_positive_logged is True."""
     callback_ctx = MagicMock()
     state_obj = State({}, {})
     state_obj["false_positive_logged"] = True
     callback_ctx.state = state_obj
 
-    default_deny_soc_callback(callback_ctx)
+    await default_deny_soc_callback(callback_ctx)
     assert state_obj.get("escalation_dispatched") is not True
 
 

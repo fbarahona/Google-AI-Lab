@@ -6,6 +6,9 @@ locals {
   # Deterministic Cloud Run endpoint URL matching Google Cloud Run URL convention
   agent_service_url   = "https://cymbal-cyber-adk-agent-${data.google_project.project.number}.${var.region}.run.app"
   agent_push_endpoint = var.agent_push_endpoint != "" ? var.agent_push_endpoint : "${local.agent_service_url}/apps/adk_agent/trigger/pubsub"
+  # Same convention for the MCP tool service: the agent's ID tokens use it as audience,
+  # and the server checks the same value.
+  mcp_service_url = "https://cymbal-cyber-mcp-${data.google_project.project.number}.${var.region}.run.app"
 }
 
 # Dedicated Artifact Registry repository for container images (replaces deprecated Container Registry gcr.io)

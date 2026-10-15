@@ -23,6 +23,16 @@ output "agent_service_account_email" {
   value       = google_service_account.agent_sa.email
 }
 
+output "mcp_service_account_email" {
+  description = "MCP tool service account email (evidence reads and ticket writes)."
+  value       = google_service_account.mcp_sa.email
+}
+
+output "mcp_service_url" {
+  description = "MCP tool service endpoint the agent calls (Streamable HTTP)."
+  value       = "${local.mcp_service_url}/mcp"
+}
+
 output "console_service_account_email" {
   description = "Dedicated SOC console service account email."
   value       = google_service_account.soc_console_sa.email
