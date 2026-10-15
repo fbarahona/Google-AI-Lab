@@ -147,7 +147,7 @@ def inject_threat_scenario(
         )
     return (
         f"Wrote {written} events for {user_id} and added a simulated ticket. "
-        "Run local_runner for the agent's investigation."
+        "Run `uv run python -m src.demo.local_runner` for the agent's investigation."
     )
 
 
