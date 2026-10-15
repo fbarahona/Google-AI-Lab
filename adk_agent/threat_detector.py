@@ -1,7 +1,7 @@
 """
 Scheduled Micro-Batch Threat Detector Job
 =========================================
-Runs every 2 minutes (via Cloud Scheduler -> Cloud Run Job):
+Runs every 5 minutes (via Cloud Scheduler -> Cloud Run Job):
 1. Buckets events into 2-minute closed windows with TIMESTAMP_BUCKET.
 2. Evaluates windows closed > 60s ago (late-data allowance), looking back 15 minutes.
 3. Idempotently MERGEs scored windows into the `alerts` table on `alert_id`.
@@ -61,24 +61,9 @@ class ThreatDetector:
         self.max_bytes_billed = max_bytes_billed
         self.max_merge_attempts = max_merge_attempts
         self.merge_retry_delay = merge_retry_delay
-        creds = None
-        try:
-            from src.demo.soc_ticketing.ticketing_service import get_gcp_credentials
-
-            creds = get_gcp_credentials()
-        except Exception:
-            pass
-
-        self.bq_client = (
-            bigquery.Client(project=project_id, credentials=creds)
-            if creds
-            else bigquery.Client(project=project_id)
-        )
-        self.publisher = (
-            pubsub_v1.PublisherClient(credentials=creds)
-            if creds
-            else pubsub_v1.PublisherClient()
-        )
+        # Application Default Credentials: the job's service account in the cloud.
+        self.bq_client = bigquery.Client(project=project_id)
+        self.publisher = pubsub_v1.PublisherClient()
         self.topic_path = self.publisher.topic_path(project_id, topic_id)
 
     def run_detection_cycle(
@@ -323,88 +308,86 @@ class ThreatDetector:
             logger.error("Error fetching newly created alerts: %s", e)
             return []
 
-    def _update_alert_status(
-        self, alert_id: str, new_status: str, expected_current_status: str | None = None
-    ):
-        """Transitions alert status in BigQuery using parameterized query."""
-        where_clause = "WHERE alert_id = @alert_id"
-        query_params = [
-            bigquery.ScalarQueryParameter("new_status", "STRING", new_status),
-            bigquery.ScalarQueryParameter("alert_id", "STRING", alert_id),
-        ]
-        if expected_current_status:
-            where_clause += " AND status = @expected_current_status"
-            query_params.append(
-                bigquery.ScalarQueryParameter(
-                    "expected_current_status", "STRING", expected_current_status
-                )
-            )
-
+    def _mark_published(self, alert_ids: list[str]) -> None:
+        """
+        Marks published alerts PUBLISHED in one DML statement. Only rows still NEW move,
+        so an alert the webhook already picked up (INVESTIGATING) is not overwritten.
+        """
+        if not alert_ids:
+            return
         update_query = f"""
         UPDATE `{self.project_id}.{self.dataset_id}.alerts`
-        SET status = @new_status, updated_at = CURRENT_TIMESTAMP()
-        {where_clause};
+        SET status = 'PUBLISHED', updated_at = CURRENT_TIMESTAMP()
+        WHERE alert_id IN UNNEST(@alert_ids) AND status = @expected_current_status;
         """
         job_config = bigquery.QueryJobConfig(
-            query_parameters=query_params,
+            query_parameters=[
+                bigquery.ArrayQueryParameter("alert_ids", "STRING", alert_ids),
+                bigquery.ScalarQueryParameter(
+                    "expected_current_status", "STRING", "NEW"
+                ),
+            ],
             maximum_bytes_billed=self.max_bytes_billed,
         )
         try:
             self.bq_client.query(update_query, job_config=job_config).result()
-            logger.info("Updated alert '%s' status to %s.", alert_id, new_status)
+            logger.info("Marked %d alert(s) PUBLISHED.", len(alert_ids))
         except Exception as e:
-            logger.error(
-                "Failed to update status for alert %s to %s: %s",
-                alert_id,
-                new_status,
-                e,
-            )
+            # They stay NEW and are published again next cycle; the webhook's
+            # alert_id dedup absorbs the repeat.
+            logger.error("Failed to mark %d alert(s) PUBLISHED: %s", len(alert_ids), e)
 
     def _publish_alerts(self, alerts: list[dict[str, Any]]) -> int:
         """
         Publishes alerts to cymbal_cyber_alerts matching the unified Alert Contract,
-        and marks them as PUBLISHED in BigQuery to prevent duplication.
+        then marks the published ones PUBLISHED in BigQuery to prevent duplication.
+        One failed publish is logged and skipped (the alert stays NEW for the next
+        cycle), so it cannot abort the run or the dead-letter handling after it.
         """
-        count = 0
+        published: list[str] = []
         for alert in alerts:
             alert_id = alert["alert_id"]
-            payload_str = alert.get("payload_str")
-            if not payload_str:
-                payload_dict = {
-                    "alert_id": alert_id,
-                    "schema_version": 1,
-                    "engine": alert.get("engine", "scheduled"),
-                    "user_id": alert["user_id"],
-                    "device_id": alert["device_id"],
-                    "source_ip": alert["source_ip"],
-                    "window_start": format_utc_timestamp(alert["window_start"]),
-                    "window_end": format_utc_timestamp(alert["window_end"]),
-                    "total_2_min_threat_score": alert["total_2_min_threat_score"],
-                    "high_privilege_request_count": alert.get(
-                        "high_privilege_request_count", 0
-                    ),
-                    "malicious_command_count": alert.get("malicious_command_count", 0),
-                    "malicious_dns_count": alert.get("malicious_dns_count", 0),
-                    "detected_at": format_utc_timestamp(alert["detected_at"]),
-                }
-                payload_str = json.dumps(payload_dict)
-
-            message_data = payload_str.encode("utf-8")
-            future = self.publisher.publish(
-                self.topic_path,
-                message_data,
-                alert_id=alert_id,
-                engine=alert.get("engine", "scheduled"),
-                schema_version="1",
-            )
-            future.result(timeout=10)
+            try:
+                self._publish_one(alert)
+            except Exception as e:
+                logger.error("Failed to publish alert '%s': %s", alert_id, e)
+                continue
             logger.info("Published alert '%s' to %s", alert_id, self.topic_path)
-            # Mark as PUBLISHED only if status is still NEW (prevents overwriting INVESTIGATING if webhook processed quickly)
-            self._update_alert_status(
-                alert_id, "PUBLISHED", expected_current_status="NEW"
-            )
-            count += 1
-        return count
+            published.append(alert_id)
+        self._mark_published(published)
+        return len(published)
+
+    def _publish_one(self, alert: dict[str, Any]) -> None:
+        alert_id = alert["alert_id"]
+        payload_str = alert.get("payload_str")
+        if not payload_str:
+            payload_dict = {
+                "alert_id": alert_id,
+                "schema_version": 1,
+                "engine": alert.get("engine", "scheduled"),
+                "user_id": alert["user_id"],
+                "device_id": alert["device_id"],
+                "source_ip": alert["source_ip"],
+                "window_start": format_utc_timestamp(alert["window_start"]),
+                "window_end": format_utc_timestamp(alert["window_end"]),
+                "total_2_min_threat_score": alert["total_2_min_threat_score"],
+                "high_privilege_request_count": alert.get(
+                    "high_privilege_request_count", 0
+                ),
+                "malicious_command_count": alert.get("malicious_command_count", 0),
+                "malicious_dns_count": alert.get("malicious_dns_count", 0),
+                "detected_at": format_utc_timestamp(alert["detected_at"]),
+            }
+            payload_str = json.dumps(payload_dict)
+
+        future = self.publisher.publish(
+            self.topic_path,
+            payload_str.encode("utf-8"),
+            alert_id=alert_id,
+            engine=alert.get("engine", "scheduled"),
+            schema_version="1",
+        )
+        future.result(timeout=10)
 
     def _handle_dead_lettered_alerts(self) -> int:
         """

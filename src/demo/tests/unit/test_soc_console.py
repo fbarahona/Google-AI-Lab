@@ -230,7 +230,7 @@ def test_console_overview_renders(tmp_path, monkeypatch):
 def test_console_demo_action_failure_shows_error_toast(tmp_path, monkeypatch):
     from streamlit.testing.v1 import AppTest
 
-    import demo.data_generator.sinks as sinks
+    import src.demo.data_generator.sinks as sinks
 
     monkeypatch.setenv("LOCAL_MODE", "true")
     monkeypatch.setenv("LOCAL_QUEUE_DIR", str(tmp_path))
@@ -289,3 +289,21 @@ def test_console_archive_shows_auto_closed_false_positives(tmp_path, monkeypatch
     rows = at.dataframe[0].value.to_dict("records")
     assert [r["Ticket ID"] for r in rows] == ["SOC-TICKET-l.taylor-fp1"]
     assert rows[0]["Resolution Notes"] == "Not reviewed by an analyst"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "OCR: ![](https://attacker.example/x?u=1)",
+            "OCR: [image removed: no alt text]",
+        ),
+        ("![logo][1]", "[image removed: logo]"),
+        ("[docs](https://evil.example/login)", "docs (`https://evil.example/login`)"),
+        ("<https://evil.example/a>", "`https://evil.example/a`"),
+        ("[1]: https://evil.example/p.png", "[1]: `https://evil.example/p.png`"),
+        ("**Verdict:** `mimikatz` seen", "**Verdict:** `mimikatz` seen"),
+    ],
+)
+def test_neutralize_markdown_blocks_beacons_and_live_links(text, expected):
+    assert report_parser.neutralize_markdown(text) == expected

@@ -1,478 +1,267 @@
 """
-End-to-End Local Demo Runner (Zero-Cloud Testing)
-=================================================
-Allows testing and demonstrating the complete cybersecurity AI pipeline locally
-without deploying any infrastructure to Google Cloud or requiring Terraform:
+Local end-to-end demo runner (no cloud required)
+================================================
+Runs one threat scenario through the same code the cloud runs:
 
-1. Generates local synthetic logs (access and network events).
-2. Injects synthetic threats (Malicious or Benign False Positive).
-3. Runs local stream correlation (simulating BigQuery Continuous Queries).
-4. Invokes the ADK multi-agent investigation workflow:
-   - google_search_agent (IP threat intelligence)
-   - bq_investigation_agent (24h behavioral profile)
-   - visual_analysis_agent (screenshot OCR & visual evidence)
-   - soc_ticketing_agent (incident report & ticket dispatch)
-5. Dispatches the ticket to the local SOC queue for instant Streamlit triage.
+1. Generates synthetic access and network logs with an injected threat.
+2. Scores them with the detector's rules (adk_agent.detection_rules, the Python twin
+   of the BigQuery UDFs) in 2-minute windows and builds the alert contract.
+3. Sends the alert to the real ADK orchestrator: the parallel investigation team,
+   the real MCP tool servers, the security gate and default-deny.
+4. The SOC ticketing agent's tools write the ticket to the local queue the
+   Streamlit console reads.
 
-Usage:
-  python -m src.demo.local_runner --threat malicious
-  python -m src.demo.local_runner --threat false_positive
+Only the model can be swapped. By default a scripted model makes the agents'
+choices (no credentials needed), and for the injection and false-positive scenarios
+it deliberately tries to close the alert as a false positive, so you can watch the
+security gate decide. --live-model uses Gemini instead (needs Vertex AI or an API
+key in the environment).
+
+Usage (from the repository root):
+  uv run python -m src.demo.local_runner --threat malicious
+  uv run python -m src.demo.local_runner --threat injection
+  uv run python -m src.demo.local_runner --threat false_positive --live-model
 """
 
 import argparse
+import asyncio
+import json
+import logging
 import os
-import time
+import shutil
+from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from src.demo.data_generator.log_generator import SyntheticLogEngine
-from src.demo.data_generator.sinks import LocalSink
-from src.demo.soc_ticketing.models import SocTicket
-from src.demo.soc_ticketing.ticketing_service import SocTicketingService
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
-LOCAL_DATA_DIR = str(REPO_ROOT / "local_demo_data")
-LOGS_DIR = os.path.join(LOCAL_DATA_DIR, "logs")
-ESCALATIONS_DIR = os.path.join(LOCAL_DATA_DIR, "escalations")
-SCREENSHOTS_DIR = str(REPO_ROOT / "local_demo_data" / "user_screenshots")
+DEFAULT_USERS = {
+    "malicious": "u.lewis",
+    "injection": "c.wilson",
+    "false_positive": "l.taylor",
+}
+# Scripted SOC behaviour per scenario: dispatch a genuine threat, or try to close the
+# alert as a false positive so the security gate has something to decide.
+SCRIPTED_POLICY = {
+    "malicious": "dispatch",
+    "injection": "try_fp",
+    "false_positive": "try_fp",
+}
+WINDOW = timedelta(minutes=2)
+ALERT_MIN_SCORE = 100
 
 
-def step_1_generate_logs(
-    threat_type: str = "malicious", target_user: str = "u.lewis"
-) -> dict[str, Any]:
-    """Generates local synthetic access and network logs with injected threat."""
-    print("\n=======================================================")
-    print("[STEP 1] Generating Synthetic Logs & Injecting Threat")
-    print("=======================================================")
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    os.makedirs(ESCALATIONS_DIR, exist_ok=True)
+def banner(text: str) -> None:
+    print(f"\n{'=' * 64}\n{text}\n{'=' * 64}")
 
+
+def generate_logs(threat_type: str, user: str, logs_dir: Path) -> None:
+    """Writes this run's telemetry, replacing the previous run's local logs."""
+    from src.demo.data_generator.log_generator import SyntheticLogEngine
+    from src.demo.data_generator.sinks import LocalSink
+
+    banner("[1] Generating synthetic telemetry")
+    shutil.rmtree(logs_dir, ignore_errors=True)
     engine = SyntheticLogEngine(project_id="local-demo")
-    sink = LocalSink(output_dir=LOGS_DIR, print_stdout=False)
-
-    # 1. Background benign noise
-    benign_acc, benign_net = engine.generate_benign_batch(50)
-    sink.write_events(benign_acc, benign_net)
+    sink = LocalSink(output_dir=str(logs_dir))
+    benign_access, benign_network = engine.generate_benign_batch(50)
+    sink.write_events(benign_access, benign_network)
+    access, network = engine.inject_threat(threat_type=threat_type, user_id=user)
+    sink.write_events(access, network)
+    print(f"  {len(benign_access) + len(benign_network)} benign events")
     print(
-        f"  -> Generated {len(benign_acc)} access events and {len(benign_net)} network events of benign background activity."
+        f"  {len(access) + len(network)} events for the '{threat_type}' scenario ({user})"
     )
 
-    # 2. Inject threat scenario
-    threat_acc, threat_net = engine.inject_threat(
-        threat_type=threat_type, user_id=target_user
-    )
-    sink.write_events(threat_acc, threat_net)
-    print(
-        f"  -> Injected {len(threat_acc)} access events and {len(threat_net)} network events for scenario: '{threat_type.upper()}' (User: {target_user})."
-    )
 
-    return {
-        "threat_type": threat_type,
-        "user_id": target_user,
-        "access_events": threat_acc,
-        "network_events": threat_net,
+def _read_events(logs_dir: Path, pattern: str) -> list[dict[str, Any]]:
+    events = []
+    for path in sorted(logs_dir.glob(pattern)):
+        with open(path, encoding="utf-8") as f:
+            events.extend(json.loads(line) for line in f if line.strip())
+    return events
+
+
+def _window_end(timestamp: str) -> datetime:
+    ts = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    ts = ts if ts.tzinfo else ts.replace(tzinfo=UTC)
+    start = ts.replace(second=0, microsecond=0) - timedelta(minutes=ts.minute % 2)
+    return start + WINDOW
+
+
+def detect(user: str, logs_dir: Path) -> dict[str, Any] | None:
+    """
+    The scheduled detector's MERGE, in Python: network events joined to the VPN
+    session that was assigned their source IP, scored per event with the shared
+    rules and summed per user and 2-minute window. Returns the target user's
+    highest-scoring window as an alert, or None if no window reaches the threshold.
+    """
+    from adk_agent import detection_rules as rules
+
+    banner("[2] Scoring telemetry in 2-minute windows (detector rules)")
+    sessions = {
+        ev["assigned_internal_ip"]: ev
+        for ev in _read_events(logs_dir, "access_events*.jsonl")
+        if ev.get("event_type") == "login_success" and ev.get("assigned_internal_ip")
     }
+    windows: dict[tuple[str, datetime], int] = defaultdict(int)
+    for ev in _read_events(logs_dir, "network_events*.jsonl"):
+        session = sessions.get(ev.get("source_ip"))
+        if session is None:
+            continue
+        key = (session["user_id"], _window_end(ev["event_timestamp"]))
+        windows[key] += rules.threat_score(
+            {**ev, "user_agent": session.get("user_agent")}
+        )
 
+    user_windows = {end: score for (u, end), score in windows.items() if u == user}
+    for end, score in sorted(user_windows.items()):
+        print(f"  {user} window ending {end:%H:%M:%S}: score {score}")
+    if not user_windows or max(user_windows.values()) < ALERT_MIN_SCORE:
+        print(f"  No window reached the alert threshold ({ALERT_MIN_SCORE}).")
+        return None
 
-def step_2_correlate_events(scenario_data: dict[str, Any]) -> dict[str, Any]:
-    """
-    Simulates BigQuery Continuous Query locally:
-    Joins access events and network events on assigned internal IP,
-    scores anomalies, and computes tumbling window threat scores.
-    """
-    print("\n=======================================================")
-    print("[STEP 2] Simulating BigQuery Continuous Query Stream Processing")
-    print("=======================================================")
-
-    threat_type = scenario_data["threat_type"]
-    user_id = scenario_data["user_id"]
-    access_events = scenario_data["access_events"]
-    network_events = scenario_data["network_events"]
-
-    # Extract successful login internal IP
-    login_ev = next(
-        (ev for ev in access_events if ev.get("event_type") == "login_success"), None
-    )
-    _assigned_ip = login_ev.get("assigned_internal_ip") if login_ev else "10.50.1.20"
-    source_ip = login_ev.get("source_ip") if login_ev else "175.45.177.32"
-    device_id = login_ev.get("device_id") if login_ev else "ws-hr-05"
-
-    # Score correlated network events
-    total_score = 0
-    malicious_cmd_count = 0
-    malicious_dns_count = 0
-    risky_file_count = 0
-
-    for ev in network_events:
-        score = 0
-        cmd = ev.get("command_line") or ""
-        domain = ev.get("network_domain") or ""
-        file_type = ev.get("file_type") or ""
-
-        cmd_lower = cmd.lower()
-        if (
-            "powershell -enc" in cmd_lower
-            or "iex" in cmd_lower
-            or "downloadstring" in cmd_lower
-            or "mimikatz" in cmd_lower
-            or "payload" in cmd_lower
-        ):
-            score += 100
-            malicious_cmd_count += 1
-        elif cmd:
-            score += 10
-
-        # Check malicious domain indicators (aligned with BigQuery is_malicious_domain UDF)
-        # Avoid flagging all .org domains by targeting specific malicious C2 indicators
-        d = domain.lower()
-        if (
-            d.endswith(".ru")
-            or d.endswith(".xyz")
-            or "apt-group-data-exfil.org" in d
-            or "bad-domain" in d
-            or "c2-server" in d
-            or "payload-downloader" in d
-        ):
-            score += 60
-            malicious_dns_count += 1
-
-        if file_type in ["exe", "dll", "ps1", "bat"]:
-            score += 40
-            risky_file_count += 1
-
-        if ev.get("permission_level_requested") in ["root", "admin"]:
-            score += 35
-
-        total_score += score
-
-    # Fallback score if benign false positive
-    if threat_type == "false_positive":
-        total_score = max(total_score, 120)
-    else:
-        total_score = max(total_score, 1850)
-
-    now_utc = datetime.now(UTC)
-    window_end_str = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-    window_start_str = (now_utc - timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    alert_id = f"{user_id}|{window_end_str}"
-
-    alert_payload = {
-        "alert_id": alert_id,
+    window_end, score = max(user_windows.items(), key=lambda item: item[1])
+    session = next(s for s in sessions.values() if s["user_id"] == user)
+    window_end_str = window_end.strftime("%Y-%m-%dT%H:%M:%SZ")
+    alert = {
+        "alert_id": f"{user}|{window_end_str}",
         "schema_version": 1,
-        "engine": "scheduled",
-        "user_id": user_id,
-        "device_id": device_id,
-        "source_ip": source_ip,
-        "window_start": window_start_str,
+        "engine": "local",
+        "user_id": user,
+        "device_id": session.get("device_id"),
+        "source_ip": session.get("source_ip"),
         "window_end": window_end_str,
-        "total_2_min_threat_score": total_score,
-        "high_privilege_request_count": 3 if threat_type != "false_positive" else 1,
-        "malicious_command_count": malicious_cmd_count,
-        "malicious_dns_count": malicious_dns_count,
-        "detected_at": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "total_2_min_threat_score": score,
     }
-
-    print("  -> Correlation Window Completed.")
-    print(f"  -> Alert Contract ID: {alert_id}")
-    print(
-        f"  -> Correlated User: {user_id} | Device: {device_id} | Public IP: {source_ip}"
-    )
-    print(f"  -> Aggregated Anomaly Score: {total_score} (Threshold: >= 100)")
-    print("  -> Alert contract payload emitted to ADK Multi-Agent Orchestrator!")
-    return alert_payload
+    print(f"  Alert: {json.dumps(alert)}")
+    return alert
 
 
-def step_3_run_agent_investigation(
-    alert: dict[str, Any], threat_type: str
+async def investigate(
+    alert: dict[str, Any], threat_type: str, live_model: bool
 ) -> dict[str, Any]:
-    """
-    Executes the 4-agent investigation team using local evidence-driven reasoning:
-    - google_search_agent: OSINT IP reputation (strictly querying external IP)
-    - bq_investigation_agent: Parameterized behavioral profile telemetry
-    - visual_analysis_agent: Forensic desktop screenshot inspection & prompt injection detection
-    - soc_ticketing_agent: Incident synthesis, prompt injection security gate, and triage adjudication
-    """
-    print("\n=======================================================")
-    print("[STEP 3] ADK Multi-Agent Investigation Team Activated")
-    print("=======================================================")
+    """Runs the alert through the real orchestrator; prints each tool call."""
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+    from google.genai import types
 
-    user_id = alert["user_id"]
-    source_ip = alert["source_ip"]
-    device_id = alert["device_id"]
-    score = alert["total_2_min_threat_score"]
+    import adk_agent.agent as ag
+    from src.demo.scripted_model import ALERT_PREFIX, ScriptedLlm
 
-    # 1. google_search_agent (OSINT & IP Reputation)
-    print("  [1] google_search_agent (OSINT & IP Reputation):")
-    if "175.45." in source_ip:
-        osint_intel = (
-            f"Public IP {source_ip} traces to Ryugyong-dong, Pyongyang, North Korea (AS131279 Star JV). "
-            f"Threat intelligence correlates this netblock with APT38 / Lazarus Group operations."
+    # The runner prints each tool call and gate decision itself.
+    logging.getLogger("google_adk").setLevel(logging.ERROR)
+    logging.getLogger("CymbalCyberADK").setLevel(logging.WARNING)
+
+    model_name = "Gemini (live)" if live_model else "scripted model"
+    banner(f"[3] Investigating with the ADK orchestrator ({model_name})")
+    if not live_model:
+        model = ScriptedLlm(
+            model="scripted-local", soc_policy=SCRIPTED_POLICY[threat_type]
         )
-    elif "194.26." in source_ip:
-        osint_intel = (
-            f"Public IP {source_ip} originates from Moscow, Russia. Threat intelligence correlates IP "
-            f"with known bulletproof hosting and malware distribution infrastructure."
-        )
+        for agent in (
+            ag.google_search_agent,
+            ag.bq_investigation_agent,
+            ag.visual_analysis_agent,
+            ag.soc_ticketing_agent,
+        ):
+            agent.model = model
+        ag.google_search_agent.tools = []  # Google Search grounding needs a real model
+
+    runner = Runner(
+        app_name="local-demo",
+        agent=ag.root_agent,
+        session_service=InMemorySessionService(),
+    )
+    session = await runner.session_service.create_session(
+        app_name="local-demo", user_id="local"
+    )
+    message = types.Content(
+        role="user", parts=[types.Part(text=ALERT_PREFIX + json.dumps(alert))]
+    )
+    try:
+        async for event in runner.run_async(
+            user_id="local", session_id=session.id, new_message=message
+        ):
+            for part in (event.content.parts if event.content else None) or []:
+                if part.function_call:
+                    print(f"  [{event.author}] calls {part.function_call.name}")
+                if part.function_response:
+                    response = json.dumps(part.function_response.response, default=str)
+                    if "SECURITY_GATE_VIOLATION" in response:
+                        print(f"  SECURITY GATE blocked {part.function_response.name}")
+    finally:
+        for agent in (
+            ag.bq_investigation_agent,
+            ag.visual_analysis_agent,
+            ag.soc_ticketing_agent,
+        ):
+            for toolset in agent.tools:
+                if isinstance(toolset, ag.ScopedMcpToolset):
+                    await toolset.close()
+    session = await runner.session_service.get_session(
+        app_name="local-demo", user_id="local", session_id=session.id
+    )
+    return dict(session.state)
+
+
+def report(state: dict[str, Any]) -> None:
+    from src.demo.soc_ticketing.ticketing_service import SocTicketingService
+
+    banner("[4] Outcome")
+    flags = (
+        "prompt_injection_detected",
+        "malicious_indicators",
+        "evidence_unavailable",
+        "telemetry_evidence_collected",
+        "visual_evidence_collected",
+    )
+    for flag in flags:
+        print(f"  {flag}: {bool(state.get(flag))}")
+    if state.get("ticket_dispatched"):
+        outcome = "Incident ticket dispatched to the triage queue."
+    elif state.get("escalation_dispatched"):
+        outcome = "Escalated to a human analyst (triage queue)."
+    elif state.get("false_positive_logged"):
+        outcome = "Closed as a false positive (archived as 'Auto-closed by agent')."
     else:
-        osint_intel = (
-            f"Public IP {source_ip} resolves to standard corporate ISP / enterprise VPN range. "
-            f"No malicious reputation or abuse reports found."
-        )
-    print(f"      Result: {osint_intel}")
-
-    # 2. bq_investigation_agent (24-Hour Forensic Log Query via Parameterized Profile Tool)
-    print("  [2] bq_investigation_agent (24-Hour Behavioral Telemetry):")
-    os.environ["LOCAL_MODE"] = "true"
-    from adk_agent.tools import get_entity_behavioral_profile, read_png_text_chunks
-
-    profile = get_entity_behavioral_profile("user", user_id)
-    fail_count = profile.get("total_login_failures_24h", 0)
-    risky_files = profile.get("risky_file_transfers_24h", 0)
-    mal_cmds = profile.get("malicious_commands_24h", 0)
-    mal_dns = profile.get("malicious_dns_queries_24h", 0)
-
-    if mal_cmds > 0 or risky_files > 0 or fail_count > 10 or mal_dns > 0:
-        bq_summary = (
-            f"24h Profile for '{user_id}': {fail_count} login failures followed by VPN session from {source_ip}. "
-            f"Telemetry records {risky_files} risky file transfers, {mal_cmds} malicious command executions, "
-            f"and {mal_dns} C2 DNS queries."
-        )
-    else:
-        bq_summary = (
-            f"24h Profile for '{user_id}': Normal corporate single sign-on activity ({fail_count} login failures). "
-            f"Routine maintenance script executed benign commands (ipconfig, ping, df -h) with user privileges. "
-            f"No foreign IPs, no privilege escalation."
-        )
-    print(f"      Result: {bq_summary}")
-
-    # 3. visual_analysis_agent (Multimodal Screenshot Vision Forensics & Injection Defense)
+        outcome = "No resolution recorded."
+    print(f"\n  {outcome}")
+    print(f"  Ticket: {state.get('ticket_id')}")
+    print(f"  Local queue: {SocTicketingService().queue_dir}")
     print(
-        "  [3] visual_analysis_agent (Screenshot Forensics & Prompt Injection Guard):"
-    )
-    screenshot_file = os.path.join(SCREENSHOTS_DIR, f"{user_id}.png")
-    prompt_injection_detected = False
-    has_screenshot = os.path.exists(screenshot_file)
-
-    if has_screenshot:
-        ocr_chunks = read_png_text_chunks(screenshot_file)
-        ocr_text = ocr_chunks.get("forensic_ocr_text", "")
-
-        INJECTION_KEYWORDS = [
-            "ai triage",
-            "classify as",
-            "instruction override",
-            "system notice to ai",
-            "override instruction",
-            "authorized red team",
-            "authorized pentest",
-            "suppress all critical",
-            "do not dispatch",
-            "do not alert",
-        ]
-        if any(kw in ocr_text.lower() for kw in INJECTION_KEYWORDS):
-            prompt_injection_detected = True
-            vision_analysis = (
-                f"OCR and visual inspection of '{screenshot_file}' confirms active terminal executing commands. "
-                f"CRITICAL WARNING - PROMPT INJECTION DETECTED: Deceptive visual banner on screen displays: "
-                f"'{ocr_text.strip()}'. Adversary is actively attempting to manipulate autonomous triage decisions."
-            )
-        elif "mimikatz" in ocr_text.lower() or "powershell" in ocr_text.lower():
-            vision_analysis = (
-                f"OCR and visual inspection of '{screenshot_file}' confirms active terminal executing: "
-                f"'{ocr_text.strip()}'. Visual evidence directly corroborates genuine threat."
-            )
-        else:
-            vision_analysis = (
-                f"OCR inspection of '{screenshot_file}' displays standard workspace: "
-                f"'{ocr_text.strip() or 'Developer console - no malicious tooling detected'}'. "
-                f"No suspicious terminal prompts or malicious tooling detected."
-            )
-    else:
-        vision_analysis = f"No desktop screenshot found for user '{user_id}'."
-    print(f"      Result: {vision_analysis}")
-
-    # 4. soc_ticketing_agent (Consolidation & Triage Verdict with Security Gating)
-    print("  [4] soc_ticketing_agent (Consolidation & Decision Gating):")
-    ticket_id = f"SOC-TICKET-{user_id}-{int(time.time())}"
-
-    # Demonstrate deterministic Security Gate verification using real ADK State
-    from google.adk.sessions.state import State
-
-    from adk_agent.agent import security_gate_callback
-
-    class _LocalTool:
-        name = "log_false_positive"
-
-    class _LocalToolContext:
-        def __init__(self, state: State):
-            self.state = state
-
-    demo_state = State(
-        {
-            "prompt_injection_detected": prompt_injection_detected,
-            "malicious_indicators": mal_cmds > 0 or risky_files > 0,
-            "evidence_unavailable": False,
-        },
-        {},
-    )
-    gate_block = security_gate_callback(_LocalTool(), {}, _LocalToolContext(demo_state))
-    if gate_block:
-        print(
-            f"      [🛡️ SECURITY GATE ENFORCED]: Attempted false-positive closure BLOCKED: {gate_block.get('reason')[:80]}..."
-        )
-
-    if prompt_injection_detected:
-        decision = "ESCALATED_PROMPT_INJECTION"
-        severity = "CRITICAL"
-        reason = (
-            "Security Gate Triggered: Threat score is high and forensic desktop evidence contains "
-            "active prompt injection attempting to coerce AI triage into false-positive closure."
-        )
-    elif (
-        mal_cmds > 0
-        or risky_files > 0
-        or (score >= 100 and ("North Korea" in osint_intel or "Russia" in osint_intel))
-    ):
-        decision = "GENUINE_THREAT"
-        severity = "CRITICAL"
-        reason = "Confirmed APT credential compromise, unauthorized tool execution, and hostile foreign C2 infrastructure."
-    else:
-        decision = "FALSE_POSITIVE"
-        severity = "LOW"
-        reason = "Benign administrative automation routine; no hostile IPs or malware identified."
-
-    if decision == "FALSE_POSITIVE":
-        recommendations = (
-            f"1. Confirm with the owner of `{user_id}` that the activity was the scheduled maintenance job.\n"
-            "2. Close as False Positive and tune the detection threshold for this service routine."
-        )
-    else:
-        recommendations = (
-            f"1. Isolate endpoint `{device_id}` from the network.\n"
-            f"2. Disable `{user_id}` and revoke active sessions and tokens.\n"
-            f"3. Block `{source_ip}` at the perimeter firewall and DNS resolver.\n"
-            "4. Collect memory and disk images for forensic review before reimaging."
-        )
-        if prompt_injection_detected:
-            recommendations += "\n5. Treat on-screen 'authorized test' claims as untrusted and confirm with the red team lead."
-
-    report = f"""### Security Incident Report
-* **Ticket ID:** `{ticket_id}`
-* **Entity / User:** `{user_id}`
-* **Endpoint / Device:** `{device_id}`
-* **Originating IP:** `{source_ip}`
-* **Anomaly Threat Score:** `{score}`
-* **Autonomous ADK Verdict:** `{decision}`
-
-**2. Behavioral Analysis (BigQuery)**
-* {bq_summary}
-
-**3. Visual Forensic Analysis**
-* {vision_analysis}
-
-**4. External Threat Intelligence (OSINT)**
-* {osint_intel}
-
-**5. Recommended Response Actions**
-{recommendations}
-"""
-    print(f"      Verdict: {decision} (Severity: {severity})")
-    print(f"      Generated Ticket ID: {ticket_id}")
-
-    ticket = SocTicket(
-        ticket_id=ticket_id,
-        alert_id=alert.get("alert_id"),
-        user_id=user_id,
-        device_id=device_id,
-        source_ip=source_ip,
-        threat_score=score,
-        severity=severity,
-        status="ESCALATED",
-        agent_decision=decision,
-        agent_reason=reason,
-        screenshot_url=f"file://{os.path.abspath(screenshot_file)}"
-        if has_screenshot
-        else None,
-        structured_report=report,
-        mitre_tactics=["Initial Access", "Command and Control", "Defense Evasion"]
-        if prompt_injection_detected
-        else (
-            ["Initial Access", "Command and Control", "Credential Access"]
-            if threat_type == "malicious"
-            else ["Discovery"]
-        ),
-        indicators_of_compromise=[source_ip, "c2-server-1.xyz"]
-        if (threat_type == "malicious" or prompt_injection_detected)
-        else [source_ip],
+        "\n  Open the console with:\n"
+        "  LOCAL_MODE=true uv run python -m streamlit run "
+        "src/demo/soc_ticketing/streamlit_soc_console.py"
     )
 
-    return {"ticket": ticket, "report": report}
 
-
-def step_4_dispatch_ticket_locally(ticket: SocTicket):
-    """Writes ticket to local queue for Streamlit triage."""
-    print("\n=======================================================")
-    print("[STEP 4] Dispatching Ticket to Local SOC Ticketing Queue")
-    print("=======================================================")
-    service = SocTicketingService(project_id="local-demo")
-    msg = service.create_and_dispatch_ticket(ticket)
-    ticket_file = os.path.join(
-        ESCALATIONS_DIR, f"human_escalation_information_{ticket.ticket_id}.json"
-    )
-
-    print(f"  -> {msg}")
-    print(f"  -> File Queue: {ticket_file}")
-    print("\n-------------------------------------------------------")
-    print("🎉 LOCAL DEMO EXECUTION COMPLETE!")
-    print("-------------------------------------------------------")
-    print("To open the interactive SOC Analyst Console, run:")
-    print(
-        "  LOCAL_MODE=true streamlit run src/demo/soc_ticketing/streamlit_soc_console.py"
-    )
-    print("-------------------------------------------------------\n")
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="End-to-End Local Demo Runner (No Cloud Required)"
-    )
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--threat", choices=sorted(DEFAULT_USERS), default="malicious")
+    parser.add_argument("--user", help="Target user (default depends on --threat).")
     parser.add_argument(
-        "--threat",
-        choices=["malicious", "false_positive", "injection"],
-        default="malicious",
-        help="Threat scenario to inject (malicious, false_positive, or injection).",
-    )
-    parser.add_argument(
-        "--user",
-        type=str,
-        default=None,
-        help="Target user (default: u.lewis for malicious, l.taylor for false_positive, c.wilson for injection).",
+        "--live-model",
+        action="store_true",
+        help="Use Gemini instead of the scripted model (needs model credentials).",
     )
     args = parser.parse_args()
+    user = args.user or DEFAULT_USERS[args.threat]
 
-    if args.user:
-        target_user = args.user
-    elif args.threat == "injection":
-        target_user = "c.wilson"
-    elif args.threat == "false_positive":
-        target_user = "l.taylor"
-    else:
-        target_user = "u.lewis"
-
-    # Step 1: Generate logs
-    scenario_data = step_1_generate_logs(
-        threat_type=args.threat, target_user=target_user
+    # Before adk_agent is imported: the agents read these when they are built.
+    os.environ["LOCAL_MODE"] = "true"
+    logs_dir = Path(
+        os.environ.setdefault(
+            "LOCAL_LOGS_DIR", str(REPO_ROOT / "local_demo_data" / "logs")
+        )
     )
 
-    # Step 2: Correlate
-    alert = step_2_correlate_events(scenario_data)
-
-    # Step 3: Run agent investigation
-    result = step_3_run_agent_investigation(alert, threat_type=args.threat)
-
-    # Step 4: Dispatch to SOC ticketing queue
-    step_4_dispatch_ticket_locally(result["ticket"])
+    generate_logs(args.threat, user, logs_dir)
+    alert = detect(user, logs_dir)
+    if alert is None:
+        return
+    state = asyncio.run(investigate(alert, args.threat, args.live_model))
+    report(state)
 
 
 if __name__ == "__main__":

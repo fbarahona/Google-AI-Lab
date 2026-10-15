@@ -40,25 +40,24 @@ except Exception:
     BigQueryAgentAnalyticsPlugin = None
     HAS_ANALYTICS = False
 
-# Add directories to sys.path to support adk web / agents-cli execution
-_CURRENT_DIR = Path(__file__).resolve().parent
-_SRC_DIR = _CURRENT_DIR.parent.parent
-for _p in [str(_CURRENT_DIR), str(_SRC_DIR), str(_CURRENT_DIR.parent)]:
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
 # --- Local Imports ---
-try:
-    from .logging_utils import log_agent_event, setup_logging
-    from .tools import alert_id_from_payload, ticket_id_for_alert
-except ImportError:
-    from logging_utils import log_agent_event, setup_logging
-    from tools import alert_id_from_payload, ticket_id_for_alert
+from adk_agent.logging_utils import log_agent_event, setup_logging
+from adk_agent.tools import (
+    SocTicket,
+    alert_id_from_payload,
+    get_soc_service,
+    ticket_id_for_alert,
+)
+
+# The repository root is the one import root (adk_agent and src.demo both resolve
+# from it); MCP server subprocesses get it on PYTHONPATH whatever their working dir.
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # --- Configuration ---
 load_dotenv()
 
 PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("PROJECT_ID", "local-demo")
+LOCAL_MODE = os.getenv("LOCAL_MODE", "false").lower() == "true"
 DATASET_ID = os.getenv("BIGQUERY_DATASET", "Cymbal_Cyber")
 MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 
@@ -165,8 +164,9 @@ def sync_mcp_security_state_callback(
     Synchronizes security and lifecycle flags from MCP tool responses back into ADK session state.
 
     MCP tools execute out-of-process in a separate MCP server without direct access to ADK session state.
-    This callback parses structured fields (security_flags, status) and fallback indicators returned
-    by MCP tools and deterministically sets the ADK session state flags:
+    This callback reads only the structured fields (security_flags, status) every tool returns,
+    never free text, which can carry attacker-controlled content such as screenshot OCR.
+    It deterministically sets the ADK session state flags:
     - prompt_injection_detected
     - malicious_indicators
     - evidence_unavailable
@@ -179,7 +179,6 @@ def sync_mcp_security_state_callback(
         return None
 
     payload: dict[str, Any] = {}
-    raw_text = ""
 
     if isinstance(tool_response, dict):
         if "security_flags" in tool_response or "status" in tool_response:
@@ -194,7 +193,6 @@ def sync_mcp_security_state_callback(
             for item in content_list:
                 if isinstance(item, dict) and "text" in item:
                     item_text = str(item["text"])
-                    raw_text += item_text
                     if not payload and item_text.strip().startswith("{"):
                         try:
                             data = json.loads(item_text)
@@ -202,15 +200,13 @@ def sync_mcp_security_state_callback(
                                 payload = data
                         except Exception:
                             pass
-    elif isinstance(tool_response, str):
-        raw_text = tool_response
-        if raw_text.strip().startswith("{"):
-            try:
-                data = json.loads(raw_text)
-                if isinstance(data, dict):
-                    payload = data
-            except Exception:
-                pass
+    elif isinstance(tool_response, str) and tool_response.strip().startswith("{"):
+        try:
+            data = json.loads(tool_response)
+            if isinstance(data, dict):
+                payload = data
+        except Exception:
+            pass
 
     tool_name = getattr(tool, "name", "")
 
@@ -256,38 +252,6 @@ def sync_mcp_security_state_callback(
     }:
         state["escalation_dispatched"] = True
     elif tool_name == "log_false_positive" and status == "RESOLVED_FALSE_POSITIVE":
-        state["false_positive_logged"] = True
-
-    # 3. Fallback text inspection, only when no structured payload was returned.
-    #    Tool output can embed attacker-controlled text (e.g. screenshot OCR), so
-    #    it must never override the structured contract.
-    if payload:
-        return None
-    text_lower = raw_text.lower()
-    if (
-        "prompt injection detected" in text_lower
-        or "instruction override" in text_lower
-    ):
-        state["prompt_injection_detected"] = True
-    if (
-        "evidence unavailable" in text_lower
-        or "critical infrastructure failure" in text_lower
-    ):
-        state["evidence_unavailable"] = True
-    if tool_name == "dispatch_to_soc_ticketing_system" and (
-        "ticket created and dispatched" in text_lower
-        or "dispatched to soc ticketing system" in text_lower
-    ):
-        state["ticket_dispatched"] = True
-    if (
-        tool_name == "escalate_to_human"
-        and "successfully escalated to human soc analyst" in text_lower
-    ):
-        state["escalation_dispatched"] = True
-    if (
-        tool_name == "log_false_positive"
-        and "successfully logged alert as a false positive" in text_lower
-    ):
         state["false_positive_logged"] = True
 
     return None
@@ -336,14 +300,9 @@ def create_mcp_toolset(
     timeout overrides MCP_TOOL_TIMEOUT_SECONDS; server_args lets tests launch a stub server.
     """
     env = dict(os.environ)
-    if "PYTHONPATH" not in env:
-        env["PYTHONPATH"] = (
-            str(_SRC_DIR)
-            + ":"
-            + str(_CURRENT_DIR.parent)
-            + ":"
-            + os.environ.get("PYTHONPATH", "")
-        )
+    env["PYTHONPATH"] = os.pathsep.join(
+        p for p in (str(REPO_ROOT), os.environ.get("PYTHONPATH", "")) if p
+    )
     params = StdioConnectionParams(
         server_params=StdioServerParameters(
             command=sys.executable,
@@ -360,8 +319,10 @@ def create_mcp_toolset(
 
 
 # --- Initialize BigQuery Analytics Plugin ---
+# Off in LOCAL_MODE: there is no BigQuery to write to, and the plugin would keep
+# retrying credentials in the background.
 bq_analytics_plugin = None
-if HAS_ANALYTICS and BigQueryAgentAnalyticsPlugin is not None:
+if not LOCAL_MODE and HAS_ANALYTICS and BigQueryAgentAnalyticsPlugin is not None:
     try:
         # create_views=False: per-event views need dataset-level tables.create, which
         # the agent SA deliberately lacks (it has dataset READER + table-level writes).
@@ -393,31 +354,6 @@ class ParallelOrchestratorAgent(ParallelAgent):
 
 
 # --- Callbacks ---
-def forbidden_dml_check(
-    tool: BaseTool, args: dict[str, Any], tool_context: ToolContext
-) -> dict | None:
-    """Inspects SQL queries prior to execution to prevent destructive DML operations, INFORMATION_SCHEMA access, and cross-dataset references."""
-    safe_args_str = json.dumps(args, default=str)
-    log_agent_event(
-        f"Tool '{tool.name}' called with arguments: {safe_args_str[:120]}..."
-    )
-
-    if tool.name == "execute_sql":
-        sql_query = args.get("query", "")
-        if sql_query:
-            try:
-                from .tools import validate_safe_sql_query
-            except ImportError:
-                from tools import validate_safe_sql_query
-            try:
-                validate_safe_sql_query(
-                    sql_query, allow_metadata=False, allowed_dataset=DATASET_ID
-                )
-            except ValueError as e:
-                return {"result": f"Tool execution was blocked: {e}"}
-    return None
-
-
 def security_gate_callback(
     tool: BaseTool, args: dict[str, Any], tool_context: ToolContext
 ) -> dict | None:
@@ -622,11 +558,6 @@ def default_deny_soc_callback(callback_context: CallbackContext):
         log_agent_event(
             "DEFAULT-DENY ENFORCEMENT: Model finished without invoking a resolution tool. Executing deterministic human escalation."
         )
-        try:
-            from .tools import SocTicket, get_soc_service
-        except (ImportError, ValueError):
-            from tools import SocTicket, get_soc_service
-
         soc_service = get_soc_service()
         user_id = state.get("user_id") or "unresolved_user"
         ticket_id = ticket_id_for_alert(

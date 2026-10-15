@@ -301,7 +301,7 @@ def create_svg():
     <text x="18" y="96" class="agent-desc"><tspan font-weight="700" fill="#ffffff">Target:</tspan> Failed auth, privilege esc, lateral move</text>
 
     <rect x="18" y="112" width="284" height="28" rx="6" fill="#1e1b4b" stroke="#6366f1" stroke-width="1"/>
-    <text x="28" y="130" class="pill-text" fill="#a5b4fc">🛠️ Tools: BigQueryToolset, SQL</text>
+    <text x="28" y="130" class="pill-text" fill="#a5b4fc">🛠️ Tools: behavioral profile (MCP)</text>
   </g>
 
   <!-- Agent 3: visual_analysis_agent -->
@@ -812,7 +812,7 @@ def create_png():
             "bq_investigation_agent",
             "Behavioral Profiling",
             "Queries 24h user activity logs",
-            "Tools: BigQueryToolset, SQL",
+            "Tools: behavioral profile (MCP)",
             (30, 27, 75),
             (129, 140, 248),
         ),

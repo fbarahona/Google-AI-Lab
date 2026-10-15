@@ -15,10 +15,12 @@
 import asyncio
 import base64
 import contextlib
+import hashlib
 import json
 import logging
 import os
 import time
+import uuid
 from collections import OrderedDict
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -26,7 +28,7 @@ from typing import Any
 
 from a2a.server.tasks import InMemoryTaskStore
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from google.adk.cli.fast_api import get_fast_api_app
 from google.adk.runners import Runner
@@ -124,8 +126,10 @@ app: FastAPI = get_fast_api_app(
     otel_to_cloud=otel_to_cloud,
     lifespan=lifespan,
 )
-app.title = "google"
-app.description = "API for interacting with the Agent google"
+app.title = "Cymbal Cyber ADK Agent"
+app.description = (
+    "Pub/Sub alert intake and investigation API for the Cymbal Cyber SOC agents"
+)
 
 
 def extract_pubsub_payload(raw_body: Any) -> dict[str, Any]:
@@ -529,14 +533,36 @@ def verify_incoming_oidc_token(request: Request) -> dict[str, Any]:
         ) from exc
 
 
-@app.post("/apps/adk_agent/trigger/pubsub")
-@app.post("/trigger/pubsub")
-async def handle_pubsub_trigger(
-    request: Request,
-    background_tasks: BackgroundTasks,
-    sync: bool = True,
-    caller_claims: dict[str, Any] = Depends(verify_incoming_oidc_token),
-):
+def _parse_timestamp(value: Any) -> datetime | None:
+    """alerts.updated_at as a datetime, whether BigQuery returned one or a string."""
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def session_id_for_alert(user_id: str, alert_id: str | None) -> str:
+    """One ADK session per alert, so a redelivery resumes it instead of colliding."""
+    suffix = (
+        hashlib.sha256(alert_id.encode("utf-8")).hexdigest()[:16]
+        if alert_id
+        else uuid.uuid4().hex[:16]
+    )
+    return f"pubsub-{user_id}-{suffix}"
+
+
+@app.post(
+    "/apps/adk_agent/trigger/pubsub",
+    dependencies=[Depends(verify_incoming_oidc_token)],
+)
+@app.post("/trigger/pubsub", dependencies=[Depends(verify_incoming_oidc_token)])
+async def handle_pubsub_trigger(request: Request):
     """
     Webhook receiving Pub/Sub push notifications for BigQuery Continuous Query security alerts.
     Unwraps base64 alert data, deduplicates at-least-once deliveries, tracks in-flight executions,
@@ -557,29 +583,11 @@ async def handle_pubsub_trigger(
             detail="Malformed Pub/Sub payload",
         ) from err
     user_id = alert_data.get("user_id") or "pubsub-automator"
-    session_id = f"pubsub-{user_id}-{int(time.time())}"
     prompt_text = (
         f"Investigate incoming continuous security alert: {json.dumps(alert_data)}"
     )
 
-    # 1. Runner Readiness: Check first! If unready, return 503 so Pub/Sub retries without marking dedup
-    runner: Runner = getattr(app.state, "runner", None)
-    app_name: str = getattr(app.state, "agent_app_name", "adk_agent")
-
-    if not runner:
-        logger.warning(
-            "Runner not yet initialized in app.state; returning 503 to trigger Pub/Sub retry."
-        )
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "SERVICE_UNAVAILABLE",
-                "message": "ADK Agent Runner is initializing; please retry.",
-                "session_id": session_id,
-            },
-        )
-
-    # 2. Extract alert_id contract attribute or construct from payload
+    # 1. Extract alert_id contract attribute or construct from payload
     alert_id = None
     pubsub_msg_id = None
     if isinstance(raw_body, dict):
@@ -606,6 +614,25 @@ async def handle_pubsub_trigger(
         or request.headers.get("x-goog-pubsub-message-id")
         or f"{user_id}-{int(time.time())}"
     )
+    session_id = session_id_for_alert(user_id, alert_id)
+
+    # 2. Runner readiness, before any dedup bookkeeping: if unready, return 503 so
+    #    Pub/Sub retries.
+    runner: Runner = getattr(app.state, "runner", None)
+    app_name: str = getattr(app.state, "agent_app_name", "adk_agent")
+
+    if not runner:
+        logger.warning(
+            "Runner not yet initialized in app.state; returning 503 to trigger Pub/Sub retry."
+        )
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "SERVICE_UNAVAILABLE",
+                "message": "ADK Agent Runner is initializing; please retry.",
+                "session_id": session_id,
+            },
+        )
 
     # 3. Fast-path in-memory and durable BigQuery alerts.status checks
     _cleanup_expired_messages()
@@ -649,17 +676,13 @@ async def handle_pubsub_trigger(
 
             # If currently INVESTIGATING: check if fresh or timed out (>10 min)
             if current_status == "INVESTIGATING":
-                is_stale = False
-                if updated_at:
-                    try:
-                        if isinstance(updated_at, datetime):
-                            elapsed = (datetime.now(UTC) - updated_at).total_seconds()
-                        else:
-                            elapsed = 0
-                        if elapsed > 600:
-                            is_stale = True
-                    except Exception:
-                        pass
+                # An unreadable timestamp counts as stale, so a stuck alert is retried
+                # rather than refused forever.
+                started = _parse_timestamp(updated_at)
+                is_stale = (
+                    started is None
+                    or (datetime.now(UTC) - started).total_seconds() > 600
+                )
 
                 if not is_stale:
                     logger.warning(

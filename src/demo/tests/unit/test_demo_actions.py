@@ -10,8 +10,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-import demo.data_generator.sinks as sinks
-from demo.data_generator.sinks import PubSubSink, to_bq_subscription_row
+import src.demo.data_generator.sinks as sinks
+from src.demo.data_generator.sinks import PubSubSink, to_bq_subscription_row
 from src.demo.data_pipeline.pubsub_to_bigquery_dataflow import parse_and_route_record
 from src.demo.soc_ticketing import demo_actions
 from src.demo.soc_ticketing.models import SIMULATED_DECISION

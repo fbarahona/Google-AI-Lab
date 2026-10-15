@@ -203,24 +203,8 @@ class BigQuerySink(BaseSink):
 
         self.project_id = project_id
         self.dataset_id = dataset_id
-        creds = None
         try:
-            from ..soc_ticketing.ticketing_service import get_gcp_credentials
-
-            creds = get_gcp_credentials()
-        except Exception:
-            try:
-                from src.demo.soc_ticketing.ticketing_service import get_gcp_credentials
-
-                creds = get_gcp_credentials()
-            except Exception:
-                pass
-
-        try:
-            if creds:
-                self.client = bigquery.Client(project=project_id, credentials=creds)
-            else:
-                self.client = bigquery.Client(project=project_id)
+            self.client = bigquery.Client(project=project_id)
         except Exception as exc:
             logger.error(
                 "Failed to initialize BigQuery Client. If running locally, ensure "

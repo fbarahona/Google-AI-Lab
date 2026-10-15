@@ -325,9 +325,9 @@ async def test_mcp_tool_updates_real_adk_state_on_behavioral_telemetry(
     Verify that executing get_entity_behavioral_profile through MCP populates
     malicious_indicators in real ADK State, which blocks log_false_positive.
     """
-    # Generate u.lewis malicious telemetry in an isolated working directory so the
+    # Generate u.lewis malicious telemetry in an isolated logs directory so the
     # test does not depend on gitignored logs from a prior local_runner run.
-    logs_dir = tmp_path / "local_demo_data" / "logs"
+    logs_dir = tmp_path / "logs"
     logs_dir.mkdir(parents=True)
     threat_acc, threat_net = SyntheticLogEngine(project_id="test").inject_threat(
         threat_type="malicious", user_id="u.lewis"
@@ -335,7 +335,8 @@ async def test_mcp_tool_updates_real_adk_state_on_behavioral_telemetry(
     LocalSink(output_dir=str(logs_dir), print_stdout=False).write_events(
         threat_acc, threat_net
     )
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LOCAL_LOGS_DIR", str(logs_dir))
+    monkeypatch.chdir(tmp_path)  # the MCP server must not depend on the working dir
     monkeypatch.delenv("PYTHONPATH", raising=False)
     monkeypatch.setenv("LOCAL_MODE", "true")
     toolset = create_mcp_toolset(["get_entity_behavioral_profile"])

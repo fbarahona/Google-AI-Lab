@@ -2,7 +2,6 @@
 Unit tests for ADK Agent tools, safety callbacks, SQL parameterization, and signed URL generation.
 """
 
-import os
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -13,7 +12,6 @@ from google.adk.sessions.state import State
 from adk_agent.agent import (
     before_orchestrator_starts,
     default_deny_soc_callback,
-    forbidden_dml_check,
     security_gate_callback,
 )
 from adk_agent.tools import (
@@ -164,12 +162,12 @@ def test_sanitize_entity_value_valid_inputs():
 
 
 def test_create_rich_ticket_id():
-    t1 = create_rich_ticket_id("u.lewis")
+    t1 = create_rich_ticket_id("u.lewis")["ticket_id"]
     assert t1.startswith("SOC-TICKET-u.lewis-")
 
     # JSON sanitization test
     bad_json = '{"user": "attacker"}'
-    t2 = create_rich_ticket_id(bad_json)
+    t2 = create_rich_ticket_id(bad_json)["ticket_id"]
     assert not t2.startswith('{"')
 
 
@@ -182,54 +180,15 @@ def test_parse_alert_payload_to_row():
     assert row["total_2_min_threat_score"] == 500
 
 
-def test_forbidden_dml_check():
-    mock_tool = MagicMock()
-    mock_tool.name = "execute_sql"
-    mock_context = MagicMock()
-
-    # Block DELETE
-    result = forbidden_dml_check(
-        mock_tool,
-        {"query": "DELETE FROM Cymbal_Cyber.network_events WHERE 1=1"},
-        mock_context,
-    )
-    assert result is not None
-    assert "blocked" in result["result"].lower()
-
-    # Block DROP
-    result_drop = forbidden_dml_check(
-        mock_tool, {"query": "DROP TABLE Cymbal_Cyber.network_events"}, mock_context
-    )
-    assert result_drop is not None
-
-    # Block INSERT
-    result_insert = forbidden_dml_check(
-        mock_tool,
-        {"query": "INSERT INTO Cymbal_Cyber.soc_tickets VALUES (1)"},
-        mock_context,
-    )
-    assert result_insert is not None
-
-    # Allow SELECT
-    result_select = forbidden_dml_check(
-        mock_tool,
-        {"query": "SELECT * FROM Cymbal_Cyber.network_events LIMIT 10"},
-        mock_context,
-    )
-    assert result_select is None
-
-
 def test_generate_signed_url_invalid_uri():
     """Verify that generate_signed_url returns explicit error on invalid GCS URI."""
     err1 = generate_signed_url("")
-    assert err1.startswith("Error:")
-    assert "Invalid GCS URI" in err1
-    assert not err1.startswith("https://")
+    assert "Invalid GCS URI" in err1["error"]
+    assert "signed_url" not in err1
 
     err2 = generate_signed_url("https://storage.googleapis.com/bucket/screenshot.png")
-    assert err2.startswith("Error:")
-    assert "Invalid GCS URI" in err2
-    assert "https://storage.cloud.google.com" not in err2
+    assert "Invalid GCS URI" in err2["error"]
+    assert "signed_url" not in err2
 
 
 @patch("adk_agent.tools.storage.Client")
@@ -251,11 +210,9 @@ def test_generate_signed_url_failure_returns_explicit_error(
 
     result = generate_signed_url("gs://cymbal-cyber-screenshots/u.lewis.png")
 
-    # Must be an explicit failure
-    assert result.startswith("Error: Failed to generate signed URL:")
-    # Must NEVER produce a misleading success result or public console URL
-    assert "https://storage.cloud.google.com" not in result
-    assert not result.startswith("https://")
+    # Must be an explicit failure, never a misleading success result or public URL
+    assert result["error"].startswith("Failed to generate signed URL:")
+    assert "signed_url" not in result
 
 
 @patch("adk_agent.tools.storage.Client")
@@ -271,7 +228,7 @@ def test_generate_signed_url_success(mock_auth_default, mock_storage_client_cls)
     mock_storage_client_cls.return_value = mock_client
 
     result = generate_signed_url("gs://cymbal-cyber-screenshots/u.lewis.png")
-    assert result == expected_signed_url
+    assert result == {"signed_url": expected_signed_url}
 
 
 def test_security_gate_blocks_false_positive_on_injection():
@@ -370,7 +327,9 @@ def test_log_false_positive_failed_write_does_not_set_flag(tmp_path, monkeypatch
     with patch("adk_agent.tools.get_soc_service", return_value=service):
         res = log_false_positive(payload, "Benign admin noise", tool_context=mock_ctx)
 
-    assert "Failed to log false positive" in res
+    assert res["status"] == "ERROR"
+    assert "Failed to log false positive" in res["error"]
+    assert res["security_flags"]["evidence_unavailable"] is True
     assert mock_ctx.state.get("false_positive_logged") is not True
     assert mock_ctx.state.get("evidence_unavailable") is True
 
@@ -392,7 +351,8 @@ def test_log_false_positive_archives_auto_closed_ticket(tmp_path, monkeypatch):
             tool_context=mock_ctx,
         )
 
-    assert "Successfully logged alert as a False Positive" in res
+    assert res["status"] == "RESOLVED_FALSE_POSITIVE"
+    assert res["security_flags"]["false_positive_logged"] is True
     assert mock_ctx.state.get("false_positive_logged") is True
     rows = {
         c.args[0].rsplit(".", 1)[-1]: c.args[1][0]
@@ -512,7 +472,8 @@ def test_read_png_text_chunks_and_injection_detection(monkeypatch):
     mock_ctx = MagicMock()
     mock_ctx.state = State({}, {})
     vis = get_visual_analysis_for_user(f"file://{C_WILSON_PNG}", tool_context=mock_ctx)
-    assert "PROMPT INJECTION DETECTED" in vis
+    assert "PROMPT INJECTION DETECTED" in vis["analysis"]
+    assert vis["security_flags"]["prompt_injection_detected"] is True
     assert mock_ctx.state.get("prompt_injection_detected") is True
 
 
@@ -537,15 +498,10 @@ def test_escalate_to_human_non_blocking():
         elapsed = time.time() - start
 
         assert elapsed < 0.2  # Runs in under a second (never blocks for 180s)
-        assert "ESCALATED_PENDING_REVIEW" in res
-        assert test_ticket_id in res
+        assert res["status"] == "ESCALATED_PENDING_REVIEW"
+        assert res["ticket_id"] == test_ticket_id
         assert mock_ctx.state.get("escalation_dispatched") is True
         assert mock_service.create_and_dispatch_ticket.called
-
-    # Clean up test artifact if created
-    test_file = f"./local_demo_data/escalations/human_escalation_information_{test_ticket_id}.json"
-    if os.path.exists(test_file):
-        os.remove(test_file)
 
 
 def test_ticket_id_for_alert_is_deterministic_per_alert():
@@ -634,3 +590,50 @@ def test_local_visual_analysis_fails_closed_without_screenshot(monkeypatch):
     assert "Visual evidence unavailable" in str(res)
     assert ctx.state.get("evidence_unavailable") is True
     assert ctx.state.get("visual_evidence_collected") is not True
+
+
+def _write_threat_logs(logs_dir, user="u.lewis"):
+    from src.demo.data_generator.log_generator import SyntheticLogEngine
+    from src.demo.data_generator.sinks import LocalSink
+
+    access, network = SyntheticLogEngine(project_id="test").inject_threat(
+        threat_type="malicious", user_id=user
+    )
+    LocalSink(output_dir=str(logs_dir)).write_events(access, network)
+    return next(a for a in access if a.get("event_type") == "login_success")
+
+
+def test_local_profile_accepts_every_entity_type_spelling(tmp_path, monkeypatch):
+    """user_id and user (and the device/ip aliases) must return the same profile."""
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    monkeypatch.setenv("LOCAL_LOGS_DIR", str(tmp_path))
+    login = _write_threat_logs(tmp_path)
+
+    by_user = get_entity_behavioral_profile("user", "u.lewis")
+    assert by_user["malicious_commands_24h"] > 0
+    assert get_entity_behavioral_profile("user_id", "u.lewis") == by_user
+    assert get_entity_behavioral_profile(
+        "device_id", login["device_id"]
+    ) == get_entity_behavioral_profile("device", login["device_id"])
+    assert get_entity_behavioral_profile(
+        "source_ip", login["source_ip"]
+    ) == get_entity_behavioral_profile("ip", login["source_ip"])
+
+
+def test_local_device_profile_finds_traffic_through_session_ips(tmp_path, monkeypatch):
+    """network_events has no device_id; device traffic comes via assigned session IPs."""
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    monkeypatch.setenv("LOCAL_LOGS_DIR", str(tmp_path))
+    login = _write_threat_logs(tmp_path)
+
+    profile = get_entity_behavioral_profile("device", login["device_id"])
+    assert profile["total_network_events_24h"] > 0
+    assert profile["malicious_commands_24h"] > 0
+    assert profile["security_flags"]["malicious_indicators"] is True
+
+
+def test_cloud_device_query_joins_network_events_through_session_ips():
+    sql, _ = build_event_logs_query("device_id", "ws-hr-05")
+    network_cte = sql.split("NetworkMetrics AS")[1]
+    assert "device_id" not in network_cte
+    assert "SELECT assigned_internal_ip FROM FlaggedSessions" in network_cte

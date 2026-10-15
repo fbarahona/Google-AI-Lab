@@ -25,6 +25,31 @@ _RECOMMENDATION = re.compile(
 )
 
 
+# Markdown that makes the analyst's browser fetch or open an attacker-chosen URL.
+# Report text can quote OCR from a user's desktop, so a screenshot reading
+# "![](https://attacker/x)" would otherwise become a beacon when the ticket opens.
+_MD_IMAGE = re.compile(r"!\[([^\]]*)\]\s*(\([^)]*\)|\[[^\]]*\])")
+_MD_INLINE_LINK = re.compile(
+    r"(?<!!)\[([^\]]+)\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)"
+)
+_MD_LINK_DEFINITION = re.compile(r"(?m)^\s{0,3}\[([^\]]+)\]:\s*(\S+).*$")
+_MD_AUTOLINK = re.compile(r"<((?:https?|ftp)://[^>\s]+)>")
+
+
+def neutralize_markdown(text: str) -> str:
+    """
+    Renders untrusted report text inert: images become a "[image removed]" note and
+    links show their destination as code instead of being clickable, so nothing in
+    a ticket loads or opens a URL by itself.
+    """
+    text = _MD_IMAGE.sub(
+        lambda m: f"[image removed: {m.group(1) or 'no alt text'}]", text or ""
+    )
+    text = _MD_INLINE_LINK.sub(lambda m: f"{m.group(1)} (`{m.group(2)}`)", text)
+    text = _MD_LINK_DEFINITION.sub(lambda m: f"[{m.group(1)}]: `{m.group(2)}`", text)
+    return _MD_AUTOLINK.sub(lambda m: f"`{m.group(1)}`", text)
+
+
 @dataclass
 class ReportSection:
     title: str

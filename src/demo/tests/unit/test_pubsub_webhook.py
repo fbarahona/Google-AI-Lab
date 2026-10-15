@@ -259,3 +259,53 @@ def test_pubsub_push_rejects_non_json_binary_base64_payload():
     response = client.post("/apps/adk_agent/trigger/pubsub", json=payload)
     assert response.status_code == 400
     assert response.json().get("detail") == "Malformed Pub/Sub payload"
+
+
+def test_session_id_is_stable_per_alert():
+    from adk_agent.fast_api_app import session_id_for_alert
+
+    first = session_id_for_alert("u.lewis", "u.lewis|2026-10-14T10:02:00Z")
+    assert first == session_id_for_alert("u.lewis", "u.lewis|2026-10-14T10:02:00Z")
+    assert first != session_id_for_alert("u.lewis", "u.lewis|2026-10-14T10:04:00Z")
+    assert session_id_for_alert("u.lewis", None) != session_id_for_alert(
+        "u.lewis", None
+    )
+
+
+@pytest.mark.parametrize(
+    ("minutes_ago", "expected_status"),
+    [(2, 409), (15, 200)],
+)
+def test_investigating_alert_staleness_reads_string_timestamps(
+    monkeypatch, minutes_ago, expected_status
+):
+    """updated_at may come back as a string; a stale INVESTIGATING alert is retried."""
+    from datetime import UTC, datetime, timedelta
+    from unittest.mock import AsyncMock, MagicMock
+
+    import adk_agent.fast_api_app as webhook
+
+    updated_at = (datetime.now(UTC) - timedelta(minutes=minutes_ago)).isoformat()
+    monkeypatch.setattr(
+        webhook,
+        "get_alert_status_info",
+        lambda _alert_id: {"status": "INVESTIGATING", "updated_at": updated_at},
+    )
+    monkeypatch.setattr(webhook, "update_alert_status", lambda *a, **k: None)
+    monkeypatch.setattr(
+        webhook, "_run_agent_investigation", AsyncMock(return_value="done")
+    )
+    app.state.runner = MagicMock()
+    try:
+        alert = {
+            "alert_id": f"stale-check-{minutes_ago}",
+            "user_id": "u.lewis",
+            "window_end": "2026-10-14T10:02:00Z",
+        }
+        b64 = base64.b64encode(json.dumps(alert).encode()).decode()
+        response = TestClient(app).post(
+            "/trigger/pubsub", json={"message": {"data": b64, "messageId": "m"}}
+        )
+    finally:
+        app.state.runner = None
+    assert response.status_code == expected_status
