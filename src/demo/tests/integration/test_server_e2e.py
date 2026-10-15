@@ -70,6 +70,9 @@ def start_server() -> subprocess.Popen[str]:
     ]
     env = os.environ.copy()
     env["INTEGRATION_TEST"] = "TRUE"
+    env["LOCAL_MODE"] = "true"
+    env["ENABLE_A2A"] = "true"
+    env["ADK_DEV_UI"] = "true"
     # Advertise a loopback URL so the A2A client can reach the card's transport.
     env["APP_URL"] = BASE_URL
     process = subprocess.Popen(

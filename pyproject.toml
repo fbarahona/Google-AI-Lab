@@ -61,7 +61,7 @@ select = [
 ignore = ["E501", "C901", "B006", "B008"] # ignore line too long, too complex, FastAPI Depends in defaults
 
 [tool.ruff.lint.isort]
-known-first-party = ["adk_agent", "frontend"]
+known-first-party = ["adk_agent"]
 
 [tool.ty]
 # ty is Astral's Rust-based type checker (same team as ruff/uv)
@@ -81,12 +81,13 @@ invalid-argument-type = "ignore"
 invalid-assignment = "ignore"
 invalid-return-type = "ignore"
 possibly-missing-attribute = "ignore"
+possibly-missing-implicit-call = "ignore"
 not-subscriptable = "ignore"
 deprecated = "ignore"
 
 [tool.codespell]
 ignore-words-list = "rouge"
-skip = "./locust_env/*,uv.lock,.venv,./frontend,**/package-lock.json,./local_demo_data/*"
+skip = "./locust_env/*,uv.lock,.venv,**/package-lock.json,./local_demo_data/*"
 
 
 [build-system]
@@ -96,6 +97,6 @@ build-backend = "hatchling.build"
 
 
 [tool.hatch.build.targets.wheel]
-packages = ["adk_agent","frontend"]
+packages = ["adk_agent"]
 
 

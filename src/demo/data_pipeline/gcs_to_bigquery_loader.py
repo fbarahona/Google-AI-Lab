@@ -21,7 +21,7 @@ class GcsToBigQueryLoader:
     def __init__(self, project_id: str | None = None, dataset_id: str = "Cymbal_Cyber"):
         self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT", "local-demo")
         self.dataset_id = dataset_id
-        self.client = bigquery.Client(project=project_id)
+        self.client = bigquery.Client(project=self.project_id)
 
     def load_table_from_gcs(
         self,

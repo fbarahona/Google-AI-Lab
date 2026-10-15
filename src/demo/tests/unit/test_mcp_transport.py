@@ -84,7 +84,12 @@ def test_default_deny_toolset_is_attached_to_no_agent():
         ag.soc_ticketing_agent,
     ):
         for toolset in agent.tools:
-            assert "auto_escalate_unresolved_alert" not in (toolset.tool_filter or [])
+            tool_filter = (
+                toolset.tool_filter
+                if isinstance(toolset.tool_filter, (list, tuple, set))
+                else []
+            )
+            assert "auto_escalate_unresolved_alert" not in tool_filter
     assert ag.default_deny_mcp.tool_filter == ["auto_escalate_unresolved_alert"]
 
 
