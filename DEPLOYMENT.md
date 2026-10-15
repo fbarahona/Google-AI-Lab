@@ -172,13 +172,22 @@ uv run python -m src.demo.data_generator.log_generator \
 echo "Allowing 60s for BigQuery streaming buffer ingestion..."
 sleep 60
 
-# Step D: Execute a detection pass
+# Step D: Execute a detection pass and wait for it to finish
 gcloud run jobs execute threat-detector \
   --project="${PROJECT_ID}" \
-  --region="${REGION}"
+  --region="${REGION}" \
+  --wait
 
-# Step E: Observe Cloud Run execution logs
-gcloud beta run jobs executions logs --project="${PROJECT_ID}" --region="${REGION}"
+# Step E: Read the latest execution's logs
+EXECUTION="$(gcloud run jobs executions list --job=threat-detector \
+  --project="${PROJECT_ID}" --region="${REGION}" --limit=1 --format='value(name)')"
+gcloud beta run jobs executions logs read "${EXECUTION}" \
+  --project="${PROJECT_ID}" --region="${REGION}"
+
+# Step F: One injection is one incident: one NEW (published) window, the rest CORRELATED
+bq query --use_legacy_sql=false \
+  "SELECT alert_id, incident_id, status, total_2_min_threat_score
+   FROM \`${PROJECT_ID}.Cymbal_Cyber.alerts\` WHERE user_id = 'u.lewis' ORDER BY window_end"
 ```
 
 ---
