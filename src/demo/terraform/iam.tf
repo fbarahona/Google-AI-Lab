@@ -375,6 +375,18 @@ resource "google_cloud_run_v2_service_iam_member" "soc_console_deployer_invoker"
 }
 
 
+# While the ADK playground is on (enable_adk_dev_ui), the console access identity may also
+# invoke the agent service, so analysts can open it through gcloud run services proxy with
+# an impersonated ID token. Removed again when the flag is turned off.
+resource "google_cloud_run_v2_service_iam_member" "agent_dev_ui_access_invoker" {
+  count    = var.enable_adk_dev_ui ? 1 : 0
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.adk_agent_service.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.console_access_sa.email}"
+}
+
 # Allow the console access identity to invoke the SOC Console
 resource "google_cloud_run_v2_service_iam_member" "soc_console_access_invoker" {
   project  = var.project_id
