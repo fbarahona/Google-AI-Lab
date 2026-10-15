@@ -1,0 +1,26 @@
+# Keeps secrets and build noise out of the Docker build context. The Dockerfile copies
+# only runtime code; this list is the second guard, so a local `docker build` can never
+# pick up Terraform state, tfvars or .env files that exist on disk but not in git.
+.git
+.venv
+.env
+.env.*
+!.env.example
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+.ruff_cache
+
+# Infrastructure, scripts and tests are not part of the runtime image.
+src/demo/terraform
+src/demo/scripts
+src/demo/tests
+src/demo/other_code
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfvars
+**/.terraform
+
+# Local demo output (the image only needs the sample screenshots).
+local_demo_data/escalations
+local_demo_data/logs

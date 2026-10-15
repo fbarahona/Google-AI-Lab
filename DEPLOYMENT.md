@@ -26,7 +26,7 @@ To execute `./src/demo/scripts/deploy_cloud.sh` or run `terraform apply`, the de
 | Domain | Role ID | Purpose |
 | :--- | :--- | :--- |
 | **Project IAM** | `roles/resourcemanager.projectIamAdmin` | **Required**: Grants project roles (`aiplatform.user`, `bigquery.jobUser`) to workload SAs. |
-| **Service Accounts** | `roles/iam.serviceAccountAdmin` | Creates the workload SAs (`agent-sa`, `cq-sa`, `invoker-sa`, `detector-sa`). |
+| **Service Accounts** | `roles/iam.serviceAccountAdmin` | Creates the workload SAs (`agent-sa`, `console-sa`, `invoker-sa`, `scheduler-sa`, `detector-sa`, and `cq-sa` when continuous queries are on). |
 | **Service Account Actor** | `roles/iam.serviceAccountUser` | Authorizes attaching SAs to Cloud Run services and jobs (`actAs`). |
 | **API Management** | `roles/serviceusage.serviceUsageAdmin` | Enables necessary Google Cloud APIs (`gcloud services enable`). |
 | **BigQuery** | `roles/bigquery.admin` | Creates dataset `Cymbal_Cyber`, tables, and SQL routines. |
@@ -198,30 +198,24 @@ The `gcloud run services proxy` command securely tunnels web traffic through you
 > ```
 
 #### Interactive SOC Analyst Console (Streamlit):
+The proxy authenticates as your own account, which holds `roles/run.invoker` on the console (the deploy script grants it to the deploying identity). Do not impersonate `pubsub-invoker-sa` for this: that identity is reserved for Pub/Sub pushes to the agent webhook and has no access to the console.
 ```bash
-SOC_URL="$(gcloud run services describe cymbal-cyber-soc-console --project="${PROJECT_ID}" --region="${REGION}" --format="value(status.url)")"
-TOKEN="$(gcloud auth print-identity-token --impersonate-service-account=pubsub-invoker-sa@${PROJECT_ID}.iam.gserviceaccount.com --audiences="${SOC_URL}" 2>/dev/null)"
-
 gcloud run services proxy cymbal-cyber-soc-console \
   --project="${PROJECT_ID}" \
   --region="${REGION}" \
-  --port=8501 \
-  --token="${TOKEN}"
+  --port=8501
 ```
 Open **`http://localhost:8501`** in your browser to view the incident queue, triage tickets, and inspect visual evidence.
 
-#### ADK Agent Web Playground & FastAPI Backend:
+#### ADK Agent Web Playground (off by default):
+The cloud agent service serves only the Pub/Sub webhook. The ADK web UI, `/run`, session and A2A APIs, and `/docs` are not routed, because they run investigations as the agent SA without the webhook's OIDC check. For a supervised demo, apply Terraform with `-var="enable_adk_dev_ui=true"`, then:
 ```bash
-AGENT_URL="$(gcloud run services describe cymbal-cyber-adk-agent --project="${PROJECT_ID}" --region="${REGION}" --format="value(status.url)")"
-TOKEN="$(gcloud auth print-identity-token --impersonate-service-account=pubsub-invoker-sa@${PROJECT_ID}.iam.gserviceaccount.com --audiences="${AGENT_URL}" 2>/dev/null)"
-
 gcloud run services proxy cymbal-cyber-adk-agent \
   --project="${PROJECT_ID}" \
   --region="${REGION}" \
-  --port=8080 \
-  --token="${TOKEN}"
+  --port=8080
 ```
-Open **`http://localhost:8080`** for the interactive ADK agent chat playground, or **`http://localhost:8080/docs`** for interactive Swagger API documentation.
+Open **`http://localhost:8080`** for the playground, and apply again without the flag afterwards. Locally, `LOCAL_MODE=true agents-cli playground` needs no flag.
 
 ---
 
@@ -241,7 +235,7 @@ Open **`http://localhost:8080`** for the interactive ADK agent chat playground, 
    ```
 
 2. **Open in Web Browser:**  
-   Navigate directly to the printed URL in any browser logged into your Google Cloud account (ensure your user account possesses `roles/run.invoker`).
+   Navigate directly to the printed console URL in any browser logged into your Google Cloud account (ensure your user account possesses `roles/run.invoker`). The agent URL answers only Pub/Sub pushes.
 
 3. **Optional: Public Access for Live Demonstrations:**  
    To permit unauthenticated web access for public presentations:

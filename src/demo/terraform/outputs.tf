@@ -14,8 +14,8 @@ output "service_account_email" {
 }
 
 output "continuous_query_service_account_email" {
-  description = "Dedicated BigQuery continuous query service account email."
-  value       = google_service_account.continuous_query_sa.email
+  description = "Dedicated BigQuery continuous query service account email (empty unless enable_continuous_query)."
+  value       = one(google_service_account.continuous_query_sa[*].email)
 }
 
 output "agent_service_account_email" {
@@ -29,8 +29,13 @@ output "console_service_account_email" {
 }
 
 output "invoker_service_account_email" {
-  description = "Dedicated Pub/Sub push subscription invoker service account email."
+  description = "Pub/Sub push identity, the only caller of the agent webhook."
   value       = google_service_account.invoker_sa.email
+}
+
+output "scheduler_service_account_email" {
+  description = "Cloud Scheduler identity that runs the threat detector job."
+  value       = google_service_account.scheduler_sa.email
 }
 
 output "bigquery_dataset_id" {

@@ -4,7 +4,9 @@
 
 # 1. Continuous Query Workload Service Account
 # Role: Runs BigQuery Continuous Query stream processing and publishes alerts.
+# Only exists with enable_continuous_query: an unused identity is still a credential.
 resource "google_service_account" "continuous_query_sa" {
+  count        = var.enable_continuous_query ? 1 : 0
   project      = var.project_id
   account_id   = var.service_account_id
   display_name = "Cymbal Cyber Continuous Query SA"
@@ -23,27 +25,45 @@ locals {
 }
 
 resource "google_project_iam_member" "cq_project_bindings" {
-  for_each = local.cq_project_roles
+  for_each = var.enable_continuous_query ? local.cq_project_roles : toset([])
 
   project = var.project_id
   role    = each.value
-  member  = "serviceAccount:${google_service_account.continuous_query_sa.email}"
+  member  = "serviceAccount:${google_service_account.continuous_query_sa[0].email}"
 }
 
 # Resource-level Pub/Sub publisher scoped strictly to alerts topic
 resource "google_pubsub_topic_iam_member" "cq_alerts_publisher" {
+  count   = var.enable_continuous_query ? 1 : 0
   project = var.project_id
   topic   = google_pubsub_topic.alerts_topic.name
   role    = "roles/pubsub.publisher"
-  member  = "serviceAccount:${google_service_account.continuous_query_sa.email}"
+  member  = "serviceAccount:${google_service_account.continuous_query_sa[0].email}"
 }
 
 # Resource-level BigQuery dataset READER access
 resource "google_bigquery_dataset_access" "cq_dataset_reader" {
+  count         = var.enable_continuous_query ? 1 : 0
   project       = var.project_id
   dataset_id    = google_bigquery_dataset.cyber_dataset.dataset_id
   role          = "READER"
-  user_by_email = google_service_account.continuous_query_sa.email
+  user_by_email = google_service_account.continuous_query_sa[0].email
+}
+
+# These resources were unconditional before; keep their state when enabled.
+moved {
+  from = google_service_account.continuous_query_sa
+  to   = google_service_account.continuous_query_sa[0]
+}
+
+moved {
+  from = google_pubsub_topic_iam_member.cq_alerts_publisher
+  to   = google_pubsub_topic_iam_member.cq_alerts_publisher[0]
+}
+
+moved {
+  from = google_bigquery_dataset_access.cq_dataset_reader
+  to   = google_bigquery_dataset_access.cq_dataset_reader[0]
 }
 
 
@@ -58,10 +78,10 @@ resource "google_service_account" "agent_sa" {
   depends_on = [google_project_service.required]
 }
 
-# Project-level least-privilege roles for Agent Runtime SA
+# Project-level least-privilege roles for Agent Runtime SA. aiplatform.user serves every
+# Gemini call (agents and vision) through Vertex AI; no BigQuery connections are used.
 locals {
   agent_project_roles = toset([
-    "roles/bigquery.connectionUser",
     "roles/aiplatform.user",
     "roles/logging.logWriter",
     "roles/serviceusage.serviceUsageConsumer",
@@ -229,13 +249,26 @@ resource "google_pubsub_topic_iam_member" "console_raw_logs_publisher" {
 }
 
 
-# 3. Pub/Sub Push Subscription & Cloud Scheduler Invoker Service Account
-# Role: Dedicated identity used by Pub/Sub push subscription and Cloud Scheduler to authenticate to Agent Runtime endpoint and trigger the Threat Detector job.
+# 3. Pub/Sub Push Identity
+# Role: Signs the OIDC token on Pub/Sub pushes to the agent webhook, which accepts only
+# this identity (EXPECTED_INVOKER_EMAIL). It can invoke nothing else.
 resource "google_service_account" "invoker_sa" {
   project      = var.project_id
   account_id   = var.invoker_service_account_id
-  display_name = "Cymbal Cyber Pub/Sub & Scheduler Invoker SA"
-  description  = "Dedicated identity used by Pub/Sub and Cloud Scheduler to invoke Cloud Run services and jobs."
+  display_name = "Cymbal Cyber Pub/Sub Push Invoker SA"
+  description  = "Signs Pub/Sub push requests to the agent webhook; invoker on that service only."
+
+  depends_on = [google_project_service.required]
+}
+
+# 3b. Cloud Scheduler Identity
+# Role: Starts the threat detector job every 5 minutes. Kept apart from the push identity
+# so a token for one trust path cannot be used on the other.
+resource "google_service_account" "scheduler_sa" {
+  project      = var.project_id
+  account_id   = var.scheduler_service_account_id
+  display_name = "Cymbal Cyber Threat Detector Scheduler SA"
+  description  = "Cloud Scheduler identity that runs the threat-detector Cloud Run job."
 
   depends_on = [google_project_service.required]
 }
@@ -249,7 +282,8 @@ resource "google_cloud_run_v2_service_iam_member" "agent_invoker" {
   member   = "serviceAccount:${google_service_account.invoker_sa.email}"
 }
 
-# Allow deployer identity to invoke the Cloud Run Agent Service (Web Playground & Swagger docs)
+# Allow deployer identity to invoke the Cloud Run Agent Service (the ADK web UI, when
+# enable_adk_dev_ui is set)
 resource "google_cloud_run_v2_service_iam_member" "agent_deployer_invoker" {
   count    = var.deployer_member != "" ? 1 : 0
   project  = var.project_id
@@ -259,13 +293,13 @@ resource "google_cloud_run_v2_service_iam_member" "agent_deployer_invoker" {
   member   = var.deployer_member
 }
 
-# Allow Invoker SA to trigger the threat detector Cloud Run Job (Cloud Scheduler 5-minute trigger)
+# Allow the Scheduler SA to run the threat detector Cloud Run Job (5-minute trigger)
 resource "google_cloud_run_v2_job_iam_member" "scheduler_invokes_detector" {
   project  = var.project_id
   location = var.region
   name     = google_cloud_run_v2_job.threat_detector.name
   role     = "roles/run.invoker"
-  member   = "serviceAccount:${google_service_account.invoker_sa.email}"
+  member   = "serviceAccount:${google_service_account.scheduler_sa.email}"
 }
 
 # Allow deployer identity to invoke the SOC Console
@@ -276,15 +310,6 @@ resource "google_cloud_run_v2_service_iam_member" "soc_console_deployer_invoker"
   name     = google_cloud_run_v2_service.soc_console_service.name
   role     = "roles/run.invoker"
   member   = var.deployer_member
-}
-
-# Allow Invoker SA to invoke the SOC Console
-resource "google_cloud_run_v2_service_iam_member" "soc_console_invoker_sa" {
-  project  = var.project_id
-  location = var.region
-  name     = google_cloud_run_v2_service.soc_console_service.name
-  role     = "roles/run.invoker"
-  member   = "serviceAccount:${google_service_account.invoker_sa.email}"
 }
 
 
@@ -470,13 +495,7 @@ resource "google_bigquery_table_iam_member" "detector_alerts_editor" {
   member     = "serviceAccount:${google_service_account.detector_sa.email}"
 }
 
-resource "google_bigquery_table_iam_member" "detector_dlq_editor" {
-  project    = var.project_id
-  dataset_id = google_bigquery_dataset.cyber_dataset.dataset_id
-  table_id   = google_bigquery_table.alerts_dead_letter.table_id
-  role       = "roles/bigquery.dataEditor"
-  member     = "serviceAccount:${google_service_account.detector_sa.email}"
-}
+# The detector only reads alerts_dead_letter; dataset READER above covers it.
 
 resource "google_bigquery_table_iam_member" "detector_soc_tickets_editor" {
   project    = var.project_id
@@ -520,11 +539,14 @@ resource "google_artifact_registry_repository_iam_member" "compute_sa_writer" {
   member     = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
 }
 
-# Grant Compute Engine default service account storage viewer permissions to read Cloud Build source tarballs
-resource "google_project_iam_member" "compute_sa_storage_viewer" {
-  project = var.project_id
-  role    = "roles/storage.objectViewer"
-  member  = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
+# Grant the Compute Engine default service account (the Cloud Build identity) read access
+# to the build source bucket only. A project-wide objectViewer would also expose ticket,
+# screenshot and Terraform state buckets. deploy_cloud.sh creates this bucket and stages
+# every build's source there.
+resource "google_storage_bucket_iam_member" "compute_sa_build_source_viewer" {
+  bucket = "${var.project_id}_cloudbuild"
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
 }
 
 # Grant Compute Engine default service account logging writer permissions to publish build logs

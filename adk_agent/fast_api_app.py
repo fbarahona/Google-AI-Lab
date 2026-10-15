@@ -60,6 +60,24 @@ def _should_enable_cloud_telemetry() -> bool:
 
 otel_to_cloud = _should_enable_cloud_telemetry()
 
+
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    return value.lower() in ("true", "1")
+
+
+# The ADK developer surface (web UI, /run, session and builder APIs) executes agents as
+# the service account with no OIDC check, so it is on only for local development unless
+# ADK_DEV_UI=true opts in. In the cloud the service exposes just the Pub/Sub webhook.
+_LOCAL_MODE = _env_flag("LOCAL_MODE", False)
+ADK_DEV_UI_ENABLED = _env_flag("ADK_DEV_UI", _LOCAL_MODE)
+A2A_ENABLED = _env_flag("ENABLE_A2A", ADK_DEV_UI_ENABLED)
+
+# Routes served when the developer surface is off.
+WEBHOOK_ROUTES = frozenset({"/trigger/pubsub", "/apps/adk_agent/trigger/pubsub"})
+
 AGENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -76,6 +94,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.runner = runner
     app.state.agent_app_name = adk_app.name
+    if not A2A_ENABLED:
+        yield
+        return
     await attach_a2a_routes(
         app,
         agent=root_agent,
@@ -96,7 +117,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app: FastAPI = get_fast_api_app(
     agents_dir=AGENT_DIR,
-    web=True,
+    web=ADK_DEV_UI_ENABLED,
     artifact_service_uri=services.ARTIFACT_SERVICE_URI,
     allow_origins=allow_origins,
     session_service_uri=services.SESSION_SERVICE_URI,
@@ -726,6 +747,22 @@ async def handle_pubsub_trigger(
         ) from exc
     finally:
         _IN_PROGRESS_MESSAGES.pop(message_id, None)
+
+
+def restrict_to_webhook_routes(fastapi_app: FastAPI) -> None:
+    """Drops every route except the Pub/Sub webhook (including /docs and /openapi.json)."""
+    fastapi_app.router.routes = [
+        route
+        for route in fastapi_app.router.routes
+        if getattr(route, "path", None) in WEBHOOK_ROUTES
+    ]
+    fastapi_app.openapi_url = None
+    fastapi_app.docs_url = None
+    fastapi_app.redoc_url = None
+
+
+if not ADK_DEV_UI_ENABLED:
+    restrict_to_webhook_routes(app)
 
 
 def get_app_port() -> int:

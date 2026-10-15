@@ -38,12 +38,20 @@ resource "google_cloud_run_v2_service" "adk_agent_service" {
         name  = "GOOGLE_CLOUD_PROJECT"
         value = var.project_id
       }
-      dynamic "env" {
-        for_each = var.gemini_api_key != "" ? [var.gemini_api_key] : []
-        content {
-          name  = "GEMINI_API_KEY"
-          value = env.value
-        }
+      # Agent models and the vision tool call Gemini on Vertex AI as the agent SA
+      # (roles/aiplatform.user): no API key in env or Terraform state.
+      env {
+        name  = "GOOGLE_GENAI_USE_VERTEXAI"
+        value = "true"
+      }
+      env {
+        name  = "GOOGLE_CLOUD_LOCATION"
+        value = var.vertex_ai_location
+      }
+      # The ADK web UI and /run APIs bypass the webhook's OIDC check; off unless opted in.
+      env {
+        name  = "ADK_DEV_UI"
+        value = var.enable_adk_dev_ui ? "true" : "false"
       }
       env {
         name  = "LOCAL_MODE"
@@ -174,7 +182,7 @@ resource "google_cloud_scheduler_job" "threat_detector_schedule" {
     }
 
     oauth_token {
-      service_account_email = google_service_account.invoker_sa.email
+      service_account_email = google_service_account.scheduler_sa.email
       scope                 = "https://www.googleapis.com/auth/cloud-platform"
     }
   }
@@ -182,7 +190,7 @@ resource "google_cloud_scheduler_job" "threat_detector_schedule" {
   depends_on = [
     google_project_service.required,
     google_cloud_run_v2_job.threat_detector,
-    google_service_account.invoker_sa
+    google_cloud_run_v2_job_iam_member.scheduler_invokes_detector
   ]
 }
 
@@ -216,8 +224,6 @@ resource "google_cloud_run_v2_service" "soc_console_service" {
         "src/demo/soc_ticketing/streamlit_soc_console.py",
         "--server.port=8080",
         "--server.address=0.0.0.0",
-        "--server.enableCORS=false",
-        "--server.enableXsrfProtection=false",
         "--browser.gatherUsageStats=false"
       ]
 

@@ -46,9 +46,15 @@ variable "console_service_account_id" {
 }
 
 variable "invoker_service_account_id" {
-  description = "ID for the dedicated Pub/Sub push subscription invoker service account."
+  description = "ID for the Pub/Sub push identity, the only caller allowed to invoke the agent webhook."
   type        = string
   default     = "pubsub-invoker-sa"
+}
+
+variable "scheduler_service_account_id" {
+  description = "ID for the Cloud Scheduler identity that starts the threat detector job."
+  type        = string
+  default     = "threat-detector-scheduler-sa"
 }
 
 variable "dataflow_service_account_id" {
@@ -99,11 +105,16 @@ variable "agent_image" {
   default     = ""
 }
 
-variable "gemini_api_key" {
-  description = "Optional Gemini API key for Google AI Studio / Gemini API authentication. If omitted (empty string), Vertex AI workload identity authentication is used."
+variable "vertex_ai_location" {
+  description = "Vertex AI location for Gemini calls from the agent service (models and vision). 'global' serves the newest models; compute stays in var.region."
   type        = string
-  default     = ""
-  sensitive   = true
+  default     = "global"
+}
+
+variable "enable_adk_dev_ui" {
+  description = "Serve the ADK web UI, /run, session and A2A APIs on the agent service. They run investigations as the agent SA without the webhook's OIDC check, so keep false outside short, supervised demos."
+  type        = bool
+  default     = false
 }
 
 variable "deployer_member" {

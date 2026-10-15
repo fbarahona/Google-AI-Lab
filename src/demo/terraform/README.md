@@ -40,7 +40,7 @@ To execute `terraform apply` or run the automated deployment script, the deployi
 | Domain | Role ID | Purpose |
 | :--- | :--- | :--- |
 | **Project IAM** | `roles/resourcemanager.projectIamAdmin` | **Required**: Grants project roles (`aiplatform.user`, `bigquery.jobUser`) to workload SAs. |
-| **Service Accounts** | `roles/iam.serviceAccountAdmin` | Creates the 4 workload SAs (`agent-sa`, `cq-sa`, `invoker-sa`, `detector-sa`). |
+| **Service Accounts** | `roles/iam.serviceAccountAdmin` | Creates the workload SAs (`agent-sa`, `console-sa`, `invoker-sa`, `scheduler-sa`, `detector-sa`, and `cq-sa` when continuous queries are on). |
 | **Service Account Actor** | `roles/iam.serviceAccountUser` | Authorizes attaching SAs to Cloud Run services and jobs (`actAs`). |
 | **API Management** | `roles/serviceusage.serviceUsageAdmin` | Enables necessary Google Cloud APIs (`gcloud services enable`). |
 | **BigQuery** | `roles/bigquery.admin` | Creates dataset `Cymbal_Cyber`, tables, SQL routines, and Vertex AI connections. |
@@ -114,4 +114,4 @@ terraform destroy -var="project_id=<PROJECT_ID>"
 ```
 
 > [!NOTE]
-> By default, destroying this module preserves Google Cloud APIs (`disable_on_destroy = false`) and non-force-destroyed Cloud Storage buckets containing historical data.
+> By default, destroying this module preserves Google Cloud APIs (`disable_on_destroy = false`) and non-force-destroyed Cloud Storage buckets containing historical data.
