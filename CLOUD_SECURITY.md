@@ -50,6 +50,10 @@ In enterprise security engineering, granting broad administrative roles across a
 │    - Cloud Scheduler OAuth identity that starts the threat-detector job     │
 │    - run.invoker on that job only; ZERO ambient project roles               │
 ├─────────────────────────────────────────────────────────────────────────────┤
+│ 5c. Console Access Identity (`soc-console-access`)                          │
+│    - Humans impersonate it to open the console through gcloud proxy         │
+│    - run.invoker on the console only; ZERO ambient project roles            │
+├─────────────────────────────────────────────────────────────────────────────┤
 │ 6. Tool Isolation Layer: Local Model Context Protocol (MCP) Server          │
 │    - Dedicated stdio tool server (`adk_agent/mcp_server`)                   │
 │    - Eliminates legacy BigQuery external connection (`bqcx-...`) entirely  │
@@ -236,6 +240,10 @@ To enforce the principle of least privilege, background automation is split into
 ### 4D. Scheduler Identity (`threat-detector-scheduler-sa`)
 - **Purpose:** OAuth identity Cloud Scheduler uses to start the `threat-detector` job every 5 minutes. Separate from the push identity, so neither trust path can be used for the other.
 - **Roles:** `roles/run.invoker` on the `threat-detector` job only. Zero ambient project roles.
+
+### 4D-2. Console Access Identity (`soc-console-access`)
+- **Purpose:** Analysts open the SOC console with `gcloud run services proxy` and an ID token minted for this account, with the console URL as audience. The console stays private: no `allUsers` binding.
+- **Roles:** `roles/run.invoker` on `cymbal-cyber-soc-console` only. Zero ambient project roles. `roles/iam.serviceAccountTokenCreator` on this account goes to `deployer_member` and `console_access_members` only.
 
 ### 4E. Agent Service Exposure
 - In the cloud the agent service serves only `POST /trigger/pubsub` (and its `/apps/adk_agent/trigger/pubsub` alias), which verifies the Pub/Sub OIDC token. The ADK web UI, `/run`, session, builder and A2A APIs, and the OpenAPI docs are not routed, because they would run investigations as the agent SA without that check.

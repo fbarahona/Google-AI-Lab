@@ -26,7 +26,7 @@ To execute `./src/demo/scripts/deploy_cloud.sh` or run `terraform apply`, the de
 | Domain | Role ID | Purpose |
 | :--- | :--- | :--- |
 | **Project IAM** | `roles/resourcemanager.projectIamAdmin` | **Required**: Grants project roles (`aiplatform.user`, `bigquery.jobUser`) to workload SAs. |
-| **Service Accounts** | `roles/iam.serviceAccountAdmin` | Creates the workload SAs (`agent-sa`, `console-sa`, `invoker-sa`, `scheduler-sa`, `detector-sa`, and `cq-sa` when continuous queries are on). |
+| **Service Accounts** | `roles/iam.serviceAccountAdmin` | Creates the workload SAs (`agent-sa`, `console-sa`, `invoker-sa`, `scheduler-sa`, `console-access`, `detector-sa`, and `cq-sa` when continuous queries are on). |
 | **Service Account Actor** | `roles/iam.serviceAccountUser` | Authorizes attaching SAs to Cloud Run services and jobs (`actAs`). |
 | **API Management** | `roles/serviceusage.serviceUsageAdmin` | Enables necessary Google Cloud APIs (`gcloud services enable`). |
 | **BigQuery** | `roles/bigquery.admin` | Creates dataset `Cymbal_Cyber`, tables, and SQL routines. |
@@ -198,13 +198,20 @@ The `gcloud run services proxy` command securely tunnels web traffic through you
 > ```
 
 #### Interactive SOC Analyst Console (Streamlit):
-The proxy authenticates as your own account, which holds `roles/run.invoker` on the console (the deploy script grants it to the deploying identity). Do not impersonate `pubsub-invoker-sa` for this: that identity is reserved for Pub/Sub pushes to the agent webhook and has no access to the console.
+The proxy authenticates with an ID token for `soc-console-access`, a service account that holds `roles/run.invoker` on the console only. Terraform lets `deployer_member` (and anyone in `console_access_members`) mint tokens for it. Its tokens carry the console URL as their audience, which Cloud Run always accepts; a plain user token from `gcloud auth print-identity-token` carries the OAuth client as audience and can be rejected with `401 Unauthorized`. Do not use `pubsub-invoker-sa` for this: it is reserved for Pub/Sub pushes to the agent webhook.
 ```bash
+CONSOLE_SA="soc-console-access@${PROJECT_ID}.iam.gserviceaccount.com"
+CONSOLE_URL="$(gcloud run services describe cymbal-cyber-soc-console \
+  --project="${PROJECT_ID}" --region="${REGION}" --format="value(status.url)")"
+
 gcloud run services proxy cymbal-cyber-soc-console \
   --project="${PROJECT_ID}" \
   --region="${REGION}" \
-  --port=8501
+  --port=8501 \
+  --token="$(gcloud auth print-identity-token \
+    --impersonate-service-account="${CONSOLE_SA}" --audiences="${CONSOLE_URL}")"
 ```
+The token lasts one hour; restart the proxy to refresh it. `401` means the token was rejected (check the `--token` step printed no error); `403` means the token is fine but the invoker grant is missing or still propagating (allow a few minutes after a new grant).
 Open **`http://localhost:8501`** in your browser to view the incident queue, triage tickets, and inspect visual evidence.
 
 #### ADK Agent Web Playground (off by default):
@@ -234,18 +241,16 @@ Open **`http://localhost:8080`** for the playground, and apply again without the
      --format="value(status.url)"
    ```
 
-2. **Open in Web Browser:**  
-   Navigate directly to the printed console URL in any browser logged into your Google Cloud account (ensure your user account possesses `roles/run.invoker`). The agent URL answers only Pub/Sub pushes.
-
-3. **Optional: Public Access for Live Demonstrations:**  
-   To permit unauthenticated web access for public presentations:
+2. **Call it with an ID token:**  
+   A browser opening the URL directly gets `403 Forbidden`, because it sends no ID token; use the proxy (Option 1) for the console. For scripted checks, pass the same impersonated token as a header:
    ```bash
-   gcloud run services add-iam-policy-binding cymbal-cyber-soc-console \
-     --project="${PROJECT_ID}" \
-     --region="${REGION}" \
-     --member="allUsers" \
-     --role="roles/run.invoker"
+   curl -H "Authorization: Bearer $(gcloud auth print-identity-token \
+     --impersonate-service-account="${CONSOLE_SA}" --audiences="${CONSOLE_URL}")" "${CONSOLE_URL}"
    ```
+   The agent URL answers only Pub/Sub pushes.
+
+3. **No public access:**  
+   Do not grant `allUsers` the invoker role. The console shows security telemetry and tickets, and domain-restricted sharing org policies reject the binding anyway (`FAILED_PRECONDITION`).
 
 ---
 

@@ -50,6 +50,7 @@ for pair in \
   "cymbal-adk-agent-sa:google_service_account.agent_sa" \
   "cymbal-soc-console-sa:google_service_account.soc_console_sa" \
   "pubsub-invoker-sa:google_service_account.invoker_sa" \
+  "soc-console-access:google_service_account.console_access_sa" \
   "threat-detector-job-sa:google_service_account.detector_sa"; do
   sa_email="${pair%%:*}@${PROJECT_ID}.iam.gserviceaccount.com"
   adopt "${pair#*:}" "projects/${PROJECT_ID}/serviceAccounts/${sa_email}" \
