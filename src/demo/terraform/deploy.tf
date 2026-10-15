@@ -105,16 +105,19 @@ resource "google_dataflow_job" "pubsub_to_bigquery" {
 # has been retired. Detection now runs as the threat-detector Cloud Run Job, scheduled
 # every 5 minutes in cloud_run.tf (google_cloud_scheduler_job.threat_detector_schedule).
 
-# 4. Upload Seed Desktop Screenshots to GCS
+# 4. Upload every desktop screenshot in the repo to GCS. The user_screenshots_objects
+# object table (bigquery.tf) indexes whatever is in the bucket, so the cloud can analyse
+# exactly the users local mode can.
 locals {
-  seed_screenshots = ["u.lewis.png", "l.taylor.png", "c.wilson.png"]
+  screenshots_dir = "${path.module}/../../../local_demo_data/user_screenshots"
 }
 
-resource "google_storage_bucket_object" "seed_screenshots" {
-  for_each = toset(local.seed_screenshots)
-  name     = each.key
-  source   = fileexists("${path.module}/../../../local_demo_data/user_screenshots/${each.key}") ? "${path.module}/../../../local_demo_data/user_screenshots/${each.key}" : "${path.module}/../user_screenshots/${each.key}"
-  bucket   = google_storage_bucket.screenshots.name
+resource "google_storage_bucket_object" "screenshots" {
+  for_each     = fileset(local.screenshots_dir, "*.png")
+  name         = each.value
+  source       = "${local.screenshots_dir}/${each.value}"
+  content_type = "image/png"
+  bucket       = google_storage_bucket.screenshots.name
 }
 
 # 5. FinOps: Cost Control & Teardown Warnings

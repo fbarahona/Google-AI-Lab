@@ -89,17 +89,35 @@ resource "google_pubsub_subscription" "alerts_dlq_to_bq" {
   ]
 }
 
-# 5. Pub/Sub Topic for Raw Synthetic Logs (Data Ingestion Pipeline)
+# 5. Data contract for raw telemetry: Pub/Sub rejects any message that does not match
+# schemas/raw_security_event.proto at publish time (missing required field, wrong type,
+# unknown field). JSON encoding keeps the payload readable by the BigQuery subscriptions
+# (use_table_schema) and the optional Dataflow pipeline.
+resource "google_pubsub_schema" "raw_security_event" {
+  project    = var.project_id
+  name       = "cymbal_cyber_raw_security_event"
+  type       = "PROTOCOL_BUFFER"
+  definition = file("${path.module}/schemas/raw_security_event.proto")
+
+  depends_on = [google_project_service.required]
+}
+
+# 5b. Pub/Sub Topic for Raw Synthetic Logs (Data Ingestion Pipeline)
 resource "google_pubsub_topic" "raw_logs_topic" {
   project = var.project_id
   name    = "cymbal_cyber_raw_logs"
+
+  schema_settings {
+    schema   = google_pubsub_schema.raw_security_event.id
+    encoding = "JSON"
+  }
 
   labels = {
     environment = "demo"
     component   = "raw-logs"
   }
 
-  depends_on = [google_project_service.required]
+  depends_on = [google_project_service.required, google_pubsub_schema.raw_security_event]
 }
 
 # 6. Direct BigQuery Subscription: user_access_events (Filtered by event_family = 'access')
@@ -112,10 +130,12 @@ resource "google_pubsub_subscription" "raw_access_to_bq" {
   message_retention_duration = "86400s" # 24 hours
 
   bigquery_config {
-    table               = "${var.project_id}:${google_bigquery_dataset.cyber_dataset.dataset_id}.${google_bigquery_table.user_access_events.table_id}"
-    use_table_schema    = true
-    use_topic_schema    = false
-    drop_unknown_fields = true
+    table            = "${var.project_id}:${google_bigquery_dataset.cyber_dataset.dataset_id}.${google_bigquery_table.user_access_events.table_id}"
+    use_table_schema = true
+    use_topic_schema = false
+    # A field the table does not have fails the write and, after 5 attempts, lands in
+    # raw_events_dlq_pull_sub instead of being silently dropped.
+    drop_unknown_fields = false
     write_metadata      = false
   }
 
@@ -142,10 +162,12 @@ resource "google_pubsub_subscription" "raw_network_to_bq" {
   message_retention_duration = "86400s" # 24 hours
 
   bigquery_config {
-    table               = "${var.project_id}:${google_bigquery_dataset.cyber_dataset.dataset_id}.${google_bigquery_table.network_events.table_id}"
-    use_table_schema    = true
-    use_topic_schema    = false
-    drop_unknown_fields = true
+    table            = "${var.project_id}:${google_bigquery_dataset.cyber_dataset.dataset_id}.${google_bigquery_table.network_events.table_id}"
+    use_table_schema = true
+    use_topic_schema = false
+    # A field the table does not have fails the write and, after 5 attempts, lands in
+    # raw_events_dlq_pull_sub instead of being silently dropped.
+    drop_unknown_fields = false
     write_metadata      = false
   }
 

@@ -12,13 +12,15 @@ logger = logging.getLogger(__name__)
 
 
 def to_bq_subscription_row(event: dict[str, Any]) -> dict[str, Any]:
-    """Returns a copy of the event with event_timestamp as epoch microseconds.
+    """Returns the event as a raw-topic message body.
 
-    Pub/Sub BigQuery subscriptions map a JSON integer to a TIMESTAMP column as
-    microseconds since the epoch, which avoids depending on which string formats
-    the subscription accepts.
+    event_timestamp becomes epoch microseconds: the topic's data contract
+    (terraform/schemas/raw_security_event.proto) declares it int64, and the BigQuery
+    subscriptions map a JSON integer to a TIMESTAMP column as microseconds since the
+    epoch. Null fields are left out, since an absent optional field and a NULL column
+    are the same thing on both sides.
     """
-    row = dict(event)
+    row = {k: v for k, v in event.items() if v is not None}
     ts = row.get("event_timestamp")
     if isinstance(ts, str):
         ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))

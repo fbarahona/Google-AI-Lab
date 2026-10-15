@@ -23,6 +23,8 @@ from typing import Any
 
 from google.cloud import bigquery, pubsub_v1
 
+from adk_agent import detection_rules as rules
+
 logger = logging.getLogger("ThreatDetectorJob")
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -102,7 +104,10 @@ class ThreatDetector:
     ) -> list[dict[str, Any]]:
         """
         Uses BigQuery MERGE to bucket 2-minute windows, scoring only windows that closed
-        more than 60 seconds ago. Returns only rows inserted during this run.
+        more than 60 seconds ago. Every qualifying window is recorded, but windows are
+        correlated into incidents (see detection_rules.INCIDENT_GAP_MINUTES): only the
+        window that opens an incident is inserted as NEW and published; the others are
+        CORRELATED. Returns only NEW rows.
         Uses parameterized @start_time and @min_score to eliminate SQL injection and
         guarantee UTC ISO-8601 timestamp resolution in BigQuery.
         """
@@ -172,9 +177,37 @@ class ThreatDetector:
             -- Only evaluate windows that closed more than 60s ago (late-data allowance)
             HAVING window_end <= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 60 SECOND)
                AND total_2_min_threat_score >= @min_score
+          ),
+          -- Incident correlation: the latest incident already on record for each user
+          -- whose last window ended within @incident_gap_minutes of this batch.
+          OpenIncidents AS (
+            SELECT
+              user_id,
+              ARRAY_AGG(STRUCT(incident_id, window_end) ORDER BY window_end DESC LIMIT 1)[OFFSET(0)] AS latest
+            FROM `{self.project_id}.{self.dataset_id}.alerts`
+            WHERE DATE(window_end) >= DATE_SUB(CURRENT_DATE(), INTERVAL 2 DAY)
+              AND window_end >= TIMESTAMP_SUB(@start_time, INTERVAL @incident_gap_minutes MINUTE)
+              AND incident_id IS NOT NULL
+            GROUP BY user_id
+          ),
+          CorrelatedWindows AS (
+            SELECT
+              b.*,
+              CONCAT(b.user_id, '|', FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', b.window_end)) AS alert_id,
+              IF(
+                o.latest.window_end >= TIMESTAMP_SUB(b.window_start, INTERVAL @incident_gap_minutes MINUTE),
+                o.latest.incident_id,
+                NULL
+              ) AS open_incident_id,
+              -- With no open incident, the user's earliest window in this batch opens one.
+              FIRST_VALUE(CONCAT(b.user_id, '|', FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', b.window_end)))
+                OVER (PARTITION BY b.user_id ORDER BY b.window_end) AS batch_incident_id
+            FROM BucketedEvents AS b
+            LEFT JOIN OpenIncidents AS o USING (user_id)
           )
           SELECT
-            CONCAT(user_id, '|', FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', window_end)) AS alert_id,
+            alert_id,
+            COALESCE(open_incident_id, batch_incident_id) AS incident_id,
             'scheduled' AS engine,
             user_id,
             device_id,
@@ -185,11 +218,14 @@ class ThreatDetector:
             high_privilege_request_count,
             malicious_command_count,
             malicious_dns_count,
-            'NEW' AS status,
+            -- Only the window that opens an incident is published; the rest are kept
+            -- for the record (and the incidents view) as CORRELATED.
+            IF(open_incident_id IS NULL AND alert_id = batch_incident_id, 'NEW', 'CORRELATED') AS status,
             current_run_time AS detected_at,
             current_run_time AS updated_at,
             TO_JSON(STRUCT(
-              CONCAT(user_id, '|', FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', window_end)) AS alert_id,
+              alert_id,
+              COALESCE(open_incident_id, batch_incident_id) AS incident_id,
               1 AS schema_version,
               'scheduled' AS engine,
               user_id,
@@ -203,18 +239,18 @@ class ThreatDetector:
               malicious_dns_count,
               FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', current_run_time) AS detected_at
             )) AS payload
-          FROM BucketedEvents
+          FROM CorrelatedWindows
         ) S
         ON T.alert_id = S.alert_id
         WHEN NOT MATCHED THEN
           INSERT (
-            alert_id, engine, user_id, device_id, source_ip,
+            alert_id, incident_id, engine, user_id, device_id, source_ip,
             window_start, window_end, total_2_min_threat_score,
             high_privilege_request_count, malicious_command_count, malicious_dns_count,
             status, detected_at, updated_at, payload
           )
           VALUES (
-            S.alert_id, S.engine, S.user_id, S.device_id, S.source_ip,
+            S.alert_id, S.incident_id, S.engine, S.user_id, S.device_id, S.source_ip,
             S.window_start, S.window_end, S.total_2_min_threat_score,
             S.high_privilege_request_count, S.malicious_command_count, S.malicious_dns_count,
             S.status, S.detected_at, S.updated_at, S.payload
@@ -224,6 +260,9 @@ class ThreatDetector:
             query_parameters=[
                 bigquery.ScalarQueryParameter("start_time", "TIMESTAMP", cutoff_time),
                 bigquery.ScalarQueryParameter("min_score", "INT64", min_score),
+                bigquery.ScalarQueryParameter(
+                    "incident_gap_minutes", "INT64", rules.INCIDENT_GAP_MINUTES
+                ),
             ],
             maximum_bytes_billed=self.max_bytes_billed,
         )
@@ -454,7 +493,7 @@ class ThreatDetector:
               )
               VALUES (
                 @ticket_id,
-                FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', CURRENT_TIMESTAMP()),
+                CURRENT_TIMESTAMP(),
                 @user_id,
                 @device_id,
                 @source_ip,

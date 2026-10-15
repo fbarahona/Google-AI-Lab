@@ -93,8 +93,9 @@ def detect(user: str, logs_dir: Path) -> dict[str, Any] | None:
     """
     The scheduled detector's MERGE, in Python: network events joined to the VPN
     session that was assigned their source IP, scored per event with the shared
-    rules and summed per user and 2-minute window. Returns the target user's
-    highest-scoring window as an alert, or None if no window reaches the threshold.
+    rules and summed per user and 2-minute window. Qualifying windows are correlated
+    into one incident and only its first window is returned as the alert, or None if
+    no window reaches the threshold.
     """
     from adk_agent import detection_rules as rules
 
@@ -117,15 +118,29 @@ def detect(user: str, logs_dir: Path) -> dict[str, Any] | None:
     user_windows = {end: score for (u, end), score in windows.items() if u == user}
     for end, score in sorted(user_windows.items()):
         print(f"  {user} window ending {end:%H:%M:%S}: score {score}")
-    if not user_windows or max(user_windows.values()) < ALERT_MIN_SCORE:
+    qualifying = sorted(e for e, sc in user_windows.items() if sc >= ALERT_MIN_SCORE)
+    if not qualifying:
         print(f"  No window reached the alert threshold ({ALERT_MIN_SCORE}).")
         return None
 
-    window_end, score = max(user_windows.items(), key=lambda item: item[1])
+    # Incident correlation, as in the detector MERGE: the first qualifying window opens
+    # the incident and is the only one published; the rest are CORRELATED.
+    def alert_id_for(end: datetime) -> str:
+        return f"{user}|{end:%Y-%m-%dT%H:%M:%SZ}"
+
+    rows = rules.correlate_windows(qualifying, alert_id_for=alert_id_for)
+    alert_id, incident_id, _ = next(r for r in rows if r[2] == "NEW")
+    print(
+        f"  {len(rows)} qualifying window(s) correlated into incident {incident_id}; "
+        f"publishing 1 alert"
+    )
+    window_end = qualifying[0]
+    score = user_windows[window_end]
     session = next(s for s in sessions.values() if s["user_id"] == user)
     window_end_str = window_end.strftime("%Y-%m-%dT%H:%M:%SZ")
     alert = {
-        "alert_id": f"{user}|{window_end_str}",
+        "alert_id": alert_id,
+        "incident_id": incident_id,
         "schema_version": 1,
         "engine": "local",
         "user_id": user,

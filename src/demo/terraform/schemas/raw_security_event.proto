@@ -1,0 +1,41 @@
+// Data contract for cymbal_cyber_raw_logs (JSON encoding).
+//
+// Pub/Sub validates every published message against this schema and rejects any
+// message that does not parse: a missing required field, a wrong type or an unknown
+// field fails at publish time, so drift is visible to the producer instead of being
+// dropped on the way into BigQuery.
+//
+// One topic carries two event families (attribute event_family = access | network),
+// so the message is the union of both tables' columns. Field names and types must
+// match user_access_events and network_events in bigquery.tf; the unit test
+// test_raw_event_contract.py enforces that.
+syntax = "proto2";
+
+message RawSecurityEvent {
+  // Common to both families.
+  required int64 event_timestamp = 1;  // microseconds since the Unix epoch
+  required string event_type = 2;
+  optional string user_id = 3;
+  optional string source_ip = 4;
+
+  // Access events (user_access_events).
+  optional string assigned_internal_ip = 10;
+  optional string device_id = 11;
+  optional string device_os = 12;
+  optional string user_agent = 13;
+  optional string application_name = 14;
+
+  // Network events (network_events).
+  optional int64 source_port = 20;
+  optional string destination_ip = 21;
+  optional int64 destination_port = 22;
+  optional string protocol = 23;
+  optional int64 bytes_transferred = 24;
+  optional string source_process_name = 25;
+  optional string network_domain = 26;
+  optional string file_name = 27;
+  optional string file_type = 28;
+  optional string command_line = 29;
+  optional string permission_level_requested = 30;
+  optional string file_hash_sha256 = 31;
+}

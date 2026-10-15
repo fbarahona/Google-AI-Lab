@@ -159,6 +159,14 @@ resource "google_storage_bucket_iam_member" "agent_screenshots_reader" {
   member = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
+# 1b) Screenshots bucket: READ-ONLY for the BigQuery connection behind the
+#     user_screenshots_objects object table.
+resource "google_storage_bucket_iam_member" "screenshots_connection_reader" {
+  bucket = google_storage_bucket.screenshots.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_bigquery_connection.screenshots.cloud_resource[0].service_account_id}"
+}
+
 # 2) Escalations bucket: WRITE/READ (objectUser)
 resource "google_storage_bucket_iam_member" "agent_escalations_writer" {
   bucket = google_storage_bucket.escalations.name
