@@ -70,7 +70,10 @@ In enterprise security engineering, granting broad administrative roles across a
 
 ## 📌 Prerequisites & Variables
 
-Set your deployment parameters in your shell:
+> [!TIP]
+> You can run `source ./src/demo/scripts/pre_flight.sh` to interactively configure these variables, populate `.env`, and automatically assign the required bootstrap and analyst IAM roles.
+
+Or set your deployment parameters manually in your shell:
 
 ```bash
 export PROJECT_ID="<your-gcp-project-id>"
