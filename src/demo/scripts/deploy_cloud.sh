@@ -155,7 +155,7 @@ if [[ -n "${DEPLOYER_MEMBER}" ]]; then
 fi
 
 # If ANALYST_EMAIL is set (or present in .env), grant the analyst token-creator rights
-# on soc-console-access via var.console_access_members so they can open the console proxy.
+# on soc-console-access via var.deploy_console_access_members so they can open the console proxy.
 if [[ -z "${ANALYST_EMAIL:-}" ]] && [[ -f "${REPO_ROOT}/.env" ]]; then
   ANALYST_EMAIL=$(grep -E '^ANALYST_EMAIL=' "${REPO_ROOT}/.env" | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]' || true)
 fi
@@ -166,7 +166,8 @@ if [[ -n "${ANALYST_EMAIL:-}" ]]; then
 fi
 if [[ ${#CONSOLE_MEMBERS[@]} -gt 0 ]]; then
   CONSOLE_LIST=$(printf '"%s",' "${CONSOLE_MEMBERS[@]}")
-  DEPLOYER_VAR+=(-var="console_access_members=[${CONSOLE_LIST%,}]")
+  # Its own variable, so tfvars console_access_members is never overridden.
+  DEPLOYER_VAR+=(-var="deploy_console_access_members=[${CONSOLE_LIST%,}]")
 fi
 
 # 1. Provision Artifact Registry repository via targeted Terraform first

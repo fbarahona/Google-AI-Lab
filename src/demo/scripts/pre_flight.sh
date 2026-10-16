@@ -271,14 +271,6 @@ run_preflight() {
     echo "  (Token Creator on soc-console-access) through Terraform."
   fi
 
-  if [[ -n "${BILLING_ACCOUNT_ID}" ]]; then
-    echo "Attempting to grant Billing Viewer on billing account '${BILLING_ACCOUNT_ID}'..."
-    gcloud billing accounts add-iam-policy-binding "${BILLING_ACCOUNT_ID}" \
-      --member="${DEPLOYER_MEMBER}" \
-      --role="roles/billing.viewer" \
-      --quiet > /dev/null 2>&1 || echo "  [Info] Skipped Billing Account binding (insufficient billing account rights or already set)."
-  fi
-
   # ---------------------------------------------------------------------------
   # 5. Safe Upsert into .env & Export to Current Session
   # ---------------------------------------------------------------------------
@@ -312,13 +304,11 @@ run_preflight() {
   upsert_env_var "GOOGLE_CLOUD_LOCATION" "global"
   upsert_env_var "GOOGLE_CLOUD_PROJECT" "${PROJECT_ID}"
   upsert_env_var "GEMINI_MODEL" "gemini-3.8-flash"
-  upsert_env_var "ADK_ALLOW_CONFIG_STDIO_MCP_SERVERS" "true"
 
   export GOOGLE_GENAI_USE_ENTERPRISE="true"
   export GOOGLE_CLOUD_LOCATION="global"
   export GOOGLE_CLOUD_PROJECT="${PROJECT_ID}"
   export GEMINI_MODEL="gemini-3.8-flash"
-  export ADK_ALLOW_CONFIG_STDIO_MCP_SERVERS="true"
 
   # Set ADC quota project if ADC credentials are already present
   if gcloud auth application-default print-access-token >/dev/null 2>&1; then
@@ -343,3 +333,7 @@ run_preflight() {
 }
 
 run_preflight
+__preflight_rc=$?
+# Sourced runs would otherwise leave the helpers defined in the caller's shell.
+unset -f run_preflight die format_member bind_roles upsert_env_var
+return "${__preflight_rc}" 2>/dev/null || exit "${__preflight_rc}"
