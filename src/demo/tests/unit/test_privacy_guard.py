@@ -56,7 +56,9 @@ def test_search_query_privacy_permits_clean_threat_queries():
 def test_search_query_privacy_blocks_investigated_user():
     """Validates that outbound search queries cannot leak the investigated employee ID."""
     state = {"user_id": "u.lewis"}
-    is_safe, reason = validate_search_query_privacy("u.lewis 175.45.176.10", state=state)
+    is_safe, reason = validate_search_query_privacy(
+        "u.lewis 175.45.176.10", state=state
+    )
     assert is_safe is False
     assert "u.lewis" in reason
 
@@ -64,7 +66,9 @@ def test_search_query_privacy_blocks_investigated_user():
 def test_search_query_privacy_blocks_investigated_device():
     """Validates that outbound search queries cannot leak the corporate device ID."""
     state = {"device_id": "ws-hr-05"}
-    is_safe, reason = validate_search_query_privacy("check vulnerability for ws-hr-05", state=state)
+    is_safe, reason = validate_search_query_privacy(
+        "check vulnerability for ws-hr-05", state=state
+    )
     assert is_safe is False
     assert "ws-hr-05" in reason
 
@@ -79,7 +83,9 @@ def test_search_query_privacy_blocks_private_ips():
 
 def test_search_query_privacy_blocks_corporate_host_and_domain():
     """Validates that internal hostnames and domain extensions are blocked."""
-    is_safe, reason = validate_search_query_privacy("server srv-finance-01 issues", state=None)
+    is_safe, reason = validate_search_query_privacy(
+        "server srv-finance-01 issues", state=None
+    )
     assert is_safe is False
     assert "srv-finance-01" in reason
 
@@ -90,7 +96,9 @@ def test_search_query_privacy_blocks_corporate_host_and_domain():
 
 def test_search_query_privacy_blocks_pii():
     """Validates that search queries containing emails, SSNs, or cards are blocked."""
-    is_safe, reason = validate_search_query_privacy("search john.doe@example.com", state=None)
+    is_safe, reason = validate_search_query_privacy(
+        "search john.doe@example.com", state=None
+    )
     assert is_safe is False
     assert "john.doe@example.com" in reason
 
@@ -150,10 +158,13 @@ def test_mask_pii_preserves_threat_intelligence_iocs():
 def test_google_search_privacy_gate_callback():
     """Validates that google_search_privacy_gate_callback blocks unsafe queries and allows clean public IPs."""
     from unittest.mock import MagicMock
+
     from adk_agent.agent import google_search_agent, google_search_privacy_gate_callback
 
     # Ensure before_tool_callback is wired
-    assert google_search_agent.before_tool_callback == google_search_privacy_gate_callback
+    assert (
+        google_search_agent.before_tool_callback == google_search_privacy_gate_callback
+    )
 
     mock_tool = MagicMock()
     mock_tool.name = "google_search"
@@ -162,20 +173,26 @@ def test_google_search_privacy_gate_callback():
     mock_ctx.state = {"user_id": "u.lewis", "device_id": "ws-hr-05"}
 
     # 1. Unsafe query leaking user_id
-    res = google_search_privacy_gate_callback(mock_tool, {"query": "u.lewis background"}, mock_ctx)
+    res = google_search_privacy_gate_callback(
+        mock_tool, {"query": "u.lewis background"}, mock_ctx
+    )
     assert res is not None
     assert res["error"] == "PRIVACY_GATE_VIOLATION"
     assert res["status"] == "BLOCKED"
     assert "u.lewis" in res["reason"]
 
     # 2. Unsafe query leaking private IP
-    res = google_search_privacy_gate_callback(mock_tool, {"query": "lookup 10.0.1.5"}, mock_ctx)
+    res = google_search_privacy_gate_callback(
+        mock_tool, {"query": "lookup 10.0.1.5"}, mock_ctx
+    )
     assert res is not None
     assert res["error"] == "PRIVACY_GATE_VIOLATION"
     assert "10.0.1.5" in res["reason"]
 
     # 3. Clean public IP query
-    res = google_search_privacy_gate_callback(mock_tool, {"query": "175.45.176.10 threat intel"}, mock_ctx)
+    res = google_search_privacy_gate_callback(
+        mock_tool, {"query": "175.45.176.10 threat intel"}, mock_ctx
+    )
     assert res is None
 
 
@@ -210,4 +227,3 @@ def test_visual_analysis_masks_desktop_pii(monkeypatch):
     assert "175.45.176.10" in analysis
     assert "mimikatz" in analysis
     assert "powershell -enc" in analysis
-

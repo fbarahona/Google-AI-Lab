@@ -23,18 +23,12 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # --- Patterns for PII & Sensitive Data ---
-EMAIL_PATTERN = re.compile(
-    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
-)
-SSN_PATTERN = re.compile(
-    r"\b(?:\d{3}-\d{2}-\d{4})\b"
-)
+EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+SSN_PATTERN = re.compile(r"\b(?:\d{3}-\d{2}-\d{4})\b")
 PHONE_PATTERN = re.compile(
     r"(?:(?<=\b)|(?<=\s)|(?<=^))(?:\+?1[-.\s]?)?\(?[2-9]\d{2}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"
 )
-IPV4_CANDIDATE_PATTERN = re.compile(
-    r"\b(?:\d{1,3}\.){3}\d{1,3}\b"
-)
+IPV4_CANDIDATE_PATTERN = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 INTERNAL_DOMAIN_PATTERN = re.compile(
     r"(?i)\b[a-zA-Z0-9_-]+\.(?:internal|corp|local|lan|priv)\b"
 )
@@ -46,9 +40,7 @@ SECRET_PATTERN = re.compile(
 )
 
 # Potential card pattern (13-19 digits, possibly space/hyphen separated)
-CARD_CANDIDATE_PATTERN = re.compile(
-    r"\b(?:\d[ -]?){13,19}\b"
-)
+CARD_CANDIDATE_PATTERN = re.compile(r"\b(?:\d[ -]?){13,19}\b")
 
 
 def _luhn_checksum_valid(number_str: str) -> bool:
@@ -80,12 +72,20 @@ def is_public_ip(ip_str: str) -> bool:
     """True if ip_str is a valid routable public IP address."""
     try:
         ip = ipaddress.ip_address(ip_str.strip())
-        return not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved)
+        return not (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+        )
     except ValueError:
         return False
 
 
-def validate_search_query_privacy(query: str, state: Any = None) -> tuple[bool, str | None]:
+def validate_search_query_privacy(
+    query: str, state: Any = None
+) -> tuple[bool, str | None]:
     """
     Validates that an outbound Google Search query does not leak internal corporate
     identities, private infrastructure addresses, or employee PII.
@@ -105,33 +105,50 @@ def validate_search_query_privacy(query: str, state: Any = None) -> tuple[bool, 
 
     # 1. Check against investigated user identity from state
     if state is not None:
-        user_id = str(state.get("user_id") or state.get("investigated_user") or "").strip()
+        user_id = str(
+            state.get("user_id") or state.get("investigated_user") or ""
+        ).strip()
         if user_id and len(user_id) >= 3:
             pattern = rf"\b{re.escape(user_id.lower())}\b"
             if re.search(pattern, lowered):
-                return False, f"Query contains investigated employee username: '{user_id}'"
+                return (
+                    False,
+                    f"Query contains investigated employee username: '{user_id}'",
+                )
 
         device_id = str(state.get("device_id") or "").strip()
         if device_id and len(device_id) >= 3:
             pattern = rf"\b{re.escape(device_id.lower())}\b"
             if re.search(pattern, lowered):
-                return False, f"Query contains investigated corporate device ID: '{device_id}'"
+                return (
+                    False,
+                    f"Query contains investigated corporate device ID: '{device_id}'",
+                )
 
     # 2. Check for generic internal workstation / server patterns
     host_match = INTERNAL_HOST_PATTERN.search(cleaned_query)
     if host_match:
-        return False, f"Query contains internal corporate hostname pattern: '{host_match.group(0)}'"
+        return (
+            False,
+            f"Query contains internal corporate hostname pattern: '{host_match.group(0)}'",
+        )
 
     # 3. Check for internal corporate domain extensions (.internal, .corp, etc.)
     domain_match = INTERNAL_DOMAIN_PATTERN.search(cleaned_query)
     if domain_match:
-        return False, f"Query contains internal corporate domain name: '{domain_match.group(0)}'"
+        return (
+            False,
+            f"Query contains internal corporate domain name: '{domain_match.group(0)}'",
+        )
 
     # 4. Check for private RFC-1918 IP addresses (preserve public external IPs)
     for match in IPV4_CANDIDATE_PATTERN.finditer(cleaned_query):
         candidate_ip = match.group(0)
         if is_private_ip(candidate_ip):
-            return False, f"Query contains private/internal RFC-1918 IP address: '{candidate_ip}'"
+            return (
+                False,
+                f"Query contains private/internal RFC-1918 IP address: '{candidate_ip}'",
+            )
 
     # 5. Check for email addresses
     email_match = EMAIL_PATTERN.search(cleaned_query)
