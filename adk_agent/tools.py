@@ -825,11 +825,12 @@ def get_visual_analysis_for_user(
                 tool_context,
             )
 
-    # Mask sensitive personal PII captured from desktop backgrounds or open windows
-    visual_text = mask_pii(visual_text)
-
-    # Deterministic prompt injection scan; it does not depend on the model noticing.
+    # Deterministic prompt injection scan on the raw text, before masking can alter it;
+    # it does not depend on the model noticing.
     is_injection = rules.contains_prompt_injection(visual_text)
+
+    # Mask third-party personal data captured from desktop backgrounds or open windows
+    visual_text = mask_pii(visual_text)
     if is_injection:
         logger.warning("PROMPT INJECTION DETECTED in visual evidence for %s", gcs_uri)
         _set_state(tool_context, "prompt_injection_detected", True)
@@ -987,7 +988,7 @@ def dispatch_to_soc_ticketing_system(
         severity=normalize_severity(severity),
         status="ESCALATED",
         agent_decision="PERCEIVED_THREAT",
-        agent_reason=agent_reason,
+        agent_reason=mask_pii(agent_reason),
         screenshot_url=screenshot_url or None,
         structured_report=mask_pii(structured_report),
         mitre_tactics=_clean_list(mitre_tactics),
@@ -1035,11 +1036,11 @@ def log_false_positive(
             severity="LOW",
             status="RESOLVED",
             agent_decision="FALSE_POSITIVE",
-            agent_reason=agent_comment,
+            agent_reason=mask_pii(agent_comment),
             structured_report=(
                 "### Closed as False Positive by the agent\n"
                 "No analyst has reviewed this closure.\n\n"
-                f"**Agent rationale:** {agent_comment}"
+                f"**Agent rationale:** {mask_pii(agent_comment)}"
             ),
         )
         get_soc_service().record_auto_closed_false_positive(ticket)
@@ -1101,7 +1102,7 @@ def escalate_to_human(
         severity=normalize_severity(severity),
         status="ESCALATED",
         agent_decision="PERCEIVED_THREAT",
-        agent_reason=agent_reason_for_escalation,
+        agent_reason=mask_pii(agent_reason_for_escalation),
         screenshot_url=screenshot_url,
         structured_report=mask_pii(context_data),
     )

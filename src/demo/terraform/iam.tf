@@ -398,7 +398,7 @@ resource "google_cloud_run_v2_service_iam_member" "soc_console_access_invoker" {
 
 # Allow the deployer and listed analysts to mint ID tokens as the console access identity
 resource "google_service_account_iam_member" "console_access_token_creators" {
-  for_each           = toset(compact(concat([var.deployer_member], var.console_access_members)))
+  for_each           = toset(compact(concat([var.deployer_member], var.console_access_members, var.deploy_console_access_members)))
   service_account_id = google_service_account.console_access_sa.name
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = each.value

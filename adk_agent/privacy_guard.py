@@ -10,9 +10,16 @@ Core Guarantees:
 2. Search Query Privacy: Blocks outbound search queries from leaking employee
    identities (user IDs), internal workstation hostnames, RFC-1918 private IPs,
    or personal PII to public search engines.
-3. Ingress/Egress Masking: Redacts personal identifiers (SSNs, payment cards,
-   emails, phone numbers, credentials, and private IPs) from desktop OCR and
-   incident reports.
+3. Personal-data masking: redacts personal identifiers (SSNs, payment cards,
+   emails, phone numbers, credentials) from desktop OCR and ticket text.
+
+Data classification:
+- External egress (Google Search): the strictest rule. The search model only ever
+  sees public IPs (agent.search_input_minimization_callback), and the queries it ran
+  are audited with validate_search_query_privacy.
+- Internal analyst audience (OCR evidence, tickets): internal IPs, hostnames and the
+  investigated user stay visible, because they are the evidence an analyst works
+  from. Only third-party personal data and secrets are masked (mask_pii).
 """
 
 import ipaddress
@@ -25,10 +32,16 @@ logger = logging.getLogger(__name__)
 # --- Patterns for PII & Sensitive Data ---
 EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 SSN_PATTERN = re.compile(r"\b(?:\d{3}-\d{2}-\d{4})\b")
+# Phone numbers need separators (555-123-4567, (555) 123-4567, +1 555.123.4567), so
+# bare digit runs such as process IDs, byte counts and epoch timestamps are kept.
 PHONE_PATTERN = re.compile(
-    r"(?:(?<=\b)|(?<=\s)|(?<=^))(?:\+?1[-.\s]?)?\(?[2-9]\d{2}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"
+    r"(?<![\w.+-])(?:\+?1[-.\s])?(?:\([2-9]\d{2}\)\s?|[2-9]\d{2}[-.\s])\d{3}[-.\s]\d{4}(?![\w.-]*\d)"
 )
 IPV4_CANDIDATE_PATTERN = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+# Colon-separated hex groups; ipaddress validates each candidate.
+IPV6_CANDIDATE_PATTERN = re.compile(
+    r"(?<![\w:])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?![\w:])"
+)
 INTERNAL_DOMAIN_PATTERN = re.compile(
     r"(?i)\b[a-zA-Z0-9_-]+\.(?:internal|corp|local|lan|priv)\b"
 )
@@ -83,11 +96,21 @@ def is_public_ip(ip_str: str) -> bool:
         return False
 
 
+def _ip_candidates(text: str | None) -> list[str]:
+    """IPv4 and IPv6 address candidates in text, in order of appearance."""
+    text = text or ""
+    found = [
+        (m.start(), m.group(0))
+        for pattern in (IPV4_CANDIDATE_PATTERN, IPV6_CANDIDATE_PATTERN)
+        for m in pattern.finditer(text)
+    ]
+    return [ip for _, ip in sorted(found)]
+
+
 def extract_public_ips(text: str | None) -> list[str]:
-    """Routable public IPv4 addresses in text, in first-seen order, without duplicates."""
+    """Routable public IPv4/IPv6 addresses in text, first-seen order, no duplicates."""
     seen: list[str] = []
-    for match in IPV4_CANDIDATE_PATTERN.finditer(text or ""):
-        ip = match.group(0)
+    for ip in _ip_candidates(text):
         if is_public_ip(ip) and ip not in seen:
             seen.append(ip)
     return seen
@@ -151,9 +174,8 @@ def validate_search_query_privacy(
             f"Query contains internal corporate domain name: '{domain_match.group(0)}'",
         )
 
-    # 4. Check for private RFC-1918 IP addresses (preserve public external IPs)
-    for match in IPV4_CANDIDATE_PATTERN.finditer(cleaned_query):
-        candidate_ip = match.group(0)
+    # 4. Check for private RFC-1918 / ULA / link-local IPs (public IPs are allowed)
+    for candidate_ip in _ip_candidates(cleaned_query):
         if is_private_ip(candidate_ip):
             return (
                 False,
@@ -181,57 +203,33 @@ def validate_search_query_privacy(
 
 def mask_pii(text: str | None) -> str:
     """
-    Redacts personal identifiers and sensitive private infrastructure values from text
-    while preserving security threat intelligence indicators (public IPs, hashes,
-    command lines, and threat domains).
+    Redacts third-party personal data and secrets from text that analysts read
+    (desktop OCR, ticket rationale and reports), while keeping the evidence:
+    internal and public IPs, hostnames, hashes, command lines, domains and MITRE IDs.
 
     Redactions:
-    - Email addresses -> [REDACTED_EMAIL]
-    - US SSNs -> [REDACTED_SSN]
-    - Payment card numbers (Luhn verified) -> [REDACTED_CREDIT_CARD]
-    - Phone numbers -> [REDACTED_PHONE]
-    - Private RFC-1918 IPs -> [REDACTED_INTERNAL_IP] (Public IPs remain untouched)
     - Secret tokens/passwords -> [REDACTED_SECRET]
+    - Payment card numbers (Luhn verified) -> [REDACTED_CREDIT_CARD]
+    - US SSNs -> [REDACTED_SSN]
+    - Email addresses -> [REDACTED_EMAIL]
+    - Phone numbers (with separators) -> [REDACTED_PHONE]
 
     Args:
         text: Arbitrary text (desktop OCR, report prose, telemetry summary).
 
     Returns:
-        Sanitized text with PII replaced by explicit tokens.
+        Sanitized text with personal data replaced by explicit tokens.
     """
     if not text or not isinstance(text, str):
         return text or ""
 
-    sanitized = text
+    sanitized = SECRET_PATTERN.sub("[REDACTED_SECRET]", text)
 
-    # 1. Mask explicit secrets, tokens, passwords
-    sanitized = SECRET_PATTERN.sub("[REDACTED_SECRET]", sanitized)
-
-    # 2. Mask payment cards with Luhn check
     for match in list(CARD_CANDIDATE_PATTERN.finditer(sanitized)):
         candidate = match.group(0)
-        digits = re.sub(r"[ -]", "", candidate)
-        # Avoid matching 16-hex characters from hashes by ensuring bounds
-        if _luhn_checksum_valid(digits):
+        if _luhn_checksum_valid(re.sub(r"[ -]", "", candidate)):
             sanitized = sanitized.replace(candidate, "[REDACTED_CREDIT_CARD]")
 
-    # 3. Mask Social Security Numbers
     sanitized = SSN_PATTERN.sub("[REDACTED_SSN]", sanitized)
-
-    # 4. Mask Email Addresses
     sanitized = EMAIL_PATTERN.sub("[REDACTED_EMAIL]", sanitized)
-
-    # 5. Mask Phone Numbers
-    sanitized = PHONE_PATTERN.sub("[REDACTED_PHONE]", sanitized)
-
-    # 6. Mask private RFC-1918 IPs (only private; public IPs are strictly preserved)
-    for match in list(IPV4_CANDIDATE_PATTERN.finditer(sanitized)):
-        ip_candidate = match.group(0)
-        if is_private_ip(ip_candidate):
-            sanitized = re.sub(
-                r"\b" + re.escape(ip_candidate) + r"\b",
-                "[REDACTED_INTERNAL_IP]",
-                sanitized,
-            )
-
-    return sanitized
+    return PHONE_PATTERN.sub("[REDACTED_PHONE]", sanitized)

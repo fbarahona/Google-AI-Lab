@@ -51,7 +51,6 @@ To execute `./src/demo/scripts/deploy_cloud.sh` or run `terraform apply`, the de
 | **Artifact Registry** | `roles/artifactregistry.admin` | Provisions Docker repo `cymbal-cyber` and configures push permissions. |
 | **Cloud Build** | `roles/cloudbuild.builds.editor` | Submits remote container builds (`gcloud builds submit`). |
 | **Cloud Scheduler** | `roles/cloudscheduler.admin` | Provisions the threat detector cron trigger. |
-| **Billing Check** | `roles/billing.viewer` | Permits `deploy_cloud.sh` pre-flight billing verification (`gcloud billing projects describe`). |
 
 > [!WARNING]
 > **Why `roles/editor` is NOT sufficient:**  
@@ -79,9 +78,9 @@ What `pre_flight.sh` does automatically:
 1. **Validates Inputs:** Prompts for `PROJECT_ID`, `REGION` (defaults to `us-east1`), `ADMIN_EMAIL` (defaults to your active `gcloud` account), `DEPLOYER_EMAIL` (defaults to `ADMIN_EMAIL`), and an optional `ANALYST_EMAIL`.
 2. **Verifies Active Billing:** Checks `gcloud billing projects describe` before making any IAM changes and halts early if billing is disabled.
 3. **Assigns IAM Roles:** After confirmation, binds the Admin bootstrap roles and (recommended, the default) creates `cymbal-deployer@<project>.iam.gserviceaccount.com`, binds the deployment roles to it, and gives `DEPLOYER_EMAIL` only Token Creator on it. Declining binds the deployment roles to `DEPLOYER_EMAIL` directly, as before. The analyst gets **no project roles**: `deploy_cloud.sh` grants console access through Terraform. Members accept an explicit prefix such as `group:soc@example.com`.
-4. **Populates `.env` & ADC Quota Project:** Safely upserts `PROJECT_ID`, `REGION`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION="global"`, `GOOGLE_GENAI_USE_ENTERPRISE="true"`, `GEMINI_MODEL="gemini-3.8-flash"`, `ADK_ALLOW_CONFIG_STDIO_MCP_SERVERS="true"` and `DEPLOYER_SA` into `.env` and aligns your ADC quota project.
+4. **Populates `.env` & ADC Quota Project:** Safely upserts `PROJECT_ID`, `REGION`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION="global"`, `GOOGLE_GENAI_USE_ENTERPRISE="true"`, `GEMINI_MODEL="gemini-3.8-flash"` and `DEPLOYER_SA` into `.env` and aligns your ADC quota project.
 
-With `DEPLOYER_SA` set (in `.env` or the shell), `deploy_cloud.sh` runs every `gcloud` and Terraform call as that service account through impersonation, and keeps your own account in `console_access_members` so you can still open the console proxy. See [CLOUD_SECURITY.md §2B](CLOUD_SECURITY.md) for removing the deployment roles from your personal account afterwards.
+With `DEPLOYER_SA` set (in `.env` or the shell), `deploy_cloud.sh` runs every `gcloud` and Terraform call as that service account through impersonation, and adds your own account to the console access list (`deploy_console_access_members`) so you can still open the console proxy. See [CLOUD_SECURITY.md §2B](CLOUD_SECURITY.md) for removing the deployment roles from your personal account afterwards.
 
 *(If you run `./src/demo/scripts/pre_flight.sh` directly instead of `source`, load the generated `.env` into your current shell afterward with `set -a && source .env && set +a`.)*
 
@@ -114,7 +113,6 @@ ROLES=(
   "roles/artifactregistry.admin"
   "roles/cloudbuild.builds.editor"
   "roles/cloudscheduler.admin"
-  "roles/billing.viewer"
 )
 
 echo "Granting minimum deployment roles to ${MEMBER} in ${PROJECT_ID}..."
@@ -277,7 +275,7 @@ The `gcloud run services proxy` command securely tunnels web traffic through you
 > ```
 
 #### Interactive SOC Analyst Console (Streamlit):
-The proxy authenticates with an ID token for `soc-console-access`, a service account that holds `roles/run.invoker` on the console only. Terraform lets `deployer_member` (and anyone in `console_access_members`) mint tokens for it. Its tokens carry the console URL as their audience, which Cloud Run always accepts; a plain user token from `gcloud auth print-identity-token` carries the OAuth client as audience and can be rejected with `401 Unauthorized`. Do not use `pubsub-invoker-sa` for this: it is reserved for Pub/Sub pushes to the agent webhook.
+The proxy authenticates with an ID token for `soc-console-access`, a service account that holds `roles/run.invoker` on the console only. Terraform lets `deployer_member`, anyone in `console_access_members` (tfvars) and anyone in `deploy_console_access_members` (set by `deploy_cloud.sh`) mint tokens for it. Its tokens carry the console URL as their audience, which Cloud Run always accepts; a plain user token from `gcloud auth print-identity-token` carries the OAuth client as audience and can be rejected with `401 Unauthorized`. Do not use `pubsub-invoker-sa` for this: it is reserved for Pub/Sub pushes to the agent webhook.
 ```bash
 CONSOLE_SA="soc-console-access@${PROJECT_ID}.iam.gserviceaccount.com"
 CONSOLE_URL="$(gcloud run services describe cymbal-cyber-soc-console \

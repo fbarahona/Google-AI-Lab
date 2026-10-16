@@ -75,6 +75,12 @@ variable "console_access_members" {
   default     = []
 }
 
+variable "deploy_console_access_members" {
+  description = "Console access members passed by deploy_cloud.sh (ANALYST_EMAIL and, in deployer-SA mode, the person deploying). Kept separate so a deploy never overrides console_access_members from tfvars."
+  type        = list(string)
+  default     = []
+}
+
 variable "dataflow_service_account_id" {
   description = "ID for the dedicated Dataflow streaming ingestion pipeline service account."
   type        = string

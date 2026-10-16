@@ -50,7 +50,6 @@ To execute `terraform apply` or run the automated deployment script, the deployi
 | **Artifact Registry** | `roles/artifactregistry.admin` | Provisions Docker repo `cymbal-cyber` and configures push permissions. |
 | **Cloud Build** | `roles/cloudbuild.builds.editor` | Submits remote container builds (`gcloud builds submit`). |
 | **Cloud Scheduler** | `roles/cloudscheduler.admin` | Provisions the threat detector cron trigger. |
-| **Billing Check** | `roles/billing.viewer` | Permits pre-flight billing verification (`gcloud billing projects describe`). |
 
 > [!WARNING]
 > **Why `roles/editor` is NOT sufficient:**  
@@ -79,7 +78,6 @@ ROLES=(
   "roles/artifactregistry.admin"
   "roles/cloudbuild.builds.editor"
   "roles/cloudscheduler.admin"
-  "roles/billing.viewer"
 )
 
 echo "Granting minimum deployment roles to ${MEMBER} in ${PROJECT_ID}..."

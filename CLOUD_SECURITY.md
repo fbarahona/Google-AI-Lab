@@ -152,7 +152,7 @@ To demonstrate rigorous security engineering, human identities must not share mo
 
 ### 2A. Day-2 Operator & SOC Analyst (Console-Only Human Baseline)
 
-Analysts work through the SOC console only. They hold **one** grant: service-account-level `roles/iam.serviceAccountTokenCreator` on `soc-console-access`, which `deploy_cloud.sh` wires through Terraform's `console_access_members` when `ANALYST_EMAIL` is set. They hold **no project roles**, so they cannot query raw event tables, read buckets (raw desktop screenshots, escalation files, Terraform state) or call Gemini directly. Everything they see goes through the console, its PII masking and its audit trail.
+Analysts work through the SOC console only. They hold **one** grant: service-account-level `roles/iam.serviceAccountTokenCreator` on `soc-console-access`, which `deploy_cloud.sh` wires through Terraform's `deploy_console_access_members` when `ANALYST_EMAIL` is set (in `.env` or the shell; a deploy without it removes the grant). Members listed in tfvars `console_access_members` are kept as well. They hold **no project roles**, so they cannot query raw event tables, read buckets (raw desktop screenshots, escalation files, Terraform state) or call Gemini directly. Everything they see goes through the console, its PII masking and its audit trail.
 
 | Role Name | Scope | IAM Role ID | Purpose |
 |---|---|---|---|
@@ -201,7 +201,6 @@ done
 | **Artifact Registry Admin** | `roles/artifactregistry.admin` | Provision Docker repository `cymbal-cyber` and repository IAM bindings |
 | **Cloud Build Editor** | `roles/cloudbuild.builds.editor` | Submit remote container builds (`gcloud builds submit`) |
 | **Cloud Scheduler Admin** | `roles/cloudscheduler.admin` | Provision the 5-minute `threat-detector-trigger` cron job |
-| **Billing Viewer** | `roles/billing.viewer` | Verify active project billing during pre-flight checks |
 
 #### Grant Bootstrap Roles (or run `source ./src/demo/scripts/pre_flight.sh`):
 ```bash
@@ -217,7 +216,6 @@ BOOTSTRAP_ROLES=(
   "roles/artifactregistry.admin"
   "roles/cloudbuild.builds.editor"
   "roles/cloudscheduler.admin"
-  "roles/billing.viewer"
 )
 
 for role in "${BOOTSTRAP_ROLES[@]}"; do
@@ -335,7 +333,7 @@ To enforce the principle of least privilege, background automation is split into
 
 ### 4D-2. Console Access Identity (`soc-console-access`)
 - **Purpose:** Analysts open the SOC console with `gcloud run services proxy` and an ID token minted for this account, with the console URL as audience. The console stays private: no `allUsers` binding.
-- **Roles:** `roles/run.invoker` on `cymbal-cyber-soc-console` only. Zero ambient project roles. `roles/iam.serviceAccountTokenCreator` on this account goes to `deployer_member` and `console_access_members` only.
+- **Roles:** `roles/run.invoker` on `cymbal-cyber-soc-console` only. Zero ambient project roles. `roles/iam.serviceAccountTokenCreator` on this account goes to `deployer_member`, `console_access_members` (tfvars) and `deploy_console_access_members` (set by `deploy_cloud.sh` from `ANALYST_EMAIL` and, in deployer-SA mode, the person deploying) only.
 
 ### 4E. Agent Service Exposure
 - In the cloud (`enable_adk_dev_ui = false` by default in `src/demo/terraform/variables.tf`) the agent service serves only `POST /trigger/pubsub` (and its `/apps/adk_agent/trigger/pubsub` alias), which verifies the Pub/Sub OIDC token. The ADK web UI, `/run`, session, builder and A2A APIs, and the OpenAPI docs are not routed, because they would run investigations as the agent SA without that check.
@@ -510,11 +508,14 @@ The multi-agent framework implements deterministic privacy guardrails to protect
   * US Social Security Numbers (`[REDACTED_SSN]`)
   * Payment Card Numbers with Luhn Check (`[REDACTED_CREDIT_CARD]`)
   * Phone Numbers (`[REDACTED_PHONE]`)
-  * Internal RFC-1918 IPv4 Addresses (`[REDACTED_INTERNAL_IP]`)
   * Embedded API Keys, Bearer Tokens, and Passwords (`[REDACTED_SECRET]`)
-* **Targeted Ingress/Egress Masking Touchpoints:**
-  * **Desktop OCR Forensics ([`adk_agent/tools.py`](adk_agent/tools.py)):** Screen captures analyzed via Gemini Vision or local OCR are sanitized before text enters sub-agent prompt memory or session state, ensuring sensitive personal information in background user applications is neutralized.
-  * **Incident Reports & Escalations ([`adk_agent/tools.py`](adk_agent/tools.py)):** Structured reports passed to `dispatch_to_soc_ticketing_system`, `escalate_to_human`, and `auto_escalate_unresolved_alert` are sanitized before persistence in BigQuery or dispatch to the analyst queue.
+* **Data classification (who sees what):**
+  * **External egress (Google Search):** strictest. The search model only sees public IPs, and its queries are audited (§1).
+  * **Internal analyst audience (OCR evidence, tickets):** internal IPs, hostnames and the investigated user stay visible, because they are the evidence an analyst works from (lateral movement, source host). Only third-party personal data and secrets are masked.
+* **Masking Touchpoints:**
+  * **Desktop OCR Forensics ([`adk_agent/tools.py`](adk_agent/tools.py)):** the deterministic prompt-injection scan runs on the raw OCR text first, so masking can never hide an injection phrase; the text is then masked before it enters agent prompts or session state.
+  * **Ticket text ([`adk_agent/tools.py`](adk_agent/tools.py)):** the agent's rationale and the structured report are masked in `dispatch_to_soc_ticketing_system`, `escalate_to_human`, `log_false_positive` and `auto_escalate_unresolved_alert` before they reach BigQuery or the analyst queue. Structured fields (user, device, source IP) and the IOC list are evidence and are kept.
+* **Precision:** phone numbers must have separators, so process IDs, byte counts and epoch timestamps are not redacted; IPv4 and IPv6 are both classified (public vs. private/ULA/link-local).
 * **Enterprise Google Cloud DLP Extension:** In enterprise production, the engine can be paired with Google Cloud Sensitive Data Protection (DLP API) for automated classification across regional data governance policies.
 
 ### 3. Threat Intelligence Preservation Guarantee
