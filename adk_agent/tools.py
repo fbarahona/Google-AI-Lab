@@ -30,6 +30,7 @@ from google.cloud import bigquery, storage
 from google.genai import types
 
 from adk_agent import detection_rules as rules
+from adk_agent.privacy_guard import mask_pii
 from src.demo.soc_ticketing.models import SocTicket
 from src.demo.soc_ticketing.ticketing_service import SocTicketingService
 
@@ -824,6 +825,9 @@ def get_visual_analysis_for_user(
                 tool_context,
             )
 
+    # Mask sensitive personal PII captured from desktop backgrounds or open windows
+    visual_text = mask_pii(visual_text)
+
     # Deterministic prompt injection scan; it does not depend on the model noticing.
     is_injection = rules.contains_prompt_injection(visual_text)
     if is_injection:
@@ -985,7 +989,7 @@ def dispatch_to_soc_ticketing_system(
         agent_decision="PERCEIVED_THREAT",
         agent_reason=agent_reason,
         screenshot_url=screenshot_url or None,
-        structured_report=structured_report,
+        structured_report=mask_pii(structured_report),
         mitre_tactics=_clean_list(mitre_tactics),
         indicators_of_compromise=iocs,
     )
@@ -1099,7 +1103,7 @@ def escalate_to_human(
         agent_decision="PERCEIVED_THREAT",
         agent_reason=agent_reason_for_escalation,
         screenshot_url=screenshot_url,
-        structured_report=context_data,
+        structured_report=mask_pii(context_data),
     )
     result = get_soc_service().create_and_dispatch_ticket(ticket)
     _set_state(tool_context, "escalation_dispatched", True)
@@ -1151,7 +1155,7 @@ def auto_escalate_unresolved_alert(
             "Deterministic Default-Deny: Model terminated turn without resolving alert "
             "through a permitted tool action."
         ),
-        structured_report=structured_report,
+        structured_report=mask_pii(structured_report),
     )
     get_soc_service().create_and_dispatch_ticket(ticket)
     logger.warning("Default-deny escalation filed ticket %s", ticket_id)

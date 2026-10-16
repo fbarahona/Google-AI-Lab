@@ -46,6 +46,7 @@ except Exception:
 
 # --- Local Imports ---
 from adk_agent.logging_utils import log_agent_event, setup_logging
+from adk_agent.privacy_guard import validate_search_query_privacy
 from adk_agent.tools import alert_id_from_payload, ticket_id_for_alert
 
 # The repository root is the one import root (adk_agent and src.demo both resolve
@@ -525,6 +526,34 @@ def security_gate_callback(
     return None
 
 
+def google_search_privacy_gate_callback(
+    tool: BaseTool, args: dict[str, Any], tool_context: ToolContext
+) -> dict[str, Any] | None:
+    """
+    Deterministic privacy gate callback for google_search_agent.
+    Inspects search queries before execution and blocks any query containing
+    internal employee IDs, workstation hostnames, RFC-1918 private IPs, or PII.
+    """
+    query = str(args.get("query") or args.get("q") or "").strip()
+    state = getattr(tool_context, "state", None)
+
+    is_safe, violation_reason = validate_search_query_privacy(query, state=state)
+    if not is_safe:
+        log_agent_event(
+            f"PRIVACY GATE TRIGGERED: Blocked search query: {violation_reason}"
+        )
+        return {
+            "error": "PRIVACY_GATE_VIOLATION",
+            "status": "BLOCKED",
+            "reason": (
+                f"Privacy Gate Violation: {violation_reason}. "
+                "Queries to external search engines must NOT leak internal corporate identities, "
+                "private network ranges, or employee PII. Search strictly for external public IP indicators."
+            ),
+        }
+    return None
+
+
 # alert_payload keys the ticket tools read before the canonical ones; dropped when the
 # gate pins the canonical value, so the model's spelling cannot shadow it.
 _ALERT_KEY_ALIASES = {
@@ -761,6 +790,7 @@ google_search_agent = Agent(
     """,
     output_key="google_search_results",
     before_agent_callback=before_sub_agent_starts,
+    before_tool_callback=google_search_privacy_gate_callback,
     after_agent_callback=log_agent_completion,
     tools=[google_search],
 )
