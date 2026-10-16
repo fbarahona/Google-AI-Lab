@@ -60,6 +60,28 @@ if command -v terraform >/dev/null 2>&1 && command -v gcloud >/dev/null 2>&1; th
   fi
 fi
 
+# Deployer service account (set by pre_flight.sh): when DEPLOYER_SA is set, every gcloud
+# and Terraform call below runs as that account through short-lived impersonated tokens,
+# so the owner-equivalent deployment roles never sit on a personal account. The caller
+# needs only Token Creator on it.
+if [[ -z "${DEPLOYER_SA:-}" ]] && [[ -f "${REPO_ROOT}/.env" ]]; then
+  DEPLOYER_SA=$(grep -E '^DEPLOYER_SA=' "${REPO_ROOT}/.env" | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]' || true)
+fi
+HUMAN_ACCOUNT=""
+if command -v gcloud >/dev/null 2>&1; then
+  HUMAN_ACCOUNT=$(gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null | head -n1 || true)
+fi
+if [[ -n "${DEPLOYER_SA:-}" ]]; then
+  echo "Deploying as service account ${DEPLOYER_SA} (impersonated by ${HUMAN_ACCOUNT:-the active account})."
+  export CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT="${DEPLOYER_SA}"
+  export GOOGLE_IMPERSONATE_SERVICE_ACCOUNT="${DEPLOYER_SA}"
+  if ! gcloud auth print-access-token >/dev/null 2>&1; then
+    echo "Error: cannot impersonate ${DEPLOYER_SA}. Grant yourself Token Creator on it (pre_flight.sh does this)"
+    echo "or unset DEPLOYER_SA to deploy with your own account."
+    exit 1
+  fi
+fi
+
 # Validation guard: Verify active billing is enabled for the target GCP project
 if command -v gcloud >/dev/null 2>&1; then
   echo "Validating billing status for project: ${PROJECT_ID}..."
@@ -104,19 +126,28 @@ else
 fi
 IMAGE_TAG="${IMAGE_REPO}:${IMAGE_VERSION}"
 
-# Detect active deploying account to ensure it is granted Artifact Registry writer permissions
-DEPLOYER_MEMBER=""
-if command -v gcloud >/dev/null 2>&1; then
-  ACTIVE_ACCOUNT=$(gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null | head -n1 || true)
-  if [[ -n "${ACTIVE_ACCOUNT}" ]]; then
-    if [[ "${ACTIVE_ACCOUNT}" == *".gserviceaccount.com"* ]]; then
-      DEPLOYER_MEMBER="serviceAccount:${ACTIVE_ACCOUNT}"
-    else
-      DEPLOYER_MEMBER="user:${ACTIVE_ACCOUNT}"
-    fi
-    echo "Deploying identity detected: ${DEPLOYER_MEMBER}"
+# The deploying identity gets Artifact Registry writer and console access in Terraform.
+to_member() {
+  local id="$1"
+  if [[ "${id}" == user:* || "${id}" == group:* || "${id}" == serviceAccount:* ]]; then
+    echo "${id}"  # explicit prefix, e.g. group:soc@example.com
+  elif [[ "${id}" == *".gserviceaccount.com"* ]]; then
+    echo "serviceAccount:${id}"
+  else
+    echo "user:${id}"
   fi
+}
+
+DEPLOYER_MEMBER=""
+CONSOLE_MEMBERS=()
+if [[ -n "${DEPLOYER_SA:-}" ]]; then
+  DEPLOYER_MEMBER="serviceAccount:${DEPLOYER_SA}"
+  # The person deploying still opens the console proxy with their own account.
+  [[ -n "${HUMAN_ACCOUNT}" ]] && CONSOLE_MEMBERS+=("$(to_member "${HUMAN_ACCOUNT}")")
+elif [[ -n "${HUMAN_ACCOUNT}" ]]; then
+  DEPLOYER_MEMBER="$(to_member "${HUMAN_ACCOUNT}")"
 fi
+[[ -n "${DEPLOYER_MEMBER}" ]] && echo "Deploying identity detected: ${DEPLOYER_MEMBER}"
 
 DEPLOYER_VAR=()
 if [[ -n "${DEPLOYER_MEMBER}" ]]; then
@@ -129,15 +160,13 @@ if [[ -z "${ANALYST_EMAIL:-}" ]] && [[ -f "${REPO_ROOT}/.env" ]]; then
   ANALYST_EMAIL=$(grep -E '^ANALYST_EMAIL=' "${REPO_ROOT}/.env" | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]' || true)
 fi
 if [[ -n "${ANALYST_EMAIL:-}" ]]; then
-  if [[ "${ANALYST_EMAIL}" == *".gserviceaccount.com"* ]]; then
-    ANALYST_MEMBER="serviceAccount:${ANALYST_EMAIL}"
-  elif [[ "${ANALYST_EMAIL}" == *"@googlegroups.com"* ]]; then
-    ANALYST_MEMBER="group:${ANALYST_EMAIL}"
-  else
-    ANALYST_MEMBER="user:${ANALYST_EMAIL}"
-  fi
+  ANALYST_MEMBER="$(to_member "${ANALYST_EMAIL}")"
   echo "SOC Analyst identity detected for console access: ${ANALYST_MEMBER}"
-  DEPLOYER_VAR+=(-var="console_access_members=[\"${ANALYST_MEMBER}\"]")
+  CONSOLE_MEMBERS+=("${ANALYST_MEMBER}")
+fi
+if [[ ${#CONSOLE_MEMBERS[@]} -gt 0 ]]; then
+  CONSOLE_LIST=$(printf '"%s",' "${CONSOLE_MEMBERS[@]}")
+  DEPLOYER_VAR+=(-var="console_access_members=[${CONSOLE_LIST%,}]")
 fi
 
 # 1. Provision Artifact Registry repository via targeted Terraform first

@@ -5,7 +5,10 @@
 # Interactive helper that:
 # 1. Prompts for and validates PROJECT_ID, REGION, and role emails.
 # 2. Verifies active GCP billing on the target project.
-# 3. Assigns required least-privilege IAM roles for Admin, Deployer, and Analyst.
+# 3. Assigns IAM roles: bootstrap roles for the Admin, deployment roles for a dedicated
+#    deployer service account the Deployer impersonates (or the Deployer directly, if
+#    declined). The Analyst gets no project roles: console access is granted by
+#    Terraform when deploy_cloud.sh runs with ANALYST_EMAIL set.
 # 4. Safely upserts environment variables into the repository root .env file.
 #
 # Usage:
@@ -103,6 +106,15 @@ run_preflight() {
     echo "  [Error] Invalid email format."
   done
 
+  # Deployment roles are owner-equivalent (they manage IAM). Holding them on a service
+  # account the Deployer impersonates keeps them off the personal account.
+  local INPUT_USE_SA
+  read -rp "Run deployments as a dedicated deployer service account (recommended)? [Y/n]: " INPUT_USE_SA || { echo ""; return 1; }
+  export DEPLOYER_SA=""
+  if [[ ! "${INPUT_USE_SA}" =~ ^[Nn]$ ]]; then
+    export DEPLOYER_SA="cymbal-deployer@${PROJECT_ID}.iam.gserviceaccount.com"
+  fi
+
   # ---------------------------------------------------------------------------
   # 2. Pre-Flight Billing Verification
   # ---------------------------------------------------------------------------
@@ -127,7 +139,9 @@ run_preflight() {
   # ---------------------------------------------------------------------------
   format_member() {
     local id="$1"
-    if [[ "${id}" == *".gserviceaccount.com" ]]; then
+    if [[ "${id}" == user:* || "${id}" == group:* || "${id}" == serviceAccount:* ]]; then
+      echo "${id}"  # explicit prefix, e.g. group:soc@example.com
+    elif [[ "${id}" == *".gserviceaccount.com" ]]; then
       echo "serviceAccount:${id}"
     elif [[ "${id}" == *"@googlegroups.com" ]]; then
       echo "group:${id}"
@@ -136,18 +150,25 @@ run_preflight() {
     fi
   }
 
-  local ADMIN_MEMBER DEPLOYER_MEMBER ANALYST_MEMBER=""
+  local ADMIN_MEMBER DEPLOYER_MEMBER ANALYST_MEMBER="" DEPLOY_ROLES_MEMBER
   ADMIN_MEMBER=$(format_member "${ADMIN_EMAIL}")
   DEPLOYER_MEMBER=$(format_member "${DEPLOYER_EMAIL}")
   [[ -n "${ANALYST_EMAIL}" ]] && ANALYST_MEMBER=$(format_member "${ANALYST_EMAIL}")
+  DEPLOY_ROLES_MEMBER="${DEPLOYER_MEMBER}"
+  [[ -n "${DEPLOYER_SA}" ]] && DEPLOY_ROLES_MEMBER="serviceAccount:${DEPLOYER_SA}"
 
   echo ""
   echo "=== IAM Assignment Plan ==="
   echo "Project ID : ${PROJECT_ID}"
   echo "Region     : ${REGION}"
   echo "Admin      : ${ADMIN_MEMBER}"
-  echo "Deployer   : ${DEPLOYER_MEMBER}"
-  echo "Analyst    : ${ANALYST_MEMBER:-[None]}"
+  if [[ -n "${DEPLOYER_SA}" ]]; then
+    echo "Deployer   : ${DEPLOYER_MEMBER} (Token Creator on ${DEPLOYER_SA} only)"
+    echo "Deploy SA  : ${DEPLOY_ROLES_MEMBER} (deployment roles)"
+  else
+    echo "Deployer   : ${DEPLOYER_MEMBER} (deployment roles)"
+  fi
+  echo "Analyst    : ${ANALYST_MEMBER:-[None]} (console access only, granted at deploy)"
   echo "==========================="
   local CONFIRM
   read -rp "Apply role bindings? [y/N]: " CONFIRM || { echo ""; return 1; }
@@ -196,39 +217,58 @@ run_preflight() {
     "roles/cloudscheduler.admin"
   )
 
-  local ANALYST_ROLES=(
-    "roles/bigquery.dataViewer"
-    "roles/bigquery.jobUser"
-    "roles/storage.objectViewer"
-    "roles/aiplatform.user"
-  )
 
   echo ""
   echo "Assigning Admin roles..."
   bind_roles "${ADMIN_MEMBER}" "${ADMIN_ROLES[@]}" || return 1
 
-  echo "Assigning Deployer roles..."
-  if [[ "${DEPLOYER_MEMBER}" == "${ADMIN_MEMBER}" ]]; then
-    # Avoid re-binding roles already applied in ADMIN_ROLES
-    local DEDUPED_DEPLOYER_ROLES=(
-      "roles/iam.serviceAccountAdmin"
-      "roles/iam.serviceAccountUser"
-      "roles/bigquery.admin"
-      "roles/run.admin"
-      "roles/pubsub.admin"
-      "roles/storage.admin"
-      "roles/artifactregistry.admin"
-      "roles/cloudbuild.builds.editor"
-      "roles/cloudscheduler.admin"
-    )
-    bind_roles "${DEPLOYER_MEMBER}" "${DEDUPED_DEPLOYER_ROLES[@]}" || return 1
+  if [[ -n "${DEPLOYER_SA}" ]]; then
+    # Impersonation mints short-lived tokens through the IAM Credentials API.
+    gcloud services enable iamcredentials.googleapis.com iam.googleapis.com \
+      --project="${PROJECT_ID}" --quiet > /dev/null || { die "Failed to enable the IAM Credentials API."; return 1; }
+    if ! gcloud iam service-accounts describe "${DEPLOYER_SA}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+      echo "Creating deployer service account ${DEPLOYER_SA}..."
+      gcloud iam service-accounts create "${DEPLOYER_SA%%@*}" \
+        --project="${PROJECT_ID}" \
+        --display-name="Cymbal Cyber deployer (impersonated by deployers)" \
+        --quiet > /dev/null || { die "Failed to create ${DEPLOYER_SA}."; return 1; }
+    fi
+    echo "Assigning deployment roles to ${DEPLOY_ROLES_MEMBER}..."
+    bind_roles "${DEPLOY_ROLES_MEMBER}" "${DEPLOYER_ROLES[@]}" || return 1
+
+    echo "Letting ${DEPLOYER_MEMBER} impersonate ${DEPLOYER_SA}..."
+    if ! gcloud iam service-accounts add-iam-policy-binding "${DEPLOYER_SA}" \
+      --project="${PROJECT_ID}" \
+      --member="${DEPLOYER_MEMBER}" \
+      --role="roles/iam.serviceAccountTokenCreator" \
+      --condition=None \
+      --quiet > /dev/null; then
+      die "Failed to grant Token Creator on ${DEPLOYER_SA} to ${DEPLOYER_MEMBER}." || return 1
+    fi
   else
-    bind_roles "${DEPLOYER_MEMBER}" "${DEPLOYER_ROLES[@]}" || return 1
+    echo "Assigning Deployer roles..."
+    if [[ "${DEPLOYER_MEMBER}" == "${ADMIN_MEMBER}" ]]; then
+      # Avoid re-binding roles already applied in ADMIN_ROLES
+      local DEDUPED_DEPLOYER_ROLES=(
+        "roles/iam.serviceAccountAdmin"
+        "roles/iam.serviceAccountUser"
+        "roles/bigquery.admin"
+        "roles/run.admin"
+        "roles/pubsub.admin"
+        "roles/storage.admin"
+        "roles/artifactregistry.admin"
+        "roles/cloudbuild.builds.editor"
+        "roles/cloudscheduler.admin"
+      )
+      bind_roles "${DEPLOYER_MEMBER}" "${DEDUPED_DEPLOYER_ROLES[@]}" || return 1
+    else
+      bind_roles "${DEPLOYER_MEMBER}" "${DEPLOYER_ROLES[@]}" || return 1
+    fi
   fi
 
   if [[ -n "${ANALYST_MEMBER}" ]]; then
-    echo "Assigning Analyst roles..."
-    bind_roles "${ANALYST_MEMBER}" "${ANALYST_ROLES[@]}" || return 1
+    echo "Analyst ${ANALYST_MEMBER}: no project roles. deploy_cloud.sh grants console access"
+    echo "  (Token Creator on soc-console-access) through Terraform."
   fi
 
   if [[ -n "${BILLING_ACCOUNT_ID}" ]]; then
@@ -267,6 +307,7 @@ run_preflight() {
   upsert_env_var "ADMIN_EMAIL" "${ADMIN_EMAIL}"
   upsert_env_var "DEPLOYER_EMAIL" "${DEPLOYER_EMAIL}"
   upsert_env_var "ANALYST_EMAIL" "${ANALYST_EMAIL}"
+  upsert_env_var "DEPLOYER_SA" "${DEPLOYER_SA}"
   upsert_env_var "GOOGLE_GENAI_USE_ENTERPRISE" "true"
   upsert_env_var "GOOGLE_CLOUD_LOCATION" "global"
   upsert_env_var "GOOGLE_CLOUD_PROJECT" "${PROJECT_ID}"

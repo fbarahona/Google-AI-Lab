@@ -65,7 +65,7 @@ Before initiating your first deployment, configure your environment variables an
 
 ### Option A: Interactive Pre-Flight Script (Recommended)
 
-Run `src/demo/scripts/pre_flight.sh` to interactively validate your GCP Project ID, region, and emails, verify active project billing, bind least-privilege IAM roles (Admin, Deployer, and optional SOC Data Analyst), and automatically populate your `.env` file and current shell session:
+Run `src/demo/scripts/pre_flight.sh` to interactively validate your GCP Project ID, region, and emails, verify active project billing, create the `cymbal-deployer` service account and bind the deployment roles to it, and automatically populate your `.env` file and current shell session:
 
 ```bash
 # 1. Authenticate gcloud CLI and Application Default Credentials (once per session)
@@ -78,8 +78,10 @@ source ./src/demo/scripts/pre_flight.sh
 What `pre_flight.sh` does automatically:
 1. **Validates Inputs:** Prompts for `PROJECT_ID`, `REGION` (defaults to `us-east1`), `ADMIN_EMAIL` (defaults to your active `gcloud` account), `DEPLOYER_EMAIL` (defaults to `ADMIN_EMAIL`), and an optional `ANALYST_EMAIL`.
 2. **Verifies Active Billing:** Checks `gcloud billing projects describe` before making any IAM changes and halts early if billing is disabled.
-3. **Assigns IAM Roles:** Resolves `user:`, `serviceAccount:`, or `group:` member prefixes and binds the required Admin, Deployer, Analyst, and Billing Viewer roles after confirmation.
-4. **Populates `.env` & ADC Quota Project:** Safely upserts `PROJECT_ID`, `REGION`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION="global"`, `GOOGLE_GENAI_USE_ENTERPRISE="true"`, `GEMINI_MODEL="gemini-3.8-flash"`, and `ADK_ALLOW_CONFIG_STDIO_MCP_SERVERS="true"` into `.env` and aligns your ADC quota project.
+3. **Assigns IAM Roles:** After confirmation, binds the Admin bootstrap roles and (recommended, the default) creates `cymbal-deployer@<project>.iam.gserviceaccount.com`, binds the deployment roles to it, and gives `DEPLOYER_EMAIL` only Token Creator on it. Declining binds the deployment roles to `DEPLOYER_EMAIL` directly, as before. The analyst gets **no project roles**: `deploy_cloud.sh` grants console access through Terraform. Members accept an explicit prefix such as `group:soc@example.com`.
+4. **Populates `.env` & ADC Quota Project:** Safely upserts `PROJECT_ID`, `REGION`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION="global"`, `GOOGLE_GENAI_USE_ENTERPRISE="true"`, `GEMINI_MODEL="gemini-3.8-flash"`, `ADK_ALLOW_CONFIG_STDIO_MCP_SERVERS="true"` and `DEPLOYER_SA` into `.env` and aligns your ADC quota project.
+
+With `DEPLOYER_SA` set (in `.env` or the shell), `deploy_cloud.sh` runs every `gcloud` and Terraform call as that service account through impersonation, and keeps your own account in `console_access_members` so you can still open the console proxy. See [CLOUD_SECURITY.md §2B](CLOUD_SECURITY.md) for removing the deployment roles from your personal account afterwards.
 
 *(If you run `./src/demo/scripts/pre_flight.sh` directly instead of `source`, load the generated `.env` into your current shell afterward with `set -a && source .env && set +a`.)*
 
