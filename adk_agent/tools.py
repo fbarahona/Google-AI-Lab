@@ -897,11 +897,17 @@ def get_gcs_uri_for_user(user: str) -> dict[str, Any]:
 def generate_signed_url(gcs_uri: str) -> dict[str, Any]:
     """
     Generates a secure signed URL for a GCS object to allow authorized human SOC viewing.
+    Only objects inside SCREENSHOTS_BUCKET (with no path traversal) may be signed.
     Returns {"signed_url": ...}, or {"error": ...} if signing fails or the URI is invalid,
     so a signing failure never produces a misleading success result or unauthenticated link.
     """
-    if not gcs_uri or not gcs_uri.startswith("gs://"):
-        return {"error": f"Invalid GCS URI provided: {gcs_uri!r}"}
+    if not _is_allowed_screenshot_uri(gcs_uri):
+        return {
+            "error": (
+                f"Invalid GCS URI provided: {gcs_uri!r}. "
+                f"Only objects in gs://{SCREENSHOTS_BUCKET}/ are permitted."
+            )
+        }
 
     try:
         source_credentials, _ = google.auth.default()

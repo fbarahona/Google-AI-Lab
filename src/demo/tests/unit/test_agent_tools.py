@@ -17,6 +17,7 @@ from adk_agent.agent import (
     security_gate_callback,
 )
 from adk_agent.tools import (
+    SCREENSHOTS_BUCKET,
     _parse_alert_payload_to_row,
     alert_id_from_payload,
     build_event_logs_query,
@@ -210,7 +211,7 @@ def test_generate_signed_url_failure_returns_explicit_error(
     mock_client.bucket.return_value.blob.return_value = mock_blob
     mock_storage_client_cls.return_value = mock_client
 
-    result = generate_signed_url("gs://cymbal-cyber-screenshots/u.lewis.png")
+    result = generate_signed_url(f"gs://{SCREENSHOTS_BUCKET}/u.lewis.png")
 
     # Must be an explicit failure, never a misleading success result or public URL
     assert result["error"].startswith("Failed to generate signed URL:")
@@ -229,7 +230,7 @@ def test_generate_signed_url_success(mock_auth_default, mock_storage_client_cls)
     mock_client.bucket.return_value.blob.return_value = mock_blob
     mock_storage_client_cls.return_value = mock_client
 
-    result = generate_signed_url("gs://cymbal-cyber-screenshots/u.lewis.png")
+    result = generate_signed_url(f"gs://{SCREENSHOTS_BUCKET}/u.lewis.png")
     assert result == {"signed_url": expected_signed_url}
 
 
