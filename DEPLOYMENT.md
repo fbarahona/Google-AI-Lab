@@ -2,11 +2,26 @@
 
 This guide covers the end-to-end cloud deployment, post-deployment operations, console access, and FinOps teardown procedures for the **Real-Time Cybersecurity AI & ADK Platform** on Google Cloud Platform (project `${PROJECT_ID}`).
 
+> [!TIP]
+> **3-Step Quickstart (Recommended):**
+> ```bash
+> # 1. Authenticate gcloud & Application Default Credentials (ADC)
+> gcloud auth login --update-adc
+>
+> # 2. Run the interactive pre-flight script (validates billing, binds IAM roles, and writes .env)
+> source ./src/demo/scripts/pre_flight.sh
+>
+> # 3. Deploy the platform to Google Cloud
+> ./src/demo/scripts/deploy_cloud.sh "${PROJECT_ID}" "${REGION}"
+> ```
+
 ---
 
 ## 📋 Table of Contents
 1. [Prerequisites & Deployer IAM Roles](#1-prerequisites--deployer-iam-roles)
-2. [Automated Role Assignment Script](#2-automated-role-assignment-script)
+2. [Environment & IAM Role Setup](#2-environment--iam-role-setup)
+   - [Option A: Interactive Pre-Flight Script (Recommended)](#option-a-interactive-pre-flight-script-recommended)
+   - [Option B: Manual CLI Role Assignment & Environment Setup](#option-b-manual-cli-role-assignment--environment-setup)
 3. [Deployment Workflows](#3-deployment-workflows)
    - [Option A: One-Command Deployment Script (Recommended)](#option-a-one-command-deployment-script-recommended)
    - [Option B: Manual Step-by-Step Deployment](#option-b-manual-step-by-step-deployment)
@@ -44,9 +59,35 @@ To execute `./src/demo/scripts/deploy_cloud.sh` or run `terraform apply`, the de
 
 ---
 
-## 2. Automated Role Assignment Script
+## 2. Environment & IAM Role Setup
 
-Before initiating your first deployment, grant the minimum required deployment roles to your user account or CI/CD deployment service account:
+Before initiating your first deployment, configure your environment variables and grant the required IAM roles using either the interactive pre-flight script (**Option A**) or manual CLI commands (**Option B**).
+
+### Option A: Interactive Pre-Flight Script (Recommended)
+
+Run `src/demo/scripts/pre_flight.sh` to interactively validate your GCP Project ID, region, and emails, verify active project billing, bind least-privilege IAM roles (Admin, Deployer, and optional SOC Data Analyst), and automatically populate your `.env` file and current shell session:
+
+```bash
+# 1. Authenticate gcloud CLI and Application Default Credentials (once per session)
+gcloud auth login --update-adc
+
+# 2. Source the pre-flight script so exported variables persist in your current terminal
+source ./src/demo/scripts/pre_flight.sh
+```
+
+What `pre_flight.sh` does automatically:
+1. **Validates Inputs:** Prompts for `PROJECT_ID`, `REGION` (defaults to `us-east1`), `ADMIN_EMAIL` (defaults to your active `gcloud` account), `DEPLOYER_EMAIL` (defaults to `ADMIN_EMAIL`), and an optional `ANALYST_EMAIL`.
+2. **Verifies Active Billing:** Checks `gcloud billing projects describe` before making any IAM changes and halts early if billing is disabled.
+3. **Assigns IAM Roles:** Resolves `user:`, `serviceAccount:`, or `group:` member prefixes and binds the required Admin, Deployer, Analyst, and Billing Viewer roles after confirmation.
+4. **Populates `.env` & ADC Quota Project:** Safely upserts `PROJECT_ID`, `REGION`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION="global"`, `GOOGLE_GENAI_USE_ENTERPRISE="true"`, `GEMINI_MODEL="gemini-3.8-flash"`, and `ADK_ALLOW_CONFIG_STDIO_MCP_SERVERS="true"` into `.env` and aligns your ADC quota project.
+
+*(If you run `./src/demo/scripts/pre_flight.sh` directly instead of `source`, load the generated `.env` into your current shell afterward with `set -a && source .env && set +a`.)*
+
+---
+
+### Option B: Manual CLI Role Assignment & Environment Setup
+
+If you prefer manual CLI setup or are configuring a headless CI/CD environment without interactive prompts:
 
 ```bash
 export PROJECT_ID="<your-gcp-project-id>"
@@ -82,6 +123,10 @@ for role in "${ROLES[@]}"; do
     --condition=None \
     --quiet
 done
+
+# Configure local Application Default Credentials (ADC) quota project
+gcloud auth application-default login
+gcloud auth application-default set-quota-project "${PROJECT_ID}"
 ```
 
 ---
@@ -90,12 +135,10 @@ done
 
 ### Option A: One-Command Deployment Script (Recommended)
 
-The automated script handles API enablement, Terraform provisioning, Cloud Build container compilation, Cloud Run service deployment, and Cloud Scheduler configuration:
+Once you have completed [Section 2](#2-environment--iam-role-setup), run `deploy_cloud.sh` to handle API enablement, Terraform provisioning, Cloud Build container compilation, Cloud Run service deployment, and Cloud Scheduler configuration:
 
 ```bash
-gcloud auth application-default login                      # once per machine or devcontainer rebuild
-gcloud auth application-default set-quota-project ${PROJECT_ID}
-./src/demo/scripts/deploy_cloud.sh ${PROJECT_ID} ${REGION}
+./src/demo/scripts/deploy_cloud.sh "${PROJECT_ID}" "${REGION}"
 ```
 
 - **Credentials:** Terraform uses Application Default Credentials, which refresh themselves, so long applies don't fail when a token expires. The script stops early if ADC is missing.
