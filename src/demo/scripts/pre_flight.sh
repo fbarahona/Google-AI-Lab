@@ -200,6 +200,7 @@ run_preflight() {
     "roles/bigquery.dataViewer"
     "roles/bigquery.jobUser"
     "roles/storage.objectViewer"
+    "roles/aiplatform.user"
   )
 
   echo ""

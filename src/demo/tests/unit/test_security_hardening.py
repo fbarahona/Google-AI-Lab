@@ -256,3 +256,29 @@ def test_bq_investigation_agent_does_not_have_execute_sql():
     assert "get_entity_behavioral_profile" in tool_names
     assert "execute_sql" not in tool_names
     assert len(bq_investigation_agent.tools) == 1
+
+
+# ==============================================================================
+# 6. SIGNED URL BUCKET ALLOW-LIST TESTS
+# ==============================================================================
+
+
+@pytest.mark.parametrize(
+    "disallowed_uri",
+    [
+        "gs://cymbal-cyber-adk-escalations-bucket_proj/ticket.json",
+        "gs://other-bucket/u.lewis.png",
+        "gs://cymbal-cyber-screenshots_local-demo/../secret.png",
+        "gs://cymbal-cyber-screenshots_local-demo/",
+        "file:///etc/passwd",
+    ],
+)
+def test_generate_signed_url_rejects_non_screenshot_buckets_and_traversal(
+    disallowed_uri,
+):
+    """Verify generate_signed_url refuses to sign objects outside SCREENSHOTS_BUCKET."""
+    from adk_agent.tools import generate_signed_url
+
+    res = generate_signed_url(disallowed_uri)
+    assert "error" in res
+    assert "signed_url" not in res

@@ -123,6 +123,23 @@ if [[ -n "${DEPLOYER_MEMBER}" ]]; then
   DEPLOYER_VAR=(-var="deployer_member=${DEPLOYER_MEMBER}")
 fi
 
+# If ANALYST_EMAIL is set (or present in .env), grant the analyst token-creator rights
+# on soc-console-access via var.console_access_members so they can open the console proxy.
+if [[ -z "${ANALYST_EMAIL:-}" ]] && [[ -f "${REPO_ROOT}/.env" ]]; then
+  ANALYST_EMAIL=$(grep -E '^ANALYST_EMAIL=' "${REPO_ROOT}/.env" | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]' || true)
+fi
+if [[ -n "${ANALYST_EMAIL:-}" ]]; then
+  if [[ "${ANALYST_EMAIL}" == *".gserviceaccount.com"* ]]; then
+    ANALYST_MEMBER="serviceAccount:${ANALYST_EMAIL}"
+  elif [[ "${ANALYST_EMAIL}" == *"@googlegroups.com"* ]]; then
+    ANALYST_MEMBER="group:${ANALYST_EMAIL}"
+  else
+    ANALYST_MEMBER="user:${ANALYST_EMAIL}"
+  fi
+  echo "SOC Analyst identity detected for console access: ${ANALYST_MEMBER}"
+  DEPLOYER_VAR+=(-var="console_access_members=[\"${ANALYST_MEMBER}\"]")
+fi
+
 # 1. Provision Artifact Registry repository via targeted Terraform first
 if command -v terraform >/dev/null 2>&1 && [ -d "${TERRAFORM_DIR}" ]; then
   echo "================================================================="
