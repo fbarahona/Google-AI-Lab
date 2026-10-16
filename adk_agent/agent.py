@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 from google.adk.agents import Agent, ParallelAgent, SequentialAgent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.apps import App
+from google.adk.models import LlmRequest, LlmResponse
 from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.tools import BaseTool, ToolContext, google_search
 from google.adk.tools.mcp_tool.mcp_session_manager import (
@@ -31,6 +32,7 @@ from google.adk.tools.mcp_tool.mcp_session_manager import (
     StreamableHTTPConnectionParams,
 )
 from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
+from google.genai import types
 from mcp import StdioServerParameters
 
 try:
@@ -46,7 +48,10 @@ except Exception:
 
 # --- Local Imports ---
 from adk_agent.logging_utils import log_agent_event, setup_logging
-from adk_agent.privacy_guard import validate_search_query_privacy
+from adk_agent.privacy_guard import (
+    extract_public_ips,
+    validate_search_query_privacy,
+)
 from adk_agent.tools import alert_id_from_payload, ticket_id_for_alert
 
 # The repository root is the one import root (adk_agent and src.demo both resolve
@@ -526,31 +531,94 @@ def security_gate_callback(
     return None
 
 
-def google_search_privacy_gate_callback(
-    tool: BaseTool, args: dict[str, Any], tool_context: ToolContext
-) -> dict[str, Any] | None:
-    """
-    Deterministic privacy gate callback for google_search_agent.
-    Inspects search queries before execution and blocks any query containing
-    internal employee IDs, workstation hostnames, RFC-1918 private IPs, or PII.
-    """
-    query = str(args.get("query") or args.get("q") or "").strip()
-    state = getattr(tool_context, "state", None)
+NO_PUBLIC_IP_RESULT = "No external public IP address present in alert; no suspicious foreign IPs identified."
 
-    is_safe, violation_reason = validate_search_query_privacy(query, state=state)
-    if not is_safe:
+
+def _content_text(content: Any) -> str:
+    """Concatenated text parts of a genai Content (or "" when there are none)."""
+    parts = getattr(content, "parts", None) or []
+    return "".join(getattr(p, "text", None) or "" for p in parts)
+
+
+def search_input_minimization_callback(
+    callback_context: CallbackContext, llm_request: LlmRequest
+) -> LlmResponse | None:
+    """
+    Deterministic privacy control for google_search_agent (before_model_callback).
+
+    google_search is a Gemini built-in tool: Gemini writes and runs the queries itself,
+    so no ADK tool callback ever sees them. The control therefore limits what the search
+    model can see. The conversation (which carries the alert's user, device and internal
+    IPs) is replaced by a message naming only the alert's public IPs; with none, the
+    model is not called and no search happens.
+    """
+    alert_text = _content_text(getattr(callback_context, "user_content", None))
+    state = getattr(callback_context, "state", None)
+    source_ip = str(state.get("source_ip") or "") if state is not None else ""
+    public_ips = extract_public_ips(f"{source_ip} {alert_text}")
+
+    if not public_ips:
         log_agent_event(
-            f"PRIVACY GATE TRIGGERED: Blocked search query: {violation_reason}"
+            "PRIVACY CONTROL: no public IP in alert; search skipped",
+            callback_context.agent_name,
         )
-        return {
-            "error": "PRIVACY_GATE_VIOLATION",
-            "status": "BLOCKED",
-            "reason": (
-                f"Privacy Gate Violation: {violation_reason}. "
-                "Queries to external search engines must NOT leak internal corporate identities, "
-                "private network ranges, or employee PII. Search strictly for external public IP indicators."
-            ),
-        }
+        return LlmResponse(
+            content=types.Content(
+                role="model", parts=[types.Part(text=NO_PUBLIC_IP_RESULT)]
+            )
+        )
+
+    log_agent_event(
+        f"PRIVACY CONTROL: search model limited to public IPs {public_ips}",
+        callback_context.agent_name,
+    )
+    llm_request.contents = [
+        types.Content(
+            role="user",
+            parts=[
+                types.Part(
+                    text=(
+                        "Research these external public IP addresses from a security "
+                        f"alert: {', '.join(public_ips)}"
+                    )
+                )
+            ],
+        )
+    ]
+    return None
+
+
+def search_query_audit_callback(
+    callback_context: CallbackContext, llm_response: LlmResponse
+) -> LlmResponse | None:
+    """
+    Detective control for google_search_agent (after_model_callback): checks the queries
+    Gemini actually ran (grounding metadata) against the privacy rules. A violation is
+    logged and its search results are withheld from the rest of the investigation.
+    """
+    metadata = getattr(llm_response, "grounding_metadata", None)
+    queries = list(getattr(metadata, "web_search_queries", None) or [])
+    state = getattr(callback_context, "state", None)
+    for query in queries:
+        is_safe, reason = validate_search_query_privacy(query, state=state)
+        if not is_safe:
+            log_agent_event(
+                f"PRIVACY_GATE_VIOLATION: search query breached privacy rules: {reason}",
+                callback_context.agent_name,
+            )
+            return LlmResponse(
+                content=types.Content(
+                    role="model",
+                    parts=[
+                        types.Part(
+                            text=(
+                                "OSINT results withheld: a search query breached the "
+                                "privacy rules. No external intelligence available."
+                            )
+                        )
+                    ],
+                )
+            )
     return None
 
 
@@ -790,7 +858,8 @@ google_search_agent = Agent(
     """,
     output_key="google_search_results",
     before_agent_callback=before_sub_agent_starts,
-    before_tool_callback=google_search_privacy_gate_callback,
+    before_model_callback=search_input_minimization_callback,
+    after_model_callback=search_query_audit_callback,
     after_agent_callback=log_agent_completion,
     tools=[google_search],
 )

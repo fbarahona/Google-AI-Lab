@@ -2,7 +2,17 @@
 Unit tests for Privacy Guard and PII Sanitization Engine.
 """
 
+from collections.abc import AsyncGenerator
+from unittest.mock import MagicMock
+
+import pytest
+from google.adk.models import BaseLlm, LlmRequest, LlmResponse
+from google.genai import types
+from pydantic import Field
+
+import adk_agent.agent  # noqa: F401  (must precede anything that imports httpx)
 from adk_agent.privacy_guard import (
+    extract_public_ips,
     is_private_ip,
     is_public_ip,
     mask_pii,
@@ -155,45 +165,125 @@ def test_mask_pii_preserves_threat_intelligence_iocs():
     assert "MITRE T1059.001" in result
 
 
-def test_google_search_privacy_gate_callback():
-    """Validates that google_search_privacy_gate_callback blocks unsafe queries and allows clean public IPs."""
-    from unittest.mock import MagicMock
+class _CaptureLlm(BaseLlm):
+    """Records every request the search agent sends to the model; never searches."""
 
-    from adk_agent.agent import google_search_agent, google_search_privacy_gate_callback
+    requests: list[LlmRequest] = Field(default_factory=list)
 
-    # Ensure before_tool_callback is wired
-    assert (
-        google_search_agent.before_tool_callback == google_search_privacy_gate_callback
+    async def generate_content_async(
+        self, llm_request: LlmRequest, stream: bool = False
+    ) -> AsyncGenerator[LlmResponse, None]:
+        self.requests.append(llm_request)
+        yield LlmResponse(
+            content=types.Content(role="model", parts=[types.Part(text="ok")])
+        )
+
+
+async def _run_search_agent(alert_text: str) -> tuple[list[LlmRequest], str]:
+    """Runs the real google_search_agent (real callbacks, real built-in tool)."""
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+
+    from adk_agent.agent import google_search_agent
+
+    # A "gemini" model name so the built-in google_search tool attaches as in production.
+    model = _CaptureLlm(model="gemini-capture", requests=[])
+    saved = google_search_agent.model
+    google_search_agent.model = model
+    try:
+        runner = Runner(
+            app_name="privacy",
+            agent=google_search_agent,
+            session_service=InMemorySessionService(),
+            auto_create_session=True,
+        )
+        final = ""
+        async for event in runner.run_async(
+            user_id="u",
+            session_id="s",
+            new_message=types.Content(role="user", parts=[types.Part(text=alert_text)]),
+        ):
+            if event.content and event.content.parts:
+                final = "".join(p.text or "" for p in event.content.parts)
+        return model.requests, final
+    finally:
+        google_search_agent.model = saved
+
+
+ALERT_WITH_INTERNAL_IDENTITIES = (
+    "Investigate incoming continuous security alert: "
+    '{"alert_id": "u.lewis|2026-10-16T10:02:00Z", "user_id": "u.lewis", '
+    '"device_id": "WS-HR-05", "source_ip": "175.45.176.10", '
+    '"internal_host_ip": "10.20.1.15", "contact": "uma.lewis@cymbal.example"}'
+)
+
+
+@pytest.mark.asyncio
+async def test_search_model_sees_only_public_ips():
+    """The search model never receives the alert's user, device, internal IP or email."""
+    requests, _ = await _run_search_agent(ALERT_WITH_INTERNAL_IDENTITIES)
+
+    assert requests, "the search model should be called when a public IP exists"
+    for request in requests:
+        sent = " ".join(p.text or "" for c in request.contents for p in (c.parts or []))
+        assert "175.45.176.10" in sent
+        for private in (
+            "u.lewis",
+            "WS-HR-05",
+            "10.20.1.15",
+            "uma.lewis@cymbal.example",
+        ):
+            assert private not in sent, f"{private!r} reached the search model"
+        # Search capability is still attached as the Gemini built-in tool.
+        assert any(t.google_search for t in request.config.tools)
+
+
+@pytest.mark.asyncio
+async def test_search_skipped_without_public_ip():
+    """With only internal addresses, the model is not called and nothing is searched."""
+    from adk_agent.agent import NO_PUBLIC_IP_RESULT
+
+    requests, final = await _run_search_agent(
+        'Investigate incoming continuous security alert: {"user_id": "u.lewis", '
+        '"device_id": "WS-HR-05", "source_ip": "10.20.1.15"}'
     )
+    assert requests == []
+    assert final == NO_PUBLIC_IP_RESULT
 
-    mock_tool = MagicMock()
-    mock_tool.name = "google_search"
 
-    mock_ctx = MagicMock()
-    mock_ctx.state = {"user_id": "u.lewis", "device_id": "ws-hr-05"}
+def test_search_query_audit_withholds_results_on_violation():
+    """Queries Gemini actually ran are audited; a leaking query withholds the results."""
+    from adk_agent.agent import search_query_audit_callback
 
-    # 1. Unsafe query leaking user_id
-    res = google_search_privacy_gate_callback(
-        mock_tool, {"query": "u.lewis background"}, mock_ctx
+    ctx = MagicMock()
+    ctx.state = {"user_id": "u.lewis", "device_id": "ws-hr-05"}
+
+    leaked = LlmResponse(
+        grounding_metadata=types.GroundingMetadata(
+            web_search_queries=["175.45.176.10 abuse", "u.lewis cymbal"]
+        )
     )
-    assert res is not None
-    assert res["error"] == "PRIVACY_GATE_VIOLATION"
-    assert res["status"] == "BLOCKED"
-    assert "u.lewis" in res["reason"]
+    blocked = search_query_audit_callback(ctx, leaked)
+    assert blocked is not None
+    assert "withheld" in blocked.content.parts[0].text
 
-    # 2. Unsafe query leaking private IP
-    res = google_search_privacy_gate_callback(
-        mock_tool, {"query": "lookup 10.0.1.5"}, mock_ctx
+    clean = LlmResponse(
+        grounding_metadata=types.GroundingMetadata(
+            web_search_queries=["175.45.176.10 threat intel"]
+        )
     )
-    assert res is not None
-    assert res["error"] == "PRIVACY_GATE_VIOLATION"
-    assert "10.0.1.5" in res["reason"]
+    assert search_query_audit_callback(ctx, clean) is None
+    assert search_query_audit_callback(ctx, LlmResponse()) is None
 
-    # 3. Clean public IP query
-    res = google_search_privacy_gate_callback(
-        mock_tool, {"query": "175.45.176.10 threat intel"}, mock_ctx
-    )
-    assert res is None
+
+def test_extract_public_ips():
+    assert extract_public_ips(
+        "from 10.0.0.5 to 175.45.176.10 and 8.8.8.8, 8.8.8.8"
+    ) == [
+        "175.45.176.10",
+        "8.8.8.8",
+    ]
+    assert extract_public_ips(None) == []
 
 
 def test_visual_analysis_masks_desktop_pii(monkeypatch):

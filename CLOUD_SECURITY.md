@@ -12,15 +12,15 @@ In enterprise security engineering, granting broad administrative roles across a
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           SECURITY IDENTITY TIERS                           │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ 1. Bootstrap / Provisioning Identity (CI/CD Pipeline or Cloud Admin)        │
-│    - One-time resource creation, IAM bindings, API enablement               │
+│ 1. Bootstrap / Provisioning Identity (`cymbal-deployer` service account)    │
+│    - Resource creation, IAM bindings, API enablement                        │
 │    - Elevated: Project IAM Admin, Service Account/Run/BQ/PubSub/Storage     │
+│    - Held by a service account; humans only impersonate it (TokenCreator)   │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ 2. Day-2 Operator & SOC Analyst Identity (Human Incident Responder)         │
-│    - Daily operations: Open Streamlit console proxy, review tickets, query  │
-│    - Least-Privilege: BigQuery JobUser & DataViewer, Storage ObjectViewer,  │
-│      Vertex AI User, plus TokenCreator on `soc-console-access`              │
-│    - ZERO administrative, IAM mutation, or storage deletion permissions     │
+│    - Daily operations: open the Streamlit console proxy, review tickets     │
+│    - Only TokenCreator on `soc-console-access` (console invoker)            │
+│    - ZERO project roles: no direct BigQuery, bucket or Vertex AI access     │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ 3. Scheduled Threat Detector Identity (`threat-detector-job-sa`)            │
 │    - Default micro-batch Cloud Run Job evaluating 2-min tumbling windows    │
@@ -77,8 +77,8 @@ In enterprise security engineering, granting broad administrative roles across a
 │    - Per-agent tool_filter allow-lists; one platform-only escalation tool   │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ 7. Privacy Safeguards & Automated PII Sanitization                          │
-│    - Deterministic Google Search Privacy Gate intercepts outbound queries   │
-│    - Blocks leakage of user IDs, device hostnames, private RFC-1918 IPs, PII │
+│    - Search model only ever sees the alert's public IPs (input minimization)│
+│    - Queries Gemini ran are audited; a leaking query withholds the results  │
 │    - Automated PII redaction (SSNs, cards, emails, phones) in OCR & reports │
 │    - Strict preservation of Threat Intelligence IOCs (public IPs, hashes)   │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -89,7 +89,7 @@ In enterprise security engineering, granting broad administrative roles across a
 ## 📌 Prerequisites & Variables
 
 > [!TIP]
-> You can run `source ./src/demo/scripts/pre_flight.sh` to interactively configure these variables, populate `.env`, and automatically assign the required bootstrap and analyst IAM roles.
+> You can run `source ./src/demo/scripts/pre_flight.sh` to interactively configure these variables, populate `.env`, create the `cymbal-deployer` service account you deploy through, and assign the bootstrap roles. Analysts get no project roles; `deploy_cloud.sh` grants their console access.
 
 Or set your deployment parameters manually in your shell:
 
@@ -150,42 +150,26 @@ gcloud services enable \
 
 To demonstrate rigorous security engineering, human identities must not share monolithic administrative permissions. Initial bootstrapping is separated from day-to-day operational analysis.
 
-### 2A. Day-2 Operator & SOC Analyst (Least-Privilege Human Baseline)
+### 2A. Day-2 Operator & SOC Analyst (Console-Only Human Baseline)
 
-Human analysts investigating alerts, reviewing desktop screenshots, and opening the Cloud Run Streamlit SOC console require **4 project-level least-privilege roles** plus **service-account-level `roles/iam.serviceAccountTokenCreator` on `soc-console-access`** (automatically wired by `deploy_cloud.sh` when `ANALYST_EMAIL` is set). They do not have rights to alter IAM policies, delete buckets, or modify infrastructure.
+Analysts work through the SOC console only. They hold **one** grant: service-account-level `roles/iam.serviceAccountTokenCreator` on `soc-console-access`, which `deploy_cloud.sh` wires through Terraform's `console_access_members` when `ANALYST_EMAIL` is set. They hold **no project roles**, so they cannot query raw event tables, read buckets (raw desktop screenshots, escalation files, Terraform state) or call Gemini directly. Everything they see goes through the console, its PII masking and its audit trail.
 
 | Role Name | Scope | IAM Role ID | Purpose |
 |---|---|---|---|
-| **BigQuery Job User** | Project | `roles/bigquery.jobUser` | Run read-only diagnostic and investigative queries |
-| **BigQuery Data Viewer** | Project | `roles/bigquery.dataViewer` | View event logs, alerts, and ticket tables |
-| **Storage Object Viewer** | Project | `roles/storage.objectViewer` | View desktop screenshots and escalation metadata in GCS |
-| **Vertex AI User** | Project | `roles/aiplatform.user` | Query Gemini models for assisted threat triage |
 | **Service Account Token Creator** | `soc-console-access` SA | `roles/iam.serviceAccountTokenCreator` | Mint impersonated ID tokens to open the private Cloud Run SOC console via `gcloud run services proxy` |
 
-#### Grant Day-2 Analyst Roles via CLI:
+#### Grant Analyst Access:
 ```bash
-ANALYST_ROLES=(
-  "roles/bigquery.jobUser"
-  "roles/bigquery.dataViewer"
-  "roles/storage.objectViewer"
-  "roles/aiplatform.user"
-)
+# Preferred: managed by Terraform on the next deploy
+ANALYST_EMAIL="analyst@example.com" ./src/demo/scripts/deploy_cloud.sh "${PROJECT_ID}" "${REGION}"
+# A group works too: ANALYST_EMAIL="group:soc-analysts@example.com"
+```
 
-for role in "${ANALYST_ROLES[@]}"; do
-  echo "Granting $role to ${ANALYST_EMAIL}..."
-  gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
-    --member="user:${ANALYST_EMAIL}" \
-    --role="$role" \
-    --condition=None
+If an earlier version of `pre_flight.sh` granted the analyst project roles, remove them:
+```bash
+for role in roles/bigquery.jobUser roles/bigquery.dataViewer roles/storage.objectViewer roles/aiplatform.user; do
+  gcloud projects remove-iam-policy-binding "${PROJECT_ID}" --member="user:${ANALYST_EMAIL}" --role="$role" --condition=None
 done
-
-# Grant token creator on soc-console-access so the analyst can open the Cloud Run console proxy
-# (deploy_cloud.sh also passes ANALYST_EMAIL to Terraform's console_access_members automatically)
-gcloud iam service-accounts add-iam-policy-binding \
-  "soc-console-access@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --project="${PROJECT_ID}" \
-  --member="user:${ANALYST_EMAIL}" \
-  --role="roles/iam.serviceAccountTokenCreator"
 ```
 
 ---
@@ -194,7 +178,16 @@ gcloud iam service-accounts add-iam-policy-binding \
 
 During initial project provisioning, a deployment identity (such as a Terraform service account in CI/CD or a designated cloud administrator) requires elevated permissions to enable APIs, create datasets, connections, service accounts, Cloud Run services/jobs, and bind least-privilege resource IAM policies.
 
-> ⚠️ **Production Security Note:** In enterprise environments, these elevated roles should be assigned to an automated CI/CD pipeline or granted via Privileged Access Management (PAM) / Just-In-Time (JIT) access with an expiration window, rather than held permanently by personal user accounts.
+These roles are owner-equivalent (Project IAM Admin plus Service Account Admin/User can grant any role and act as any workload identity), so `pre_flight.sh` puts them on a dedicated service account, `cymbal-deployer@<project>.iam.gserviceaccount.com`, and gives the deploying person only `roles/iam.serviceAccountTokenCreator` on it. `deploy_cloud.sh` reads `DEPLOYER_SA` from `.env` and runs every `gcloud` and Terraform call through short-lived impersonated tokens (`CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT`, `GOOGLE_IMPERSONATE_SERVICE_ACCOUNT`). Removing that one Token Creator binding revokes deploy rights.
+
+> ⚠️ **Production Security Note:** In enterprise environments, the deployer identity should be used only by a CI/CD pipeline (Workload Identity Federation) or reached through Privileged Access Management (PAM) / Just-In-Time access with an expiration window.
+
+Moving an existing setup to the deployer service account (after running `pre_flight.sh` and one successful deploy through it), remove the deployment roles from your personal account:
+```bash
+for role in roles/iam.serviceAccountAdmin roles/iam.serviceAccountUser roles/bigquery.admin roles/run.admin roles/pubsub.admin roles/storage.admin roles/artifactregistry.admin roles/cloudbuild.builds.editor roles/cloudscheduler.admin; do
+  gcloud projects remove-iam-policy-binding "${PROJECT_ID}" --member="user:${DEPLOYER_EMAIL}" --role="$role" --condition=None
+done
+```
 
 | Role Name | IAM Role ID | Provisioning Purpose |
 |---|---|---|
@@ -484,7 +477,7 @@ gcloud projects get-iam-policy "${PROJECT_ID}" \
     --format="table(bindings.role)" \
     --filter="bindings.members:cymbal-adk-agent-sa"
 
-# 4. Verify Day-2 Analyst account lacks administrative roles
+# 4. Verify the analyst holds no project roles (expect an empty table)
 gcloud projects get-iam-policy "${PROJECT_ID}" \
     --flatten="bindings[].members" \
     --format="table(bindings.role)" \
@@ -500,16 +493,17 @@ uv run pytest src/demo/tests/unit/test_privacy_guard.py -v
 
 The multi-agent framework implements deterministic privacy guardrails to protect corporate employee privacy, prevent data exfiltration, and sanitize personal data without compromising cybersecurity threat investigation:
 
-### 1. Deterministic Google Search Privacy Gate (`before_tool_callback`)
-* **Location:** [`adk_agent/agent.py`](file:///workspaces/Google/adk_agent/agent.py) via `google_search_privacy_gate_callback`.
-* **Problem Addressed:** In standard LLM agent patterns, privacy constraints rely solely on system prompt instructions (e.g. *"do not search internal names"*). An adversarial prompt or model hallucination can easily cause the agent to send corporate usernames, internal device hostnames, or private network topology to external search engines.
+### 1. Google Search Privacy: Input Minimization plus Query Audit
+* **Location:** [`adk_agent/agent.py`](adk_agent/agent.py) (`search_input_minimization_callback`, `search_query_audit_callback`) and [`adk_agent/privacy_guard.py`](adk_agent/privacy_guard.py).
+* **Problem Addressed:** A prompt instruction such as *"do not search internal names"* is not a control. An adversarial alert or a model mistake can send corporate usernames, internal hostnames or private network topology to an external search engine.
+* **Why not a tool callback:** `google_search` is a Gemini built-in tool. Gemini writes and runs the queries itself, inside the model call, so ADK never sees a function call and a `before_tool_callback` never fires. The control has to act on what the model can see.
 * **Architectural Defense:**
-  * Implemented as an ADK `before_tool_callback` on `google_search_agent` that intercepts the search query before the tool executes.
-  * **Fails Closed:** Programmatically validates queries against investigated session identities (`user_id`, `device_id`), generic internal workstation patterns (`ws-*`, `srv-*`), private RFC-1918 IPv4 ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `127.0.0.1`), internal domain namespaces (`.internal`, `.corp`), and personal PII.
-  * If a violation is detected, the callback immediately returns `status: "BLOCKED"` with error `PRIVACY_GATE_VIOLATION`. The search query is **never transmitted across the network**.
+  * **Input minimization (preventive, `before_model_callback`):** before every call of `google_search_agent`, the conversation, which carries the alert's user, device and internal addresses, is replaced by one message listing only the alert's routable public IPs (`extract_public_ips`). The model cannot leak an identifier it never received. With no public IP, the model is not called at all and no search happens.
+  * **Query audit (detective, `after_model_callback`):** the queries Gemini actually ran (`grounding_metadata.web_search_queries`) are checked against the privacy rules: investigated `user_id` / `device_id`, internal host patterns (`ws-*`, `srv-*`), private RFC-1918 IPs, internal domains (`.internal`, `.corp`) and personal PII. A violation is logged as `PRIVACY_GATE_VIOLATION` and its results are withheld from the investigation. It cannot un-send a query; the preventive control is what keeps one from being written.
+  * **Proof:** `test_search_model_sees_only_public_ips` runs the real search agent with the real built-in tool attached and asserts that the request the model receives holds the public IP and none of the alert's user, device, private IP or email.
 
 ### 2. Automated PII Sanitization Engine
-* **Location:** [`adk_agent/privacy_guard.py`](file:///workspaces/Google/adk_agent/privacy_guard.py) via `mask_pii()`.
+* **Location:** [`adk_agent/privacy_guard.py`](adk_agent/privacy_guard.py) via `mask_pii()`.
 * **Zero-Cloud & High Performance:** Executes locally with zero cloud dependencies or external latency, applying deterministic pattern matchers and algorithmic validators (including Luhn checksum validation for payment card PANs).
 * **Redaction Coverage:**
   * Personal Email Addresses (`[REDACTED_EMAIL]`)
@@ -519,8 +513,8 @@ The multi-agent framework implements deterministic privacy guardrails to protect
   * Internal RFC-1918 IPv4 Addresses (`[REDACTED_INTERNAL_IP]`)
   * Embedded API Keys, Bearer Tokens, and Passwords (`[REDACTED_SECRET]`)
 * **Targeted Ingress/Egress Masking Touchpoints:**
-  * **Desktop OCR Forensics ([`adk_agent/tools.py`](file:///workspaces/Google/adk_agent/tools.py)):** Screen captures analyzed via Gemini Vision or local OCR are sanitized before text enters sub-agent prompt memory or session state, ensuring sensitive personal information in background user applications is neutralized.
-  * **Incident Reports & Escalations ([`adk_agent/tools.py`](file:///workspaces/Google/adk_agent/tools.py)):** Structured reports passed to `dispatch_to_soc_ticketing_system`, `escalate_to_human`, and `auto_escalate_unresolved_alert` are sanitized before persistence in BigQuery or dispatch to the analyst queue.
+  * **Desktop OCR Forensics ([`adk_agent/tools.py`](adk_agent/tools.py)):** Screen captures analyzed via Gemini Vision or local OCR are sanitized before text enters sub-agent prompt memory or session state, ensuring sensitive personal information in background user applications is neutralized.
+  * **Incident Reports & Escalations ([`adk_agent/tools.py`](adk_agent/tools.py)):** Structured reports passed to `dispatch_to_soc_ticketing_system`, `escalate_to_human`, and `auto_escalate_unresolved_alert` are sanitized before persistence in BigQuery or dispatch to the analyst queue.
 * **Enterprise Google Cloud DLP Extension:** In enterprise production, the engine can be paired with Google Cloud Sensitive Data Protection (DLP API) for automated classification across regional data governance policies.
 
 ### 3. Threat Intelligence Preservation Guarantee

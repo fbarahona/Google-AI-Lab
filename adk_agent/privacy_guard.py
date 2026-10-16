@@ -83,6 +83,16 @@ def is_public_ip(ip_str: str) -> bool:
         return False
 
 
+def extract_public_ips(text: str | None) -> list[str]:
+    """Routable public IPv4 addresses in text, in first-seen order, without duplicates."""
+    seen: list[str] = []
+    for match in IPV4_CANDIDATE_PATTERN.finditer(text or ""):
+        ip = match.group(0)
+        if is_public_ip(ip) and ip not in seen:
+            seen.append(ip)
+    return seen
+
+
 def validate_search_query_privacy(
     query: str, state: Any = None
 ) -> tuple[bool, str | None]:
