@@ -6,7 +6,11 @@
 [![Model Context Protocol](https://img.shields.io/badge/MCP-Cloud_Run_Tool_Service-7B1FA2?style=for-the-badge&logo=protocol&logoColor=white)](https://modelcontextprotocol.io/)
 [![BigQuery](https://img.shields.io/badge/BigQuery-Single_Source_of_Truth-673AB7?style=for-the-badge&logo=google-bigquery&logoColor=white)](https://cloud.google.com/bigquery)
 
-An enterprise reference architecture for real-time cybersecurity threat detection, autonomous multi-agent forensic investigation, and human-in-the-loop Security Operations Center (SOC) triage, built with the **Google Agent Development Kit (ADK)**, **Gemini 3.8 Flash**, the **Model Context Protocol (MCP)**, and **Google Cloud Platform**.
+> [!NOTE]
+> **Portfolio Demonstration & Capability Showcase**
+> This repository is a technical portfolio demonstration designed to showcase advanced capabilities in real-time cybersecurity threat detection, autonomous multi-agent AI investigation, and cloud-native security architecture. It serves as an architectural reference and evaluative prototype; it is not intended as an off-the-shelf production product.
+
+An enterprise reference architecture demonstrating real-time cybersecurity threat detection, autonomous multi-agent forensic investigation, and human-in-the-loop Security Operations Center (SOC) triage, built with the **Google Agent Development Kit (ADK)**, **Gemini 3.8 Flash**, the **Model Context Protocol (MCP)**, and **Google Cloud Platform**.
 
 ---
 

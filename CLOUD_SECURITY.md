@@ -498,27 +498,32 @@ uv run pytest src/demo/tests/unit/test_privacy_guard.py -v
 
 ## 7. Privacy Safeguards & Automated PII Sanitization Architecture
 
-The multi-agent framework implements deterministic privacy guardrails to protect corporate employee privacy and prevent data leakage without impeding cybersecurity threat investigation:
+The multi-agent framework implements deterministic privacy guardrails to protect corporate employee privacy, prevent data exfiltration, and sanitize personal data without compromising cybersecurity threat investigation:
 
 ### 1. Deterministic Google Search Privacy Gate (`before_tool_callback`)
 * **Location:** [`adk_agent/agent.py`](file:///workspaces/Google/adk_agent/agent.py) via `google_search_privacy_gate_callback`.
-* **Mechanism:** Replaces soft prompt-only guidance with a hard callback that intercepts every search query before execution.
-* **Fails Closed:** If a query contains the investigated employee username (`user_id`), internal workstation hostnames (`ws-*`, `srv-*`), private RFC-1918 IPs (`10.x.x.x`, `192.168.x.x`), internal domain extensions (`.internal`, `.corp`), or personal PII, the callback immediately returns `status: "BLOCKED"` with a `PRIVACY_GATE_VIOLATION` error. The query is never transmitted over the network to Google Search.
+* **Problem Addressed:** In standard LLM agent patterns, privacy constraints rely solely on system prompt instructions (e.g. *"do not search internal names"*). An adversarial prompt or model hallucination can easily cause the agent to send corporate usernames, internal device hostnames, or private network topology to external search engines.
+* **Architectural Defense:**
+  * Implemented as an ADK `before_tool_callback` on `google_search_agent` that intercepts the search query before the tool executes.
+  * **Fails Closed:** Programmatically validates queries against investigated session identities (`user_id`, `device_id`), generic internal workstation patterns (`ws-*`, `srv-*`), private RFC-1918 IPv4 ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `127.0.0.1`), internal domain namespaces (`.internal`, `.corp`), and personal PII.
+  * If a violation is detected, the callback immediately returns `status: "BLOCKED"` with error `PRIVACY_GATE_VIOLATION`. The search query is **never transmitted across the network**.
 
 ### 2. Automated PII Sanitization Engine
 * **Location:** [`adk_agent/privacy_guard.py`](file:///workspaces/Google/adk_agent/privacy_guard.py) via `mask_pii()`.
+* **Zero-Cloud & High Performance:** Executes locally with zero cloud dependencies or external latency, applying deterministic pattern matchers and algorithmic validators (including Luhn checksum validation for payment card PANs).
 * **Redaction Coverage:**
   * Personal Email Addresses (`[REDACTED_EMAIL]`)
   * US Social Security Numbers (`[REDACTED_SSN]`)
   * Payment Card Numbers with Luhn Check (`[REDACTED_CREDIT_CARD]`)
   * Phone Numbers (`[REDACTED_PHONE]`)
   * Internal RFC-1918 IPv4 Addresses (`[REDACTED_INTERNAL_IP]`)
-  * Embedded API Keys, Bearer Tokens, and Credentials (`[REDACTED_SECRET]`)
-* **Targeted Ingress/Egress Masking:**
-  * **Desktop OCR Forensics:** Screen captures analyzed via Gemini Vision or local OCR are sanitized before text enters session context or prompt memory.
-  * **Incident Reports:** Structured tickets dispatched to BigQuery or the SOC queue are cleansed of inadvertent employee PII.
+  * Embedded API Keys, Bearer Tokens, and Passwords (`[REDACTED_SECRET]`)
+* **Targeted Ingress/Egress Masking Touchpoints:**
+  * **Desktop OCR Forensics ([`adk_agent/tools.py`](file:///workspaces/Google/adk_agent/tools.py)):** Screen captures analyzed via Gemini Vision or local OCR are sanitized before text enters sub-agent prompt memory or session state, ensuring sensitive personal information in background user applications is neutralized.
+  * **Incident Reports & Escalations ([`adk_agent/tools.py`](file:///workspaces/Google/adk_agent/tools.py)):** Structured reports passed to `dispatch_to_soc_ticketing_system`, `escalate_to_human`, and `auto_escalate_unresolved_alert` are sanitized before persistence in BigQuery or dispatch to the analyst queue.
+* **Enterprise Google Cloud DLP Extension:** In enterprise production, the engine can be paired with Google Cloud Sensitive Data Protection (DLP API) for automated classification across regional data governance policies.
 
 ### 3. Threat Intelligence Preservation Guarantee
-To ensure the primary objective of investigating security alerts and malicious traffic is never compromised:
-* **Public IPs & Threat IOCs:** Routable public IP addresses (e.g., `175.45.176.10`), public domains, malware family names (`mimikatz`), attack commands (`powershell -enc`), file hashes (SHA256, MD5), and MITRE ATT&CK techniques are explicitly preserved and never redacted or blocked.
+To ensure the primary objective of investigating security alerts and malicious traffic is never degraded:
+* **Public IPs & Threat IOCs:** Routable public IP addresses (e.g., `175.45.176.10`, `8.8.8.8`), external threat domains (`c2-server.ru`), malware family names (`mimikatz`), attack commands (`powershell -enc`), file hashes (SHA256, MD5), and MITRE ATT&CK techniques are explicitly whitelisted and **never masked or blocked**.
 
