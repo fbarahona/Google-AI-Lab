@@ -2,15 +2,16 @@
 
 ## Project Overview
 
-**Google AI Labs Sandbox** is a development environment for architecting, prototyping, evaluating, and deploying AI agents on Google Cloud. It combines the **Google Agent Development Kit (ADK)** and **Google Agents CLI (`agents-cli`)** with **Gemini models on Vertex AI / Gemini API**, containerized inside an enterprise devcontainer.
+**Google AI Labs Sandbox** is a technical portfolio demonstration and development environment designed to showcase advanced capabilities in architecting, prototyping, evaluating, and orchestrating multi-agent AI systems on Google Cloud. It combines the **Google Agent Development Kit (ADK)** and **Google Agents CLI (`agents-cli`)** with **Gemini models on Vertex AI / Gemini API**, containerized inside an enterprise devcontainer. This repository serves as an architectural showcase and evaluative prototype; it is not intended as an off-the-shelf production product.
 
 ### Featured Demonstration: Real-Time Cyber Security AI
 The project features an end-to-end near real-time cybersecurity threat detection, multi-agent AI investigation, and SOC response system:
 - **ADK Multi-Agent Team (`adk_agent/`):** Autonomous multi-agent orchestrator coordinating 4 specialized agents:
-  1. `google_search_agent`: OSINT threat intel on external public IPs (native ADK tool).
+  1. `google_search_agent`: OSINT threat intel on external public IPs (native ADK tool guarded by deterministic privacy gate).
   2. `bq_investigation_agent`: 24-hour behavioral profile queries in BigQuery (via Local MCP).
-  3. `visual_analysis_agent`: Gemini multimodal vision OCR on user desktop screenshots (via Local MCP).
+  3. `visual_analysis_agent`: Gemini multimodal vision OCR on user desktop screenshots (via Local MCP with PII sanitization).
   4. `soc_ticketing_agent`: Incident synthesis and dispatch to SOC ticketing (via Local MCP).
+- **Privacy Guard & PII Sanitization (`adk_agent/privacy_guard.py`):** Deterministic Google Search Privacy Gate (`before_tool_callback`) preventing outbound leakage of internal identities, hostnames, or private RFC-1918 IPs; automated zero-cloud PII redaction (SSNs, cards, emails, phones) across desktop OCR forensics and incident reports, while strictly preserving threat telemetry (public IPs, IOCs).
 - **Local MCP Server (`adk_agent/mcp_server/`):** Decoupled Model Context Protocol tool server exposing 8 security, vision, and ticketing tools over standard I/O (`stdio`) to ADK sub-agents and external clients.
 - **Threat Detector (`adk_agent/threat_detector.py`):** Scheduled micro-batch Cloud Run Job scanning BigQuery for newly emerging threat events and triggering agent investigations.
 - **Synthetic Log Generator (`src/demo/data_generator/`):** Generates access and network logs with ad-hoc threat injection.
@@ -28,6 +29,7 @@ The project features an end-to-end near real-time cybersecurity threat detection
 ├── adk_agent/                      # Canonical ADK Multi-Agent package
 │   ├── agent.py                    # Multi-agent orchestrator & 4 sub-agents
 │   ├── tools.py                    # Tool implementations (BigQuery, Vision, SOC ticketing)
+│   ├── privacy_guard.py            # Privacy guardrails & automated PII sanitization engine
 │   ├── mcp_server/                 # Local Model Context Protocol (MCP) server
 │   │   ├── __init__.py             # Package init and server factory
 │   │   ├── __main__.py             # stdio/SSE execution entrypoint
@@ -147,6 +149,8 @@ python -m adk_agent.threat_detector --lookback 15 --min-score 100
 
 ## Operational Guidelines for Coding Agents
 
+- **Strict Pull Request Workflow (No Direct Commits to Main):** Never commit, push, or deploy directly to the `main` branch under any circumstances. All changes—including feature development, bug fixes, configuration updates, and documentation modifications—must be performed on an isolated feature/fix branch and submitted through a GitHub Pull Request (PR) with comprehensive descriptions and test verification. Direct modifications or deployments to `main` are strictly forbidden without exception.
+- **Code Quality & Linting:** Adhere strictly to the project style baseline. Always execute `uv run --extra lint ruff check .` and format modified files with `uv run ruff format` before committing or submitting pull requests.
 - **Canonical Agent Location:** Always work within `adk_agent/` at repository root. Do not re-create subfolder duplicates or nested agent packages.
 - **Code Preservation:** Only modify code directly targeted by the request. Preserve surrounding functions, comments, and configurations.
 - **Model Configuration:** Read the model from `os.getenv("GEMINI_MODEL", "gemini-3.8-flash")` and load environment variables with `dotenv.load_dotenv()`. NEVER hardcode deprecated models.
