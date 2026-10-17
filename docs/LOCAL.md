@@ -20,6 +20,8 @@ cp .env.example .env   # set GOOGLE_CLOUD_PROJECT, or GEMINI_API_KEY for Google 
 
 On Windows PowerShell, use `Copy-Item .env.example .env` for the second line.
 
+On a corporate network that inspects TLS traffic, `uv sync` can fail with certificate errors because uv does not trust the company's root certificate by default. Run `uv sync --system-certs` instead, so uv uses the certificates installed in your operating system. To make it permanent, set `UV_SYSTEM_CERTS=true` in your environment (PowerShell: `$env:UV_SYSTEM_CERTS = "true"`).
+
 > **Windows PowerShell:** the commands in this guide are written for bash, macOS and Linux shells. Plain `uv run ...` commands work as they are, but PowerShell does not accept the `LOCAL_MODE=true command` prefix (it reports "The term 'LOCAL_MODE=true' is not recognized"). Set the variable on its own line first, then run the command without the prefix:
 >
 > ```powershell
