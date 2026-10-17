@@ -617,8 +617,18 @@ def _write_threat_logs(logs_dir, user="u.lewis"):
     access, network = SyntheticLogEngine(project_id="test").inject_threat(
         threat_type="malicious", user_id=user
     )
+    login = next(a for a in access if a.get("event_type") == "login_success")
+    network.append(
+        {
+            **network[0],
+            "event_type": "policy_violation",
+            "user_id": user,
+            "source_ip": login["assigned_internal_ip"],
+            "command_line": "powershell -enc",
+        }
+    )
     LocalSink(output_dir=str(logs_dir)).write_events(access, network)
-    return next(a for a in access if a.get("event_type") == "login_success")
+    return login
 
 
 def test_local_profile_accepts_every_entity_type_spelling(tmp_path, monkeypatch):

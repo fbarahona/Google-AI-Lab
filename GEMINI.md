@@ -1,158 +1,237 @@
-# Google AI Labs Sandbox — Project Guidance & Coding Agent Guide
+# Cymbal Cyber SOC — Project Guidance & Coding Agent Guide
 
 ## Project Overview
 
-**Google AI Labs Sandbox** is a technical portfolio demonstration and development environment designed to showcase advanced capabilities in architecting, prototyping, evaluating, and orchestrating multi-agent AI systems on Google Cloud. It combines the **Google Agent Development Kit (ADK)** and **Google Agents CLI (`agents-cli`)** with **Gemini models on Vertex AI / Gemini API**, containerized inside an enterprise devcontainer. This repository serves as an architectural showcase and evaluative prototype; it is not intended as an off-the-shelf production product.
+**Cymbal Cyber SOC** is a technical portfolio demonstration and reference architecture showcasing advanced patterns in architecting, securing, and operating an autonomous multi-agent AI system on Google Cloud. It combines the **Google Agent Development Kit (ADK)** and **Gemini models on Vertex AI** with serverless data engineering on **BigQuery** and **Cloud Pub/Sub**, decoupled tool execution via the **Model Context Protocol (MCP)**, least-privilege IAM separation of duties, and deterministic security guardrails that the LLM cannot bypass.
 
-### Featured Demonstration: Real-Time Cyber Security AI
-The project features an end-to-end near real-time cybersecurity threat detection, multi-agent AI investigation, and SOC response system:
-- **ADK Multi-Agent Team (`adk_agent/`):** Autonomous multi-agent orchestrator coordinating 4 specialized agents:
-  1. `google_search_agent`: OSINT threat intel on external public IPs (native ADK tool guarded by deterministic privacy gate).
-  2. `bq_investigation_agent`: 24-hour behavioral profile queries in BigQuery (via Local MCP).
-  3. `visual_analysis_agent`: Gemini multimodal vision OCR on user desktop screenshots (via Local MCP with PII sanitization).
-  4. `soc_ticketing_agent`: Incident synthesis and dispatch to SOC ticketing (via Local MCP).
-- **Privacy Guard & PII Sanitization (`adk_agent/privacy_guard.py`):** Deterministic Google Search Privacy Gate (`before_tool_callback`) preventing outbound leakage of internal identities, hostnames, or private RFC-1918 IPs; automated zero-cloud PII redaction (SSNs, cards, emails, phones) across desktop OCR forensics and incident reports, while strictly preserving threat telemetry (public IPs, IOCs).
-- **Local MCP Server (`adk_agent/mcp_server/`):** Decoupled Model Context Protocol tool server exposing 8 security, vision, and ticketing tools over standard I/O (`stdio`) to ADK sub-agents and external clients.
-- **Threat Detector (`adk_agent/threat_detector.py`):** Scheduled micro-batch Cloud Run Job scanning BigQuery for newly emerging threat events and triggering agent investigations.
-- **Synthetic Log Generator (`src/demo/data_generator/`):** Generates access and network logs with ad-hoc threat injection.
-- **Data Engineering Pipelines (`src/demo/data_pipeline/`):** Ingestion pipelines, GCS loader, and BigQuery Continuous Queries.
-- **SOC Ticketing System & Console (`src/demo/soc_ticketing/`):** Persistent incident queue and interactive Streamlit console for analyst triage.
-- **Zero-Cloud Local Runner (`src/demo/local_runner.py`):** Runs a scenario through the real agents, MCP servers and security gate locally, with a scripted model by default (`--live-model` for Gemini).
-- **Terraform IaC (`src/demo/terraform/`):** Infrastructure templates for Google Cloud (project `<project_name>`).
+> **Portfolio Demonstration:** This repository is an evaluative prototype and architectural showcase; it is designed to run at near-zero continuous idle cost (~$0/month baseline) while demonstrating production-grade cybersecurity engineering standards.
+
+### Core Demonstration: Real-Time Cyber Security AI
+The platform demonstrates an end-to-end autonomous threat detection, multi-agent AI investigation, and SOC response workflow:
+1. **Telemetry & Contract:** Synthetic access and network events validated against a Protobuf contract (`raw_security_event.proto`) at publish time, streaming directly into BigQuery via zero-compute Pub/Sub subscriptions.
+2. **Micro-Batch Detection:** A scheduled Cloud Run Job (`threat-detector`) scans 2-minute closed tumbling windows in BigQuery using SQL UDFs and an idempotent `MERGE`, grouping correlated events into unified incidents and publishing alerts to Pub/Sub.
+3. **ADK Multi-Agent Team (`adk_agent/`):** An orchestrator receives Pub/Sub push alerts via FastAPI and coordinates 4 specialized agents:
+   - `google_search_agent`: OSINT threat intel on external public IPs via Gemini built-in search grounding. Protected by preventive input minimization (`before_model_callback`) and detective query auditing (`after_model_callback`).
+   - `bq_investigation_agent`: Analyzes 24-hour behavioral telemetry profiles in BigQuery via parameterized MCP tools (enforcing a 1 GB scan ceiling).
+   - `visual_analysis_agent`: Multimodal vision and OCR forensic inspection of desktop screenshots via MCP tools, scanning raw OCR for prompt injection before PII masking.
+   - `soc_ticketing_agent`: Synthesizes evidence, generates a structured incident report, and invokes SOC ticketing tools (dispatch incident, log false positive, or escalate to human).
+4. **Decoupled MCP Tool Service (`adk_agent/mcp_server/`):** A standalone Model Context Protocol server running in Cloud Run (`cymbal-cyber-mcp`) as its own service account (`cymbal-mcp-tools-sa`). The agent runtime holds zero direct evidence read or ticket write privileges and interacts solely over authenticated Streamable HTTP (or `stdio` locally).
+5. **Deterministic Guardrails & PII Sanitization (`adk_agent/privacy_guard.py`):** Deterministic Python callbacks enforce fail-closed evidence gathering, block false-positive closures on malicious indicators or prompt injection attempts, force default-deny human escalation on unhandled alerts, and automatically redact PII (SSNs, cards, emails, phones, credentials) while preserving threat IOCs.
+6. **SOC Analyst Console (`src/demo/soc_ticketing/`):** An interactive Streamlit console providing live queue triage, multimodal evidence viewing via signed URLs, KPI analytics, and ticket adjudication.
+
+---
+
+## Documentation Map
+
+Detailed system documentation is organized under [`docs/`](docs/):
+
+| Document | Description |
+| :--- | :--- |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Comprehensive system architecture, end-to-end lifecycle, data contracts, multi-agent design, and key trade-offs. |
+| [`docs/LOCAL.md`](docs/LOCAL.md) | Guide for running zero-cloud local scenario simulations, the Streamlit console, ADK playground, and test suites. |
+| [`docs/CLOUD.md`](docs/CLOUD.md) | Cloud deployment runbook (`deploy_cloud.sh`), IAM setup, live verification workflow, console proxy access, and FinOps teardown. |
+| [`docs/SECURITY_ARCHITECTURE.md`](docs/SECURITY_ARCHITECTURE.md) | Detailed least-privilege IAM baseline, workload identity boundaries, MCP privilege separation, PII engine, and agent guardrails. |
+| [`docs/HISTORY.md`](docs/HISTORY.md) | Chronological evolution of architectural decisions from continuous queries and Dataflow to serverless micro-batch and decoupled MCP. |
+| [`src/demo/terraform/README.md`](src/demo/terraform/README.md) | Infrastructure as Code (IaC) configuration and remote state backend reference. |
 
 ---
 
 ## Project Structure
 
-```
+```text
 /workspaces/Google/
 ├── adk_agent/                      # Canonical ADK Multi-Agent package
-│   ├── agent.py                    # Multi-agent orchestrator & 4 sub-agents
-│   ├── tools.py                    # Tool implementations (BigQuery, Vision, SOC ticketing)
-│   ├── privacy_guard.py            # Privacy guardrails & automated PII sanitization engine
-│   ├── mcp_server/                 # Local Model Context Protocol (MCP) server
-│   │   ├── __init__.py             # Package init and server factory
-│   │   ├── __main__.py             # stdio/SSE execution entrypoint
-│   │   └── server.py               # MCPServer instance & tool registrations (wraps tools.py)
-│   ├── threat_detector.py          # Scheduled micro-batch detector Cloud Run Job
+│   ├── agent.py                    # Multi-agent orchestrator, parallel team & guardrail callbacks
+│   ├── detection_rules.py          # Python parity twin of BigQuery threat detection UDFs
+│   ├── fast_api_app.py             # FastAPI backend server (Pub/Sub webhook + optional A2A/dev UI)
 │   ├── logging_utils.py            # Structured logging utilities
-│   ├── fast_api_app.py             # FastAPI backend server (webhook + A2A)
-│   └── app_utils/                  # A2A and service helpers
+│   ├── privacy_guard.py            # Deterministic PII masking engine & search privacy audit
+│   ├── threat_detector.py          # Scheduled micro-batch detector Cloud Run Job
+│   ├── tools.py                    # Investigation, vision, and ticketing tool implementations
+│   ├── app_utils/                  # Service initialization and A2A helpers
+│   └── mcp_server/                 # Model Context Protocol (MCP) tool server ("cymbal-cyber-mcp")
+│       ├── __init__.py             # Package init and server factory
+│       ├── __main__.py             # stdio/SSE execution entrypoint
+│       └── server.py               # FastMCP instance, 9 tool registrations, and CallerAuthMiddleware
+├── docs/                           # Architecture, local running, cloud deployment, and security guides
+│   ├── ARCHITECTURE.md             # End-to-end data flow and architectural design
+│   ├── CLOUD.md                    # Cloud deployment and operations guide
+│   ├── HISTORY.md                  # Evolution of design decisions and cost trade-offs
+│   ├── LOCAL.md                    # Local runner, scenario simulations, and testing guide
+│   └── SECURITY_ARCHITECTURE.md    # IAM roles, security tiers, and guardrails reference
+├── local_demo_data/                # Local test artifacts (desktop screenshots, ticket queue, escalations)
 ├── src/
-│   └── demo/                       # Cybersecurity AI & Cloud Architecture demo
-│       ├── data_generator/         # Synthetic log generator & threat scenarios
-│       ├── data_pipeline/          # BigQuery Continuous Queries & Dataflow pipelines
-│       ├── scripts/                # Deployment, Continuous Query, & Dataflow demo launcher scripts
-│       ├── soc_ticketing/          # SOC ticketing service & Streamlit analyst console
-│       ├── terraform/              # GCP Terraform IaC modules (zero-cost default)
-│       ├── tests/                  # Test suites (unit, integration, eval datasets)
-│       │   ├── unit/               # Unit tests (agent structure, tools, logs, security, detector)
-│       │   ├── integration/        # Agent and server integration tests
-│       │   └── eval/               # agents-cli evaluation datasets and configs
-│       ├── local_runner.py         # Zero-cloud end-to-end demo runner
-│       └── other_code/             # Supporting SQL queries and analyst scripts
+│   └── demo/                       # Cybersecurity AI & Cloud Architecture demo application
+│       ├── generate_architecture_diagram.py # Diagram generator script
+│       ├── local_runner.py         # Zero-cloud end-to-end demo runner (scripted or live model)
+│       ├── scripted_model.py       # Deterministic model stand-in for repeatable local tests
+│       ├── data_generator/         # Synthetic log generator & threat injection scenarios
+│       ├── data_pipeline/          # Continuous queries, GCS loader, and optional Dataflow pipeline
+│       ├── other_code/             # Supporting analytical SQL queries and notebook helpers
+│       ├── scripts/                # Pre-flight, deployment, and pipeline launcher scripts
+│       ├── soc_ticketing/          # SOC ticketing service, models, and Streamlit analyst console
+│       ├── terraform/              # GCP Terraform IaC modules (BigQuery, Pub/Sub, Cloud Run, IAM)
+│       │   └── schemas/            # raw_security_event.proto data contract
+│       └── tests/                  # Test suites (unit, e2e, integration, eval datasets)
+│           ├── conftest.py         # Pytest shared fixtures and mock environments
+│           ├── e2e/                # End-to-end tests with real agents, MCP, and scripted model
+│           ├── eval/               # agents-cli evaluation datasets and trajectory configs
+│           ├── integration/        # Live cloud integration tests (requires ADC)
+│           └── unit/               # Unit tests (agent structure, tools, MCP, privacy, detector)
 ├── agents-cli-manifest.yaml        # agents-cli configuration (agent_directory: adk_agent)
-├── pyproject.toml                  # Python package configuration & dependencies
+├── pyproject.toml                  # Python package configuration (Python 3.12, uv, ruff, ty)
 ├── pytest.ini                      # Pytest runner configuration
+├── Dockerfile                      # Unified multi-stage, non-root Cloud Run container image
 ├── .env.example                    # Template environment variables
-├── .env                            # Local environment variables (not committed)
-├── docs/                           # Architecture, local and cloud guides, security, history
-├── GEMINI.md                       # Workspace guidance and agent instructions
-└── README.md                       # Project documentation
+├── .env                            # Local environment variables (gitignored)
+├── GEMINI.md                       # Coding agent workspace guide (this file)
+└── README.md                       # Project front page and quickstart overview
 ```
+
+---
+
+## Identity Tiers & Least-Privilege Architecture
+
+The platform enforces strict separation of duties across dedicated service accounts:
+
+| Identity | Workload / Purpose | Key Permissions & Resource Scoping |
+| :--- | :--- | :--- |
+| **`cymbal-deployer`** | Provisioning & Terraform CI/CD | Elevated bootstrap roles. Humans only impersonate it via `serviceAccountTokenCreator`. |
+| **`soc-console-access`** | Human SOC Analyst Access | `roles/run.invoker` on SOC Console service only. **ZERO project roles** (no BQ, GCS, or Vertex access). |
+| **`threat-detector-job-sa`** | Micro-Batch Detector Job | BQ `jobUser`, dataset `READER`, table `dataEditor` on `alerts` & `soc_tickets`, publisher on `cymbal_cyber_alerts`. |
+| **`cymbal-adk-agent-sa`** | ADK Agent Runtime & Webhook | Vertex AI `aiplatform.user`, table `dataEditor` on `alerts` & `agent_events`, `run.invoker` on MCP tool service. **ZERO evidence reads or ticket writes.** |
+| **`cymbal-mcp-tools-sa`** | MCP Tool Service (`cymbal-cyber-mcp`) | BQ dataset `READER`, table `dataEditor` on `soc_tickets` & `adk_threat_assessment`, GCS `objectViewer` on screenshots, `objectUser` on escalations, self `serviceAccountTokenCreator` (signing). Invocable only by Agent SA. |
+| **`cymbal-soc-console-sa`** | Streamlit Analyst Console | BQ dataset `READER`, table `dataEditor` on `soc_tickets` & `adk_threat_assessment`, GCS `objectUser` on escalations, publisher on `cymbal_cyber_raw_logs`. |
+| **`pubsub-invoker-sa`** | Pub/Sub Push Authentication | `roles/run.invoker` on ADK Agent service only. Webhook strictly verifies OIDC token. |
+| **`threat-detector-scheduler-sa`** | Cloud Scheduler Cron Trigger | `roles/run.invoker` on `threat-detector` Cloud Run Job only. |
 
 ---
 
 ## Environment Setup & Model Configuration
 
-### 1. Environment Variables & Credentials (`.env`)
+### 1. Environment Variables (`.env`)
 Environment variables are loaded automatically at startup via `python-dotenv`:
-- `GOOGLE_GENAI_USE_ENTERPRISE=true`: Uses Vertex AI endpoint.
-- `GOOGLE_CLOUD_PROJECT=<project_name>`: Target GCP project.
-- `GOOGLE_CLOUD_LOCATION=us-east1` (or `global`): Model and service region.
-- `GEMINI_MODEL=gemini-3.8-flash`: Configures the Gemini model.
+- `GOOGLE_GENAI_USE_ENTERPRISE=true`: Uses Vertex AI enterprise endpoints.
+- `GOOGLE_CLOUD_PROJECT=<project_name>`: Target GCP project ID.
+- `GOOGLE_CLOUD_LOCATION=us-east1` (or `global`): Model region.
+- `GEMINI_MODEL=gemini-3.8-flash`: Dynamic model configuration.
+- `ADK_ALLOW_CONFIG_STDIO_MCP_SERVERS=true`: Enables local stdio MCP subprocess execution.
+- `LOCAL_MODE=true`: Disables Cloud Trace and GCP-dependent authentication for zero-cloud runs.
+- `MCP_SERVER_URL`: Unset for local `stdio`; set to `https://<service-url>/mcp` for Cloud Run Streamable HTTP.
+- `MCP_TOOL_TIMEOUT_SECONDS=90`: MCP per-request execution timeout.
 
 ### 2. Model Configuration
-- **Model Setting:** The agent dynamically reads `os.getenv("GEMINI_MODEL", "gemini-3.8-flash")`.
-- **Default Model:** `gemini-3.8-flash` is the standard active model across all agents and tools.
-- **Model Override:** Change `GEMINI_MODEL` in `.env` to switch models without modifying agent source code.
+- The codebase dynamically reads `os.getenv("GEMINI_MODEL", "gemini-3.8-flash")`.
+- Default model: `gemini-3.8-flash` across all agents and tools.
+- Never hardcode model identifiers in agent code or prompt loops.
 
 ---
 
-## Development & Testing Commands
+## Development, Testing & Verification Commands
 
-### 1. Automated Tests
-Run unit tests, agent structure tests, and demo tests with `uv`:
+All Python commands and test runners must be executed using **`uv`**:
+
+### 1. Automated Test Suites
 ```bash
-# Run all unit tests
+# Run all unit tests (301 tests, zero cloud credentials required)
 uv run pytest src/demo/tests/unit/
 
-# Run integration tests (requires cloud credentials/ADC)
+# Run end-to-end pipeline tests (validates real agents, MCP tools, and security gate with scripted model)
+LOCAL_MODE=true uv run pytest src/demo/tests/e2e/
+
+# Run integration tests against real Google Cloud services (requires ADC)
 uv run pytest src/demo/tests/integration/
 ```
 
-### 2. Interactive Agent Testing (agents-cli)
+### 2. Code Quality & Formatting
 ```bash
-# Inspect agents-cli project configuration
-agents-cli info
+# Lint codebase using Ruff
+uv run --extra lint ruff check .
 
-# Launch local ADK Web Playground
-LOCAL_MODE=true agents-cli playground
+# Automatically apply Ruff lint fixes
+uv run --extra lint ruff check --fix .
 
-# Run single prompt evaluation in terminal
-agents-cli run "Investigate security alert for user u.lewis"
+# Format code with Ruff
+uv run ruff format .
+
+# Check Terraform configuration and formatting
+terraform -chdir=src/demo/terraform init -backend=false
+terraform -chdir=src/demo/terraform fmt -check
+terraform -chdir=src/demo/terraform validate
 ```
 
-### 3. Zero-Cloud Local Demo Pipeline
-Run a scenario locally: synthetic logs, the detector's scoring rules, then the real multi-agent investigation and local SOC dispatch (scripted model by default, `--live-model` for Gemini):
+### 3. Zero-Cloud Local Runner
+Run complete end-to-end scenario simulations without cloud dependencies:
 ```bash
-# Malicious APT attack scenario (User: u.lewis, Mimikatz)
+# Scenario A: Malicious APT attack (u.lewis, Mimikatz, C2 DNS beaconing) -> Incident Dispatched
 uv run python -m src.demo.local_runner --threat malicious
 
-# Benign False Positive scenario (User: l.taylor, Admin backup script)
+# Scenario B: Benign administrative script (l.taylor, backup automation) -> Closed as False Positive
 uv run python -m src.demo.local_runner --threat false_positive
 
-# Prompt injection scenario (User: c.wilson); the security gate blocks the FP closure
+# Scenario C: Prompt injection (c.wilson, adversarial OCR text) -> Gate Blocks Closure, Escalates CRITICAL
 uv run python -m src.demo.local_runner --threat injection
+
+# Use a live Gemini model instead of the deterministic scripted model
+uv run python -m src.demo.local_runner --threat malicious --live-model
 ```
 
 ### 4. Interactive SOC Analyst Console (Streamlit)
 ```bash
 LOCAL_MODE=true uv run python -m streamlit run src/demo/soc_ticketing/streamlit_soc_console.py
 ```
-Open `http://localhost:8501` to view incident queues, inspect desktop screenshot evidence, review ADK investigative reports, and adjudicate tickets.
+Open `http://localhost:8501` to view incident queues, review evidence dossiers, inspect screenshot artifacts, and adjudicate tickets.
 
-### 5. Scheduled Micro-Batch Threat Detector Job
+### 5. Interactive Agent Testing (`agents-cli`)
 ```bash
-# Note: Streaming to cloud sinks or running detector locally requires Application Default Credentials (ADC):
-# gcloud auth application-default login
+# Inspect agent configuration
+agents-cli info
 
-# Run single detection cycle:
-python -m adk_agent.threat_detector --lookback 15 --min-score 100
+# Launch local ADK Web Playground (stdio MCP)
+LOCAL_MODE=true agents-cli playground
 
-# Note: When testing live Pub/Sub telemetry, wait 60s for BigQuery Storage Write API buffer ingestion:
-# echo "Allowing 60s for BigQuery streaming buffer ingestion..." && sleep 60
+# Run single prompt evaluation in CLI
+agents-cli run "Investigate security alert for user u.lewis"
 ```
 
----
+### 6. Cloud Deployment & Verification
+```bash
+# 1. Interactive pre-flight validation and deployer SA role binding
+source ./src/demo/scripts/pre_flight.sh
 
-## Agent Development Lifecycle (`agents-cli`)
+# 2. Automated Cloud Run, BigQuery, Pub/Sub, and Scheduler deployment
+./src/demo/scripts/deploy_cloud.sh "${PROJECT_ID}" "${REGION}"
 
-1. **Understand Requirements:** Identify tools, constraints, and success criteria.
-2. **Build and Implement:** Implement agent logic in `adk_agent/`. Use `agents-cli playground` for interactive validation.
-3. **Evaluation Loop:** Run `agents-cli eval run` against datasets in `src/demo/tests/eval/`. Inspect cluster failures with `agents-cli eval analyze` and auto-tune with `agents-cli eval optimize`.
-4. **Pre-Deployment Tests:** Run `uv run pytest src/demo/tests/unit/`.
-5. **Deploy:** Deploy container image to Cloud Run service and threat detector job with `./src/demo/scripts/deploy_cloud.sh` (or `gcloud run jobs update threat-detector --image <image>`).
+# 3. Proxied SOC Console access for human analysts
+CONSOLE_SA="soc-console-access@${PROJECT_ID}.iam.gserviceaccount.com"
+CONSOLE_URL="$(gcloud run services describe cymbal-cyber-soc-console --project="${PROJECT_ID}" --region="${REGION}" --format="value(status.url)")"
+
+gcloud run services proxy cymbal-cyber-soc-console \
+  --project="${PROJECT_ID}" \
+  --region="${REGION}" \
+  --port=8501 \
+  --token="$(gcloud auth print-identity-token --impersonate-service-account="${CONSOLE_SA}" --audiences="${CONSOLE_URL}")"
+```
 
 ---
 
 ## Operational Guidelines for Coding Agents
 
-- **Strict Pull Request Workflow (No Direct Commits to Main):** Never commit, push, or deploy directly to the `main` branch under any circumstances. All changes—including feature development, bug fixes, configuration updates, and documentation modifications—must be performed on an isolated feature/fix branch and submitted through a GitHub Pull Request (PR) with comprehensive descriptions and test verification. Direct modifications or deployments to `main` are strictly forbidden without exception.
-- **Code Quality & Linting:** Adhere strictly to the project style baseline. Always execute `uv run --extra lint ruff check .` and format modified files with `uv run ruff format` before committing or submitting pull requests.
-- **Canonical Agent Location:** Always work within `adk_agent/` at repository root. Do not re-create subfolder duplicates or nested agent packages.
-- **Code Preservation:** Only modify code directly targeted by the request. Preserve surrounding functions, comments, and configurations.
-- **Model Configuration:** Read the model from `os.getenv("GEMINI_MODEL", "gemini-3.8-flash")` and load environment variables with `dotenv.load_dotenv()`. NEVER hardcode deprecated models.
-- **Tool Imports:** Import tool instances rather than modules (e.g., `from google.adk.tools import google_search`).
-- **Python Execution:** Always execute Python commands and tests with `uv run` (e.g., `uv run pytest`).
-- **Verify All Changes:** Always run `uv run pytest src/demo/tests/unit/` after modifying code to confirm zero regressions.
+- **Strict Pull Request Workflow (No Direct Commits to Main):**
+  Never commit, push, or deploy directly to the `main` branch under any circumstances. All changes—including feature development, bug fixes, configuration adjustments, and documentation modifications—must be performed on an isolated feature or fix branch and submitted through a GitHub Pull Request (PR) with comprehensive descriptions and test verification.
+- **Python Execution via `uv`:**
+  Always execute Python commands, utilities, and tests using `uv run` (e.g., `uv run pytest`, `uv run python -m ...`). Never invoke system Python directly.
+- **Canonical Agent Location:**
+  All agent logic must reside within `adk_agent/` at the repository root. Do not introduce duplicate agent modules, nested packages, or legacy scaffolding folders.
+- **MCP Privilege Boundary Invariance:**
+  Maintain strict decoupling between `cymbal-adk-agent-sa` (orchestrator/reasoning) and `cymbal-mcp-tools-sa` (MCP tool server). Never grant the agent service account direct BigQuery dataset `READER` rights, raw event table access, Cloud Storage bucket permissions, or ticket write permissions. All evidence queries, vision OCR, signed URL generation, and ticketing operations MUST execute inside the MCP tool service.
+- **No Free-Form SQL Surface:**
+  Never introduce arbitrary SQL execution tools (such as `execute_sql`) or schema discovery tools in the MCP tool service. Tools must remain fixed, parameterized, and validated.
+- **Deterministic Guardrail Invariance:**
+  Never alter guardrail callbacks to trust LLM output over deterministic checks. The security gate (`security_gate_callback`), fail-closed evidence tracking (`sync_mcp_security_state_callback`), default-deny escalation (`default_deny_soc_callback`), public-IP input minimization (`search_input_minimization_callback`), and raw OCR prompt injection scanning must remain intact and fail closed.
+- **PII Redaction & IOC Preservation:**
+  Modifications to reporting or OCR pipelines must route through `mask_pii()` in `adk_agent/privacy_guard.py`. Personal identifiers (SSNs, payment cards, emails, phone numbers, API keys) must be sanitized while strictly preserving routable public IPs, file hashes, external domains, and attack commands.
+- **Linting & Code Formatting:**
+  Adhere strictly to the workspace formatting baseline (line length 88, Python 3.12 target). Run `uv run --extra lint ruff check .` and `uv run ruff format .` before submitting changes.
+- **Mandatory Test Verification:**
+  Always run `uv run pytest src/demo/tests/unit/` and `LOCAL_MODE=true uv run pytest src/demo/tests/e2e/` after modifying code to verify that all 300+ unit tests and end-to-end pipeline tests pass with zero regressions.
