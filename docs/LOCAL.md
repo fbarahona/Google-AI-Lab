@@ -94,7 +94,12 @@ Pick `adk_agent` and send `investigate user c.wilson`, or paste an alert JSON to
 ```bash
 # A batch of benign access and network logs to local files
 uv run python -m src.demo.data_generator.log_generator --mode benign --batch-size 100 --sink=local
+
+# Add a threat scenario for one user to the same files
+uv run python -m src.demo.data_generator.log_generator --mode threat --threat-type malicious --user u.lewis --sink=local
 ```
+
+The files go to `local_demo_data/logs/`, the folder the agents' local tools read (set `LOCAL_LOGS_DIR` or `--output-dir` to use another one). Each run adds files, so you can build up a mix of benign and threat events, then investigate them in the ADK playground (section 5), for example `investigate user u.lewis`. The local runner (section 3) clears this folder at the start of each scenario, so run the generator after the runner, not before.
 
 The same generator can stream to Pub/Sub, BigQuery or Cloud Storage; those sinks need a deployed project and are covered in [CLOUD.md](CLOUD.md#other-ways-to-generate-cloud-telemetry).
 
