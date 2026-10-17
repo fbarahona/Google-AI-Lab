@@ -49,6 +49,7 @@ SCRIPTED_POLICY = {
 }
 WINDOW = timedelta(minutes=2)
 ALERT_MIN_SCORE = 100
+CONSOLE_SCRIPT = "src/demo/soc_ticketing/streamlit_soc_console.py"
 
 
 def banner(text: str) -> None:
@@ -244,11 +245,18 @@ def report(state: dict[str, Any]) -> None:
     print(f"\n  {outcome}")
     print(f"  Ticket: {state.get('ticket_id')}")
     print(f"  Local queue: {SocTicketingService().queue_dir}")
-    print(
-        "\n  Open the console with:\n"
-        "  LOCAL_MODE=true uv run python -m streamlit run "
-        "src/demo/soc_ticketing/streamlit_soc_console.py"
-    )
+    print(f"\n  Open the console with:\n  {console_command()}")
+
+
+def console_command(windows: bool | None = None) -> str:
+    """The console launch command for this shell: PowerShell on Windows, POSIX elsewhere."""
+    if windows is None:
+        windows = os.name == "nt"
+    if windows:
+        return (
+            f'$env:LOCAL_MODE = "true"; uv run python -m streamlit run {CONSOLE_SCRIPT}'
+        )
+    return f"LOCAL_MODE=true uv run python -m streamlit run {CONSOLE_SCRIPT}"
 
 
 def main() -> None:
