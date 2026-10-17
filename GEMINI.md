@@ -56,8 +56,7 @@ The project features an end-to-end near real-time cybersecurity threat detection
 ├── pytest.ini                      # Pytest runner configuration
 ├── .env.example                    # Template environment variables
 ├── .env                            # Local environment variables (not committed)
-├── DEPLOYMENT.md                   # Cloud deployment, operations, and FinOps runbook
-├── CLOUD_SECURITY.md               # IAM architecture and least-privilege security baseline
+├── docs/                           # Architecture, local and cloud guides, security, history
 ├── GEMINI.md                       # Workspace guidance and agent instructions
 └── README.md                       # Project documentation
 ```

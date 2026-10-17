@@ -1,6 +1,6 @@
 """
 Script to generate System Architecture Diagram as both SVG and PNG image files.
-Based on README.md & CLOUD_SECURITY.md reference architecture for Google Cloud Platform (<PROJECT_ID>).
+Based on docs/ARCHITECTURE.md & docs/SECURITY_ARCHITECTURE.md reference architecture for Google Cloud Platform (<PROJECT_ID>).
 """
 
 import math

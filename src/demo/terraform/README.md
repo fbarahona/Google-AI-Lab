@@ -33,62 +33,9 @@ If local state was already lost and resources exist in GCP, run `./src/demo/scri
 
 ---
 
-## 🔐 Deployer Prerequisites: Minimum IAM Permissions
+## 🔐 Deployer Prerequisites
 
-To execute `terraform apply` or run the automated deployment script, the deploying identity (user or CI/CD service account) requires administrative rights to provision resources **and** configure least-privilege workload IAM bindings:
-
-| Domain | Role ID | Purpose |
-| :--- | :--- | :--- |
-| **Project IAM** | `roles/resourcemanager.projectIamAdmin` | **Required**: Grants project roles (`aiplatform.user`, `bigquery.jobUser`) to workload SAs. |
-| **Service Accounts** | `roles/iam.serviceAccountAdmin` | Creates the workload SAs (`agent-sa`, `mcp-tools-sa`, `console-sa`, `invoker-sa`, `scheduler-sa`, `console-access`, `detector-sa`, and `cq-sa` when continuous queries are on). |
-| **Service Account Actor** | `roles/iam.serviceAccountUser` | Authorizes attaching SAs to Cloud Run services and jobs (`actAs`). |
-| **API Management** | `roles/serviceusage.serviceUsageAdmin` | Enables necessary Google Cloud APIs (`gcloud services enable`). |
-| **BigQuery** | `roles/bigquery.admin` | Creates dataset `Cymbal_Cyber`, tables, SQL routines, and Vertex AI connections. |
-| **Cloud Run** | `roles/run.admin` | Deploys container services (`adk-agent`, `mcp`, `soc-console`) and jobs (`threat-detector`). |
-| **Pub/Sub** | `roles/pubsub.admin` | Creates telemetry topics, DLQ stores, and BigQuery direct subscriptions. |
-| **Cloud Storage** | `roles/storage.admin` | Provisions evidence buckets and configures bucket-level IAM policies. |
-| **Artifact Registry** | `roles/artifactregistry.admin` | Provisions Docker repo `cymbal-cyber` and configures push permissions. |
-| **Cloud Build** | `roles/cloudbuild.builds.editor` | Submits remote container builds (`gcloud builds submit`). |
-| **Cloud Scheduler** | `roles/cloudscheduler.admin` | Provisions the threat detector cron trigger. |
-
-> [!WARNING]
-> **Why `roles/editor` is NOT sufficient:**  
-> Standard `roles/editor` cannot modify IAM policies (`resourcemanager.projects.setIamPolicy` is forbidden). Because our Terraform configuration declares least-privilege `google_project_iam_member` and resource-level `*_iam_member` bindings, `roles/editor` will fail during `terraform apply`. The deployer must possess `roles/resourcemanager.projectIamAdmin` or the individual admin roles above.
-
-### Automated Role Assignment Script
-```bash
-PROJECT_ID="<YOUR_PROJECT_ID>"
-DEPLOYER_EMAIL="<DEPLOYER_EMAIL>"  # e.g., deployer@example.com or sa@project.iam.gserviceaccount.com
-
-if [[ "${DEPLOYER_EMAIL}" == *".gserviceaccount.com"* ]]; then
-  MEMBER="serviceAccount:${DEPLOYER_EMAIL}"
-else
-  MEMBER="user:${DEPLOYER_EMAIL}"
-fi
-
-ROLES=(
-  "roles/resourcemanager.projectIamAdmin"
-  "roles/serviceusage.serviceUsageAdmin"
-  "roles/iam.serviceAccountAdmin"
-  "roles/iam.serviceAccountUser"
-  "roles/bigquery.admin"
-  "roles/run.admin"
-  "roles/pubsub.admin"
-  "roles/storage.admin"
-  "roles/artifactregistry.admin"
-  "roles/cloudbuild.builds.editor"
-  "roles/cloudscheduler.admin"
-)
-
-echo "Granting minimum deployment roles to ${MEMBER} in ${PROJECT_ID}..."
-for role in "${ROLES[@]}"; do
-  gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
-    --member="${MEMBER}" \
-    --role="${role}" \
-    --condition=None \
-    --quiet
-done
-```
+The deploying identity needs Project IAM Admin plus the service-specific admin roles; `roles/editor` is not enough because it cannot set IAM policy. The role list and the reasoning are in [SECURITY_ARCHITECTURE.md §2B](../../../docs/SECURITY_ARCHITECTURE.md#2b-bootstrap--provisioning-identity-admin--terraform-cicd-only), and the commands that grant them are in [CLOUD.md §2](../../../docs/CLOUD.md#2-environment--iam-role-setup).
 
 ---
 
@@ -101,7 +48,7 @@ done
 
 ### Manual Terraform Workflow
 ```bash
-terraform init
+terraform init -backend-config="bucket=<PROJECT_ID>-tfstate"
 terraform plan -var="project_id=<PROJECT_ID>"
 terraform apply -var="project_id=<PROJECT_ID>"
 ```

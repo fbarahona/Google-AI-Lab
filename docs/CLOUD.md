@@ -1,6 +1,8 @@
-# Cloud Deployment & Operations Runbook
+# Cloud Deployment
 
-This guide covers the end-to-end cloud deployment, post-deployment operations, console access, and FinOps teardown procedures for the **Real-Time Cybersecurity AI & ADK Platform** on Google Cloud Platform (project `${PROJECT_ID}`).
+How to deploy the platform to Google Cloud, prove it works end to end, open the private consoles, and tear it down. To run everything on your machine without a cloud project, see [LOCAL.md](LOCAL.md). For why each identity holds the roles it holds, see [SECURITY_ARCHITECTURE.md](SECURITY_ARCHITECTURE.md).
+
+Everything below assumes `PROJECT_ID` and `REGION` are set in your shell (the pre-flight script writes them to `.env`).
 
 > [!TIP]
 > **3-Step Quickstart (Recommended):**
@@ -18,7 +20,7 @@ This guide covers the end-to-end cloud deployment, post-deployment operations, c
 ---
 
 ## 📋 Table of Contents
-1. [Prerequisites & Deployer IAM Roles](#1-prerequisites--deployer-iam-roles)
+1. [Prerequisites & Deployer Roles](#1-prerequisites--deployer-roles)
 2. [Environment & IAM Role Setup](#2-environment--iam-role-setup)
    - [Option A: Interactive Pre-Flight Script (Recommended)](#option-a-interactive-pre-flight-script-recommended)
    - [Option B: Manual CLI Role Assignment & Environment Setup](#option-b-manual-cli-role-assignment--environment-setup)
@@ -31,30 +33,16 @@ This guide covers the end-to-end cloud deployment, post-deployment operations, c
    - [Option 2: Direct HTTPS Access](#option-2-direct-https-access)
    - [Agent Webhook: Not Callable by Humans](#agent-webhook-not-callable-by-humans)
 6. [FinOps: Cost Management & Cloud Teardown](#6-finops-cost-management--cloud-teardown)
+7. [Troubleshooting](#7-troubleshooting)
 
 ---
 
-## 1. Prerequisites & Deployer IAM Roles
+## 1. Prerequisites & Deployer Roles
 
-To execute `./src/demo/scripts/deploy_cloud.sh` or run `terraform apply`, the deploying identity (user account or CI/CD service account) requires administrative rights to provision resources **and** configure least-privilege workload IAM bindings:
-
-| Domain | Role ID | Purpose |
-| :--- | :--- | :--- |
-| **Project IAM** | `roles/resourcemanager.projectIamAdmin` | **Required**: Grants project roles (`aiplatform.user`, `bigquery.jobUser`) to workload SAs. |
-| **Service Accounts** | `roles/iam.serviceAccountAdmin` | Creates the workload SAs (`agent-sa`, `mcp-tools-sa`, `console-sa`, `invoker-sa`, `scheduler-sa`, `console-access`, `detector-sa`, and `cq-sa` when continuous queries are on). |
-| **Service Account Actor** | `roles/iam.serviceAccountUser` | Authorizes attaching SAs to Cloud Run services and jobs (`actAs`). |
-| **API Management** | `roles/serviceusage.serviceUsageAdmin` | Enables necessary Google Cloud APIs (`gcloud services enable`). |
-| **BigQuery** | `roles/bigquery.admin` | Creates dataset `Cymbal_Cyber`, tables, and SQL routines. |
-| **Cloud Run** | `roles/run.admin` | Deploys container services (`adk-agent`, `mcp`, `soc-console`) and jobs (`threat-detector`). |
-| **Pub/Sub** | `roles/pubsub.admin` | Creates telemetry topics, DLQ stores, and BigQuery direct subscriptions. |
-| **Cloud Storage** | `roles/storage.admin` | Provisions evidence buckets and configures bucket-level IAM policies. |
-| **Artifact Registry** | `roles/artifactregistry.admin` | Provisions Docker repo `cymbal-cyber` and configures push permissions. |
-| **Cloud Build** | `roles/cloudbuild.builds.editor` | Submits remote container builds (`gcloud builds submit`). |
-| **Cloud Scheduler** | `roles/cloudscheduler.admin` | Provisions the threat detector cron trigger. |
-
-> [!WARNING]
-> **Why `roles/editor` is NOT sufficient:**  
-> Standard `roles/editor` cannot modify IAM policies (`resourcemanager.projects.setIamPolicy` is forbidden). Because our Terraform configuration declares least-privilege `google_project_iam_member` and resource-level `*_iam_member` bindings, `roles/editor` will fail during `terraform apply`. The deployer must possess `roles/resourcemanager.projectIamAdmin` or the individual admin roles above.
+- A Google Cloud project with billing enabled.
+- **Google Cloud SDK** (`gcloud`, `bq`) and **Terraform** 1.16 or later.
+- **Python 3.12** and **[uv](https://docs.astral.sh/uv/)** (the verification steps publish test telemetry from your machine).
+- A deploying identity that holds the bootstrap roles: Project IAM Admin plus the service-specific admin roles. `roles/editor` is not enough, because it cannot set IAM policy. The full list, and why those roles are kept on a dedicated `cymbal-deployer` service account instead of your own account, is in [SECURITY_ARCHITECTURE.md §2B](SECURITY_ARCHITECTURE.md#2b-bootstrap--provisioning-identity-admin--terraform-cicd-only). Section 2 below grants them.
 
 ---
 
@@ -80,7 +68,7 @@ What `pre_flight.sh` does automatically:
 3. **Assigns IAM Roles:** After confirmation, binds the Admin bootstrap roles and (recommended, the default) creates `cymbal-deployer@<project>.iam.gserviceaccount.com`, binds the deployment roles to it, and gives `DEPLOYER_EMAIL` only Token Creator on it. Declining binds the deployment roles to `DEPLOYER_EMAIL` directly, as before. The analyst gets **no project roles**: `deploy_cloud.sh` grants console access through Terraform. Members accept an explicit prefix such as `group:soc@example.com`.
 4. **Populates `.env` & ADC Quota Project:** Safely upserts `PROJECT_ID`, `REGION`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION="global"`, `GOOGLE_GENAI_USE_ENTERPRISE="true"`, `GEMINI_MODEL="gemini-3.8-flash"` and `DEPLOYER_SA` into `.env` and aligns your ADC quota project.
 
-With `DEPLOYER_SA` set (in `.env` or the shell), `deploy_cloud.sh` runs every `gcloud` and Terraform call as that service account through impersonation, and adds your own account to the console access list (`deploy_console_access_members`) so you can still open the console proxy. See [CLOUD_SECURITY.md §2B](CLOUD_SECURITY.md) for removing the deployment roles from your personal account afterwards.
+With `DEPLOYER_SA` set (in `.env` or the shell), `deploy_cloud.sh` runs every `gcloud` and Terraform call as that service account through impersonation, and adds your own account to the console access list (`deploy_console_access_members`) so you can still open the console proxy. See [SECURITY_ARCHITECTURE.md §2B](SECURITY_ARCHITECTURE.md#2b-bootstrap--provisioning-identity-admin--terraform-cicd-only) for removing the deployment roles from your personal account afterwards.
 
 *(If you run `./src/demo/scripts/pre_flight.sh` directly instead of `source`, load the generated `.env` into your current shell afterward with `set -a && source .env && set +a`.)*
 
@@ -201,14 +189,7 @@ gcloud run jobs update threat-detector \
 
 Verify that the deployed cloud pipeline processes live security telemetry end-to-end:
 
-> **Behind a TLS-intercepting proxy** (corporate network, some devcontainers): if a step fails with `CERTIFICATE_VERIFY_FAILED` / `self-signed certificate in certificate chain`, point each client at the system CA bundle, which includes the proxy's root:
-> ```bash
-> # gRPC clients: the Pub/Sub publisher (Step B) and the console in cloud mode
-> export GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=/etc/ssl/certs/ca-certificates.crt
-> # bq ignores that variable; pass its own flag on every call (Steps F and G)
-> bq --ca_certificates_file=/etc/ssl/certs/ca-certificates.crt query ...
-> ```
-> Never disable certificate verification instead.
+> If a step fails with `CERTIFICATE_VERIFY_FAILED`, see [Troubleshooting](#7-troubleshooting).
 
 ```bash
 # Step A: Ensure local Application Default Credentials (ADC) are active
@@ -257,6 +238,23 @@ MCP_URL="$(gcloud run services describe cymbal-cyber-mcp --project="${PROJECT_ID
   --region="${REGION}" --format='value(status.url)')"
 curl -s -o /dev/null -w '%{http_code}\n' -X POST "${MCP_URL}/mcp"
 ```
+
+### Other ways to generate cloud telemetry
+
+The log generator has more sinks than Pub/Sub. All of them need ADC.
+
+```bash
+# Benign background traffic straight into BigQuery
+uv run python -m src.demo.data_generator.log_generator --mode continuous --rate 50 --sink=bigquery
+
+# A batch file into the raw-logs bucket (load it with src/demo/data_pipeline/gcs_to_bigquery_loader.py)
+uv run python -m src.demo.data_generator.log_generator --mode benign --batch-size 250 --sink=gcs --bucket cymbal-cyber-raw-logs_${PROJECT_ID}
+
+# A false-positive scenario (admin automation that scores high but is benign)
+uv run python -m src.demo.data_generator.log_generator --mode threat --threat-type false_positive --user l.taylor --sink=pubsub
+```
+
+The SOC console's "Inject scenario" and "Stream logs" controls publish to the same raw topic as the console's own service account, so they take the same path.
 
 ---
 
@@ -359,8 +357,8 @@ gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.serv
 ### Zero-Continuous-Cost Serverless Baseline
 Terraform defaults to a **$0 continuous-cost baseline** by avoiding continuous slot reservations or dedicated streaming VMs:
 - **Default Trigger Path ($0/month continuous):** Cloud Scheduler triggers the `threat-detector` Cloud Run Job every 5 minutes via OAuth, evaluating 2-minute tumbling windows via standard BigQuery on-demand queries.
-- **Continuous Queries Warning (`enable_continuous_query = true`):** Requires a 100-slot Enterprise Edition reservation. Slot reservations bill 24/7 at **~$0.06/slot-hour = ~$6.00/hour (~$4,320/month)** whether or not a query is running.
-- **Dataflow Streaming Pipeline (`src/demo/scripts/run_dataflow_demo.sh`):** An optional Apache Beam ETL pipeline that provisions continuous streaming worker VMs (**~$100–$300/month**). Gated off by default.
+- **Continuous Queries Warning (`enable_continuous_query = true`):** Requires a 100-slot Enterprise Edition reservation. Slot reservations bill 24/7 at **~$0.06/slot-hour = ~$6.00/hour (~$4,320/month)** whether or not a query is running. Cancelling the query saves nothing; only setting the flag back to `false` and applying stops the charge. With the reservation in place, start the query with `./src/demo/scripts/launch_continuous_query.sh ${PROJECT_ID}`.
+- **Dataflow Streaming Pipeline (`src/demo/scripts/run_dataflow_demo.sh`):** An optional Apache Beam ETL pipeline that provisions continuous streaming worker VMs (**~$100–$300/month**). Gated off by default. Do not run it alongside the default BigQuery subscriptions, or every event lands twice.
 - **Cloud Run & Vertex AI:** Billed on-demand per request execution duration and token usage.
 
 ### Automated Budget Alert
@@ -380,3 +378,19 @@ terraform destroy -var="project_id=${PROJECT_ID}"
 ```
 *(All BigQuery datasets and Cloud Storage buckets are configured with `delete_contents_on_destroy = true` and `force_destroy = true` so teardown succeeds cleanly without manual bucket purging).*
 
+---
+
+## 7. Troubleshooting
+
+**Behind a TLS-intercepting proxy** (corporate network, some devcontainers): if a step fails with `CERTIFICATE_VERIFY_FAILED` / `self-signed certificate in certificate chain`, point each client at the system CA bundle, which includes the proxy's root:
+```bash
+# gRPC clients: the Pub/Sub publisher (Step B) and the console in cloud mode
+export GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=/etc/ssl/certs/ca-certificates.crt
+# bq ignores that variable; pass its own flag on every call (Steps F and G)
+bq --ca_certificates_file=/etc/ssl/certs/ca-certificates.crt query ...
+```
+Never disable certificate verification instead.
+
+- **`401` on the console proxy:** the token was rejected. Check that the `--token` step printed no error and that the audience is the service URL.
+- **`403` on the console proxy:** the token is fine but the invoker grant is missing or still propagating. New IAM grants can take a few minutes.
+- **Terraform says it found local state:** run the one-time `terraform init -migrate-state` command the deploy script prints. See [the Terraform module README](../src/demo/terraform/README.md#one-time-migration-from-local-state).

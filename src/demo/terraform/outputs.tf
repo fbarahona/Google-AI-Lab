@@ -44,7 +44,7 @@ output "invoker_service_account_email" {
 }
 
 output "console_access_service_account_email" {
-  description = "Identity analysts impersonate to open the SOC console (see DEPLOYMENT.md section 5)."
+  description = "Identity analysts impersonate to open the SOC console (see docs/CLOUD.md section 5)."
   value       = google_service_account.console_access_sa.email
 }
 
