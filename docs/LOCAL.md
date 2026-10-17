@@ -9,6 +9,7 @@ Everything in this guide runs on your machine with **no Google Cloud project and
 - **Python 3.12** (the project requires `>=3.12,<3.13`)
 - **[uv](https://docs.astral.sh/uv/)** for dependency management
 - **`agents-cli`** (optional, for the ADK playground)
+- **About 600 MB of free disk.** The code and demo data are under 10 MB; almost all of it is the Python dependencies `uv sync` installs into `.venv` (Google Cloud and ADK libraries, pyarrow, pandas, Streamlit)
 - **Google Cloud SDK** with Application Default Credentials, only if you want to use a live Gemini model through Vertex AI or run the integration tests
 
 ## 2. Install and configure
