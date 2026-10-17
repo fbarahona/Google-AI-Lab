@@ -49,7 +49,7 @@ uv sync
 uv run python -m src.demo.local_runner --threat injection
 ```
 
-The screenshot in this scenario contains text that tries to make the AI close the alert as harmless. Watch the security gate block that closure and escalate to a human. [LOCAL.md](docs/LOCAL.md) has the other scenarios, the analyst console and the tests.
+The screenshot in this scenario contains text that tries to make the AI close the alert as harmless. Watch the security gate block that closure and escalate to a human. [LOCAL.md](docs/LOCAL.md) has the other scenarios, the analyst console and the tests. These commands work in bash and in Windows PowerShell; for the console on PowerShell, see the note in [LOCAL.md](docs/LOCAL.md#2-install-and-configure).
 
 ## Documentation
 

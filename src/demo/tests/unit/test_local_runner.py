@@ -72,3 +72,14 @@ def test_scripted_fp_rationale_cites_the_telemetry():
     )
     assert "2 login failures" in fp_rationale(transcript)
     assert "no telemetry findings" in fp_rationale("")
+
+
+def test_console_command_matches_the_shell():
+    # PowerShell rejects the POSIX "NAME=value command" prefix, so Windows gets $env:.
+    posix = local_runner.console_command(windows=False)
+    assert posix.startswith("LOCAL_MODE=true uv run python -m streamlit run ")
+    windows = local_runner.console_command(windows=True)
+    assert windows.startswith(
+        '$env:LOCAL_MODE = "true"; uv run python -m streamlit run '
+    )
+    assert windows.endswith(local_runner.CONSOLE_SCRIPT)

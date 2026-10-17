@@ -18,6 +18,16 @@ uv sync
 cp .env.example .env   # set GOOGLE_CLOUD_PROJECT, or GEMINI_API_KEY for Google AI Studio (local only; Cloud Run uses Vertex AI)
 ```
 
+On Windows PowerShell, use `Copy-Item .env.example .env` for the second line.
+
+> **Windows PowerShell:** the commands in this guide are written for bash, macOS and Linux shells. Plain `uv run ...` commands work as they are, but PowerShell does not accept the `LOCAL_MODE=true command` prefix (it reports "The term 'LOCAL_MODE=true' is not recognized"). Set the variable on its own line first, then run the command without the prefix:
+>
+> ```powershell
+> $env:LOCAL_MODE = "true"
+> ```
+>
+> The setting lasts until you close that PowerShell window. Do not move `LOCAL_MODE=true` to the end of the command instead: it then becomes an argument to the script, the console starts in cloud mode and tries to reach BigQuery ("Reauthentication is needed"). The console sidebar shows **Mode: Local simulation** when the variable is set.
+
 `.env.example` documents the supported variables, including `GEMINI_MODEL` (default `gemini-3.8-flash`) and `ADK_ALLOW_CONFIG_STDIO_MCP_SERVERS=true`, which the ADK needs to launch the local MCP server. None of them are needed for the scripted runs below.
 
 ## 3. Run the three scenarios
@@ -55,6 +65,15 @@ Inspect the incident queue, view desktop screenshot evidence, read the multi-age
 LOCAL_MODE=true uv run python -m streamlit run src/demo/soc_ticketing/streamlit_soc_console.py
 ```
 
+Windows PowerShell:
+
+```powershell
+$env:LOCAL_MODE = "true"
+uv run python -m streamlit run src/demo/soc_ticketing/streamlit_soc_console.py
+```
+
+The sidebar should show **Mode: Local simulation**. If it shows **Cloud (BigQuery SSOT)**, `LOCAL_MODE` is not set in that terminal.
+
 Then open **http://localhost:8501**. The console's "Inject scenario" and "Stream logs" controls write events under the queue folder's `telemetry/` directory when running locally, and add a ticket marked **Simulated** so there is something to triage right away. Simulated tickets are left out of every dashboard metric.
 
 ## 5. Chat with the agents in the ADK playground
@@ -62,6 +81,8 @@ Then open **http://localhost:8501**. The console's "Inject scenario" and "Stream
 ```bash
 LOCAL_MODE=true agents-cli playground
 ```
+
+On Windows PowerShell, run `$env:LOCAL_MODE = "true"` first, then `agents-cli playground`.
 
 Pick `adk_agent` and send `investigate user c.wilson`, or paste an alert JSON to fill the whole ticket header. Locally the MCP tool server runs as a child process over `stdio`; no network or token is involved.
 
@@ -89,5 +110,7 @@ uv run --extra lint ruff check .
 # Integration tests (need Application Default Credentials and a project)
 uv run pytest src/demo/tests/integration/
 ```
+
+On Windows PowerShell, run the end-to-end test as `$env:LOCAL_MODE = "true"; uv run pytest src/demo/tests/e2e/`.
 
 CI runs lint, the unit tests and the end-to-end test on every pull request to `main`; see [ARCHITECTURE.md](ARCHITECTURE.md#8-testing--ci) for what each layer covers.
