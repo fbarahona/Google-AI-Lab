@@ -104,3 +104,14 @@ def test_local_sink(tmp_path):
     # Verify files created
     files = list(tmp_path.glob("*.jsonl"))
     assert len(files) == 2
+
+
+def test_local_sink_defaults_to_the_folder_local_agents_read(monkeypatch):
+    # --sink=local without --output-dir must land where LOCAL_MODE tools look.
+    from adk_agent.tools import local_logs_dir
+    from src.demo.data_generator.log_generator import default_local_logs_dir
+
+    monkeypatch.delenv("LOCAL_LOGS_DIR", raising=False)
+    assert default_local_logs_dir() == str(local_logs_dir())
+    monkeypatch.setenv("LOCAL_LOGS_DIR", "/tmp/somewhere")
+    assert default_local_logs_dir() == str(local_logs_dir())

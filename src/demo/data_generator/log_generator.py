@@ -26,6 +26,7 @@ import os
 import random
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from .sinks import BaseSink, BigQuerySink, GoogleCloudStorageSink, LocalSink, PubSubSink
@@ -314,9 +315,15 @@ def create_sink(args: argparse.Namespace) -> BaseSink:
         )
         return BigQuerySink(project_id=args.project_id, dataset_id=args.dataset)
     else:
-        out_dir = args.output_dir or "./output_logs"
+        out_dir = args.output_dir or default_local_logs_dir()
         logger.info("Writing output to local destination: %s", out_dir)
         return LocalSink(output_dir=out_dir, print_stdout=args.stdout)
+
+
+def default_local_logs_dir() -> str:
+    """The folder LOCAL_MODE agents read telemetry from (adk_agent.tools.local_logs_dir)."""
+    repo_root = Path(__file__).resolve().parents[3]
+    return os.getenv("LOCAL_LOGS_DIR") or str(repo_root / "local_demo_data" / "logs")
 
 
 def main():
@@ -387,8 +394,9 @@ def main():
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="./output_logs",
-        help="Local output directory when destination is 'local'.",
+        default=None,
+        help="Local output directory when destination is 'local' (default: the "
+        "folder LOCAL_MODE agents read, LOCAL_LOGS_DIR or local_demo_data/logs).",
     )
     parser.add_argument(
         "--stdout",
