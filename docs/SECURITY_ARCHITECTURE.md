@@ -1,6 +1,14 @@
-# Cloud Security & IAM Architecture Guide
+# Security Architecture
 
-This guide details the security baseline, IAM role requirements, separation of operational duties, and manual/automated configuration procedures for the **Real-Time Cybersecurity AI & ADK Platform** on Google Cloud Platform.
+How the platform keeps each workload and each person to the access it needs, how the AI agents are kept from acting on bad or manipulated evidence, and how personal data is handled. Deployment steps live in [CLOUD.md](CLOUD.md); this document explains what those steps set up and why.
+
+Contents:
+- [Identity tiers](#-architecture--security-model-principle-of-least-privilege): one identity per workload and trust path
+- [Human access](#2-human-identity-access-control-provisioning-vs-day-2-operations): analysts get console access only; deploy rights sit on a service account
+- [MCP as a privilege boundary](#3-decoupled-tool-execution-via-the-model-context-protocol-mcp-tool-service): the agent cannot touch evidence or tickets directly
+- [Workload identities](#4-scoped-workload-identities--resource-level-bindings): every service account and its exact bindings
+- [Privacy and PII](#7-privacy-safeguards--automated-pii-sanitization-architecture): input minimization for web search, masking for analyst-facing text
+- [Agent guardrails](#8-agent-guardrails-deterministic-controls-around-the-model): deterministic code that the model cannot talk its way past
 
 ---
 
@@ -202,42 +210,18 @@ done
 | **Cloud Build Editor** | `roles/cloudbuild.builds.editor` | Submit remote container builds (`gcloud builds submit`) |
 | **Cloud Scheduler Admin** | `roles/cloudscheduler.admin` | Provision the 5-minute `threat-detector-trigger` cron job |
 
-#### Grant Bootstrap Roles (or run `source ./src/demo/scripts/pre_flight.sh`):
-```bash
-BOOTSTRAP_ROLES=(
-  "roles/resourcemanager.projectIamAdmin"
-  "roles/serviceusage.serviceUsageAdmin"
-  "roles/iam.serviceAccountAdmin"
-  "roles/iam.serviceAccountUser"
-  "roles/bigquery.admin"
-  "roles/run.admin"
-  "roles/pubsub.admin"
-  "roles/storage.admin"
-  "roles/artifactregistry.admin"
-  "roles/cloudbuild.builds.editor"
-  "roles/cloudscheduler.admin"
-)
+> [!WARNING]
+> **Why `roles/editor` is not sufficient:** it cannot modify IAM policies (`resourcemanager.projects.setIamPolicy`). The Terraform declares least-privilege `google_project_iam_member` and resource-level `*_iam_member` bindings, so a deployer with only `roles/editor` fails during `terraform apply`.
 
-for role in "${BOOTSTRAP_ROLES[@]}"; do
-  echo "Granting $role to ${ADMIN_EMAIL} for initial provisioning..."
-  gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
-    --member="user:${ADMIN_EMAIL}" \
-    --role="$role" \
-    --condition=None \
-    --quiet
-done
-```
+The commands that grant these roles (the pre-flight script, or a manual loop for headless CI/CD) are in [CLOUD.md §2](CLOUD.md#2-environment--iam-role-setup).
 
 ---
 
 ## 3. Decoupled Tool Execution via the Model Context Protocol (MCP) Tool Service
 
-In earlier iterations, BigQuery invoked remote Gemini models directly inside SQL via `ML.GENERATE_TEXT` over a Vertex AI external connection (`continuous-query-vertex-ai-connection`).
+All Gemini reasoning and multimodal vision calls run in the **ADK agents** and the **MCP tool service** through Vertex AI under their own service accounts (`roles/aiplatform.user`). BigQuery holds structured telemetry and tickets and makes no model calls. (Earlier versions called Gemini from inside BigQuery SQL; [HISTORY.md](HISTORY.md#1-ai-inside-the-warehouse-bigquery-continuous-query) explains why that changed.)
 
-### Why SQL `ML.GENERATE_TEXT` Vertex AI Connections Were Replaced:
-1. **Brittle Cross-Service Coupling:** Running generative AI calls inside BigQuery SQL tightly coupled database queries to foundation model availability, complicating error handling, rate limiting, and multi-step forensic reasoning.
-2. **Decoupled AI & Tool Architecture:** All Gemini reasoning and multimodal vision calls now execute in the **ADK Agents** and **MCP Tool Service** via the Python Vertex AI SDK under Workload Identity (`roles/aiplatform.user`), while BigQuery is used strictly for structured telemetry and ticket persistence.
-3. **Scoped BigLake Connection for Screenshot Indexing Only:** BigQuery retains a single read-only Cloud Resource connection (`cymbal_screenshots` in `src/demo/terraform/bigquery.tf`) solely to back the `user_screenshots_objects` BigLake Object Table over `gs://cymbal-cyber-screenshots_${PROJECT_ID}/*.png`. Its Google-managed service account (`bqcx-...`) holds only `roles/storage.objectViewer` on the `screenshots` bucket (`iam.tf`) and has zero Vertex AI or project-level permissions.
+- **Scoped BigLake Connection for Screenshot Indexing Only:** BigQuery retains a single read-only Cloud Resource connection (`cymbal_screenshots` in `src/demo/terraform/bigquery.tf`) solely to back the `user_screenshots_objects` BigLake Object Table over `gs://cymbal-cyber-screenshots_${PROJECT_ID}/*.png`. Its Google-managed service account (`bqcx-...`) holds only `roles/storage.objectViewer` on the `screenshots` bucket (`iam.tf`) and has zero Vertex AI or project-level permissions.
 
 ### MCP as a Privilege Boundary
 In the cloud the MCP server is its own Cloud Run service, `cymbal-cyber-mcp`, running as its own service account, `cymbal-mcp-tools-sa`. That identity holds every evidence read and ticket write; the agent's identity holds none of them.
@@ -492,7 +476,7 @@ uv run pytest src/demo/tests/unit/test_privacy_guard.py -v
 The multi-agent framework implements deterministic privacy guardrails to protect corporate employee privacy, prevent data exfiltration, and sanitize personal data without compromising cybersecurity threat investigation:
 
 ### 1. Google Search Privacy: Input Minimization plus Query Audit
-* **Location:** [`adk_agent/agent.py`](adk_agent/agent.py) (`search_input_minimization_callback`, `search_query_audit_callback`) and [`adk_agent/privacy_guard.py`](adk_agent/privacy_guard.py).
+* **Location:** [`adk_agent/agent.py`](../adk_agent/agent.py) (`search_input_minimization_callback`, `search_query_audit_callback`) and [`adk_agent/privacy_guard.py`](../adk_agent/privacy_guard.py).
 * **Problem Addressed:** A prompt instruction such as *"do not search internal names"* is not a control. An adversarial alert or a model mistake can send corporate usernames, internal hostnames or private network topology to an external search engine.
 * **Why not a tool callback:** `google_search` is a Gemini built-in tool. Gemini writes and runs the queries itself, inside the model call, so ADK never sees a function call and a `before_tool_callback` never fires. The control has to act on what the model can see.
 * **Architectural Defense:**
@@ -501,7 +485,7 @@ The multi-agent framework implements deterministic privacy guardrails to protect
   * **Proof:** `test_search_model_sees_only_public_ips` runs the real search agent with the real built-in tool attached and asserts that the request the model receives holds the public IP and none of the alert's user, device, private IP or email.
 
 ### 2. Automated PII Sanitization Engine
-* **Location:** [`adk_agent/privacy_guard.py`](adk_agent/privacy_guard.py) via `mask_pii()`.
+* **Location:** [`adk_agent/privacy_guard.py`](../adk_agent/privacy_guard.py) via `mask_pii()`.
 * **Zero-Cloud & High Performance:** Executes locally with zero cloud dependencies or external latency, applying deterministic pattern matchers and algorithmic validators (including Luhn checksum validation for payment card PANs).
 * **Redaction Coverage:**
   * Personal Email Addresses (`[REDACTED_EMAIL]`)
@@ -513,8 +497,8 @@ The multi-agent framework implements deterministic privacy guardrails to protect
   * **External egress (Google Search):** strictest. The search model only sees public IPs, and its queries are audited (§1).
   * **Internal analyst audience (OCR evidence, tickets):** internal IPs, hostnames and the investigated user stay visible, because they are the evidence an analyst works from (lateral movement, source host). Only third-party personal data and secrets are masked.
 * **Masking Touchpoints:**
-  * **Desktop OCR Forensics ([`adk_agent/tools.py`](adk_agent/tools.py)):** the deterministic prompt-injection scan runs on the raw OCR text first, so masking can never hide an injection phrase; the text is then masked before it enters agent prompts or session state.
-  * **Ticket text ([`adk_agent/tools.py`](adk_agent/tools.py)):** the agent's rationale and the structured report are masked in `dispatch_to_soc_ticketing_system`, `escalate_to_human`, `log_false_positive` and `auto_escalate_unresolved_alert` before they reach BigQuery or the analyst queue. Structured fields (user, device, source IP) and the IOC list are evidence and are kept.
+  * **Desktop OCR Forensics ([`adk_agent/tools.py`](../adk_agent/tools.py)):** the deterministic prompt-injection scan runs on the raw OCR text first, so masking can never hide an injection phrase; the text is then masked before it enters agent prompts or session state.
+  * **Ticket text ([`adk_agent/tools.py`](../adk_agent/tools.py)):** the agent's rationale and the structured report are masked in `dispatch_to_soc_ticketing_system`, `escalate_to_human`, `log_false_positive` and `auto_escalate_unresolved_alert` before they reach BigQuery or the analyst queue. Structured fields (user, device, source IP) and the IOC list are evidence and are kept.
 * **Precision:** phone numbers must have separators, so process IDs, byte counts and epoch timestamps are not redacted; IPv4 and IPv6 are both classified (public vs. private/ULA/link-local).
 * **Enterprise Google Cloud DLP Extension:** In enterprise production, the engine can be paired with Google Cloud Sensitive Data Protection (DLP API) for automated classification across regional data governance policies.
 
@@ -522,3 +506,20 @@ The multi-agent framework implements deterministic privacy guardrails to protect
 To ensure the primary objective of investigating security alerts and malicious traffic is never degraded:
 * **Public IPs & Threat IOCs:** Routable public IP addresses (e.g., `175.45.176.10`, `8.8.8.8`), external threat domains (`c2-server.ru`), malware family names (`mimikatz`), attack commands (`powershell -enc`), file hashes (SHA256, MD5), and MITRE ATT&CK techniques are explicitly whitelisted and **never masked or blocked**.
 
+---
+
+## 8. Agent Guardrails: Deterministic Controls Around the Model
+
+The model decides what to investigate and how to summarize it. It does not get the final word on whether an alert is closed. Each control below is ordinary Python in [`adk_agent/agent.py`](../adk_agent/agent.py) that runs on every investigation, whatever the model says.
+
+| Control | Where | What it enforces |
+| :--- | :--- | :--- |
+| **Security gate** | `security_gate_callback` (before every ticketing tool call) | Blocks `log_false_positive` when the screenshot showed a prompt injection, when telemetry recorded malicious indicators, when any evidence tool failed, or when telemetry or visual evidence was never gathered. The model is told to escalate instead. An escalation with injection or malicious indicators is forced to `CRITICAL`. |
+| **Fail-closed evidence** | `sync_mcp_security_state_callback`, `mcp_tool_error_callback` | An evidence tool that errors, times out (90 s, `MCP_TOOL_TIMEOUT_SECONDS`) or returns no structured security flags marks evidence unavailable, which the gate treats as a reason to escalate. Skipping an evidence tool has the same effect. |
+| **Flags only tighten** | `_EVIDENCE_FLAGS`, `_LIFECYCLE_FLAG_BY_TOOL` | Any tool may raise a flag that makes the gate stricter. A flag that marks an alert resolved can only be set by the tool that actually performed that resolution, so tool output cannot fake a closure. |
+| **Default deny** | `default_deny_soc_callback` (after the ticketing agent) | If the model finishes without dispatching, escalating or closing the alert, the platform escalates it to a human through the platform-only MCP tool `auto_escalate_unresolved_alert`. |
+| **Alert identity pinning** | `_pin_alert_identity`, `_assign_ticket_id` | User, device, source IP, score and ticket ID on the ticket come from the original alert, not from the model. A redelivered alert maps to the same ticket. |
+| **Prompt-injection scan** | `get_visual_analysis_for_user` in [`adk_agent/tools.py`](../adk_agent/tools.py) | Screenshot OCR text is scanned for injection phrases before PII masking, so masking cannot hide one. |
+| **Webhook caller check** | `verify_incoming_oidc_token` in [`adk_agent/fast_api_app.py`](../adk_agent/fast_api_app.py) | The agent webhook accepts only Pub/Sub pushes signed for `pubsub-invoker-sa`, on top of Cloud Run IAM. |
+
+These controls are exercised without a cloud project by the end-to-end test in `src/demo/tests/e2e/` (a scripted model deliberately tries to close the injection and false-positive scenarios) and by the unit tests `test_evidence_fail_closed.py`, `test_mcp_callbacks.py` and `test_security_hardening.py`. CI runs both on every pull request.
