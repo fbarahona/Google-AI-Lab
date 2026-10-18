@@ -16,7 +16,7 @@ The platform demonstrates an end-to-end autonomous threat detection, multi-agent
    - `visual_analysis_agent`: Multimodal vision and OCR forensic inspection of desktop screenshots via MCP tools, scanning raw OCR for prompt injection before PII masking.
    - `soc_ticketing_agent`: Synthesizes evidence, generates a structured incident report, and invokes SOC ticketing tools (dispatch incident, log false positive, or escalate to human).
 4. **Decoupled MCP Tool Service (`adk_agent/mcp_server/`):** A standalone Model Context Protocol server running in Cloud Run (`cymbal-cyber-mcp`) as its own service account (`cymbal-mcp-tools-sa`). The agent runtime holds zero direct evidence read or ticket write privileges and interacts solely over authenticated Streamable HTTP (or `stdio` locally).
-5. **Deterministic Guardrails & PII Sanitization (`adk_agent/privacy_guard.py`):** Deterministic Python callbacks enforce fail-closed evidence gathering, block false-positive closures on malicious indicators or prompt injection attempts, force default-deny human escalation on unhandled alerts, and automatically redact PII (SSNs, cards, emails, phones, credentials) while preserving threat IOCs.
+5. **Deterministic Guardrails & PII Sanitization (`adk_agent/guardrails/`, `adk_agent/privacy_guard.py`):** Deterministic Python callbacks enforce fail-closed evidence gathering, block false-positive closures on malicious indicators or prompt injection attempts, force default-deny human escalation on unhandled alerts, and automatically redact PII (SSNs, cards, emails, phones, credentials) while preserving threat IOCs.
 6. **SOC Analyst Console (`src/demo/soc_ticketing/`):** An interactive Streamlit console providing live queue triage, multimodal evidence viewing via signed URLs, KPI analytics, and ticket adjudication.
 
 ---
@@ -39,20 +39,20 @@ Detailed system documentation is organized under [`docs/`](docs/):
 ## Project Structure
 
 ```text
-/workspaces/Google/
+/workspaces/Google-AI-Lab/
 ├── adk_agent/                      # Canonical ADK Multi-Agent package
-│   ├── agent.py                    # Multi-agent orchestrator, parallel team & guardrail callbacks
+│   ├── agent.py                    # Multi-agent orchestrator, parallel team & retry configuration
 │   ├── guardrails/                 # Guardrail callbacks (security gate, evidence state, search privacy, lifecycle)
 │   ├── prompts.py                  # Sub-agent instructions
 │   ├── mcp_client.py               # Scoped MCP toolsets
 │   ├── detection_rules.py          # Python parity twin of BigQuery threat detection UDFs
 │   ├── fast_api_app.py             # FastAPI backend server (Pub/Sub webhook + optional A2A/dev UI)
-│   ├── logging_utils.py            # Structured logging utilities
+│   ├── logging_utils.py            # Structured logging utilities (Cloud Run JSON & plain text)
 │   ├── privacy_guard.py            # Deterministic PII masking engine & search privacy audit
 │   ├── threat_detector.py          # Scheduled micro-batch detector Cloud Run Job
 │   ├── settings.py                 # Shared project, dataset and model settings
 │   ├── tools/                      # Investigation, vision, and ticketing tool implementations
-│   ├── app_utils/                  # Service initialization and A2A helpers
+│   ├── app_utils/                  # Service initialization, alert status, and webhook helpers
 │   └── mcp_server/                 # Model Context Protocol (MCP) tool server ("cymbal-cyber-mcp")
 │       ├── __init__.py             # Package init and server factory
 │       ├── __main__.py             # stdio/SSE execution entrypoint
@@ -74,6 +74,15 @@ Detailed system documentation is organized under [`docs/`](docs/):
 │       ├── other_code/             # Supporting analytical SQL queries and notebook helpers
 │       ├── scripts/                # Pre-flight, deployment, and pipeline launcher scripts
 │       ├── soc_ticketing/          # SOC ticketing service, models, and Streamlit analyst console
+│       │   ├── console/            # Modular Streamlit page modules (overview, triage, ticket_detail, archive)
+│       │   ├── service/            # Core ticketing service implementation (queries, writes, metrics)
+│       │   ├── dashboard_charts.py # Chart and KPI visualizations
+│       │   ├── demo_actions.py     # Local scenario injection triggers
+│       │   ├── models.py           # Ticket and threat assessment data models
+│       │   ├── report_parser.py    # Structured report parsing utilities
+│       │   ├── streamlit_soc_console.py # Streamlit web application entrypoint
+│       │   ├── ticket_assistant.py # Interactive ticket assistant ADK agent
+│       │   └── ticketing_service.py # Backward-compatible facade for SOC ticketing operations
 │       ├── terraform/              # GCP Terraform IaC modules (BigQuery, Pub/Sub, Cloud Run, IAM)
 │       │   └── schemas/            # raw_security_event.proto data contract
 │       └── tests/                  # Test suites (unit, e2e, integration, eval datasets)
@@ -103,7 +112,7 @@ The platform enforces strict separation of duties across dedicated service accou
 | **`cymbal-deployer`** | Provisioning & Terraform CI/CD | Elevated bootstrap roles. Humans only impersonate it via `serviceAccountTokenCreator`. |
 | **`soc-console-access`** | Human SOC Analyst Access | `roles/run.invoker` on SOC Console service only. **ZERO project roles** (no BQ, GCS, or Vertex access). |
 | **`threat-detector-job-sa`** | Micro-Batch Detector Job | BQ `jobUser`, dataset `READER`, table `dataEditor` on `alerts` & `soc_tickets`, publisher on `cymbal_cyber_alerts`. |
-| **`cymbal-adk-agent-sa`** | ADK Agent Runtime & Webhook | Vertex AI `aiplatform.user`, table `dataEditor` on `alerts` & `agent_events`, `run.invoker` on MCP tool service. **ZERO evidence reads or ticket writes.** |
+| **`cymbal-adk-agent-sa`** | ADK Agent Runtime & Webhook | Vertex AI `aiplatform.user`, BQ `jobUser`, `logging.logWriter`, `telemetry.tracesWriter`, `monitoring.metricWriter`, table `dataEditor` on `alerts` & `agent_events`, `run.invoker` on MCP tool service. **ZERO evidence reads or ticket writes.** |
 | **`cymbal-mcp-tools-sa`** | MCP Tool Service (`cymbal-cyber-mcp`) | BQ dataset `READER`, table `dataEditor` on `soc_tickets` & `adk_threat_assessment`, GCS `objectViewer` on screenshots, `objectUser` on escalations, self `serviceAccountTokenCreator` (signing). Invocable only by Agent SA. |
 | **`cymbal-soc-console-sa`** | Streamlit Analyst Console | BQ dataset `READER`, table `dataEditor` on `soc_tickets` & `adk_threat_assessment`, GCS `objectUser` on escalations, publisher on `cymbal_cyber_raw_logs`. |
 | **`pubsub-invoker-sa`** | Pub/Sub Push Authentication | `roles/run.invoker` on ADK Agent service only. Webhook strictly verifies OIDC token. |
@@ -119,15 +128,20 @@ Environment variables are loaded automatically at startup via `python-dotenv`:
 - `GOOGLE_CLOUD_PROJECT=<project_name>`: Target GCP project ID.
 - `GOOGLE_CLOUD_LOCATION=us-east1` (or `global`): Model region.
 - `GEMINI_MODEL=gemini-3.8-flash`: Dynamic model configuration.
+- `GEMINI_RETRY_ATTEMPTS=5`: Maximum retry attempts with exponential backoff and jitter for Vertex AI 429 (`RESOURCE_EXHAUSTED`), 408, and 5xx transient errors.
 - `ADK_ALLOW_CONFIG_STDIO_MCP_SERVERS=true`: Enables local stdio MCP subprocess execution.
 - `LOCAL_MODE=true`: Disables Cloud Trace and GCP-dependent authentication for zero-cloud runs.
+- `ENABLE_CLOUD_LOGGING=false`: Optional Google Cloud Logging API direct client export (Cloud Run automatically captures structured stdout logs via `StructuredLogHandler`).
 - `MCP_SERVER_URL`: Unset for local `stdio`; set to `https://<service-url>/mcp` for Cloud Run Streamable HTTP.
 - `MCP_TOOL_TIMEOUT_SECONDS=90`: MCP per-request execution timeout.
 
-### 2. Model Configuration
+### 2. Model Configuration & Resilience
 - The codebase dynamically reads `os.getenv("GEMINI_MODEL", "gemini-3.8-flash")`.
 - Default model: `gemini-3.8-flash` across all agents and tools.
 - Never hardcode model identifiers in agent code or prompt loops.
+- **Exponential Backoff & 429 Retry:** Agents configure `Gemini(model=MODEL_NAME, retry_options=types.HttpRetryOptions(attempts=GEMINI_RETRY_ATTEMPTS, initial_delay=2.0, max_delay=30.0, exp_base=2.0, jitter=1.0, http_status_codes=[408, 429, 500, 502, 503, 504]))` across all sub-agents to absorb capacity bursts.
+- **Pub/Sub Rate Limit Handshake:** If Vertex AI model capacity remains exhausted after retries, the webhook returns HTTP 429 `RATE_LIMITED` (logged at `WARNING` severity). This instructs Pub/Sub to back off and redeliver without emitting 500 alert noise, while resetting alert state to `RETRY_PENDING` to prevent premature republishing.
+- **Cloud Run Structured Logging:** `setup_logging()` detects Cloud Run (`K_SERVICE`) and emits single-line JSON with severity levels via `StructuredLogHandler`, consolidating stack traces into single entries and enabling Log Explorer severity filtering.
 
 ---
 
@@ -137,7 +151,7 @@ All Python commands and test runners must be executed using **`uv`**:
 
 ### 1. Automated Test Suites
 ```bash
-# Run all unit tests (301 tests, zero cloud credentials required)
+# Run all unit tests (310 tests, zero cloud credentials required)
 uv run pytest src/demo/tests/unit/
 
 # Run end-to-end pipeline tests (validates real agents, MCP tools, and security gate with scripted model)
@@ -238,4 +252,4 @@ gcloud run services proxy cymbal-cyber-soc-console \
 - **Linting & Code Formatting:**
   Adhere strictly to the workspace formatting baseline (line length 88, Python 3.12 target). Run `uv run --extra lint ruff check .` and `uv run ruff format .` before submitting changes.
 - **Mandatory Test Verification:**
-  Always run `uv run pytest src/demo/tests/unit/` and `LOCAL_MODE=true uv run pytest src/demo/tests/e2e/` after modifying code to verify that all 300+ unit tests and end-to-end pipeline tests pass with zero regressions.
+  Always run `uv run pytest src/demo/tests/unit/` and `LOCAL_MODE=true uv run pytest src/demo/tests/e2e/` after modifying code to verify that all 310 unit tests and end-to-end pipeline tests pass with zero regressions.
