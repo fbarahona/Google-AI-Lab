@@ -19,3 +19,4 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("PROJECT_ID", "local-demo")
 DATASET_ID = os.getenv("BIGQUERY_DATASET", "Cymbal_Cyber")
 MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+LOCAL_MODE = os.getenv("LOCAL_MODE", "false").lower() == "true"
