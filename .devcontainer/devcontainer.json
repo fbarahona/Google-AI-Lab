@@ -14,6 +14,12 @@
     }
   },
 
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "8gb",
+    "storage": "64gb"
+  },
+
   "mounts": [
     // Persistent cache for uv and npm downloads, so rebuilds are fast.
     "source=cymbal-devcontainer-cache,target=/home/vscode/.cache,type=volume"
