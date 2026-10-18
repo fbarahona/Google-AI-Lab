@@ -17,7 +17,10 @@ locals {
     "bigquerydatatransfer.googleapis.com",
     "billingbudgets.googleapis.com",
     "artifactregistry.googleapis.com",
-    "cloudbuild.googleapis.com"
+    "cloudbuild.googleapis.com",
+    "cloudtrace.googleapis.com",
+    "monitoring.googleapis.com",
+    "telemetry.googleapis.com"
   ])
 }
 

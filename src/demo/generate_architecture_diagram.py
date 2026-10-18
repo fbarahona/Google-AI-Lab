@@ -724,7 +724,7 @@ def create_png():
     draw_badge(
         draw,
         (250, 348, 600, 372),
-        "raw_access_to_bq [event_family=\"access\"] ($0 Ingest)",
+        'raw_access_to_bq [event_family="access"] ($0 Ingest)',
         label_font,
         (12, 74, 110),
         (56, 189, 248),
@@ -734,7 +734,7 @@ def create_png():
     draw_badge(
         draw,
         (990, 348, 1340, 372),
-        "raw_network_to_bq [event_family=\"network\"] ($0 Ingest)",
+        'raw_network_to_bq [event_family="network"] ($0 Ingest)',
         label_font,
         (12, 74, 110),
         (56, 189, 248),
@@ -774,12 +774,54 @@ def create_png():
     )
 
     bq_tables = [
-        ("user_access_events [DAY]", 125, 215, (30, 41, 59), (59, 130, 246), (96, 165, 250)),
-        ("network_events [DAY]", 355, 195, (30, 41, 59), (59, 130, 246), (96, 165, 250)),
-        ("alerts [DAY, Clustered]", 565, 215, (30, 41, 59), (56, 189, 248), (125, 211, 252)),
-        ("alerts_dead_letter [DLQ]", 795, 225, (63, 7, 19), (244, 63, 94), (254, 205, 211)),
-        ("adk_threat_assessment", 1035, 225, (30, 41, 59), (16, 185, 129), (110, 231, 183)),
-        ("soc_tickets [SSOT]", 1275, 200, (30, 41, 59), (251, 146, 60), (253, 186, 116)),
+        (
+            "user_access_events [DAY]",
+            125,
+            215,
+            (30, 41, 59),
+            (59, 130, 246),
+            (96, 165, 250),
+        ),
+        (
+            "network_events [DAY]",
+            355,
+            195,
+            (30, 41, 59),
+            (59, 130, 246),
+            (96, 165, 250),
+        ),
+        (
+            "alerts [DAY, Clustered]",
+            565,
+            215,
+            (30, 41, 59),
+            (56, 189, 248),
+            (125, 211, 252),
+        ),
+        (
+            "alerts_dead_letter [DLQ]",
+            795,
+            225,
+            (63, 7, 19),
+            (244, 63, 94),
+            (254, 205, 211),
+        ),
+        (
+            "adk_threat_assessment",
+            1035,
+            225,
+            (30, 41, 59),
+            (16, 185, 129),
+            (110, 231, 183),
+        ),
+        (
+            "soc_tickets [SSOT]",
+            1275,
+            200,
+            (30, 41, 59),
+            (251, 146, 60),
+            (253, 186, 116),
+        ),
     ]
     for tbl, tx, tw, bg_c, stroke_c, text_c in bq_tables:
         draw_badge(
@@ -1153,9 +1195,15 @@ def create_png():
             radius=4,
         )
         draw.line([(ax + 14, 972), (ax + 311, 972)], fill=(71, 85, 105), width=1)
-        draw.text((ax + 14, 980), f"Role: {desc1}", fill=(241, 245, 249), font=card_sub_font)
-        draw.text((ax + 14, 998), f"Intel: {desc2}", fill=(203, 213, 225), font=card_sub_font)
-        draw.text((ax + 14, 1016), f"Scope: {desc3}", fill=(148, 163, 184), font=card_sub_font)
+        draw.text(
+            (ax + 14, 980), f"Role: {desc1}", fill=(241, 245, 249), font=card_sub_font
+        )
+        draw.text(
+            (ax + 14, 998), f"Intel: {desc2}", fill=(203, 213, 225), font=card_sub_font
+        )
+        draw.text(
+            (ax + 14, 1016), f"Scope: {desc3}", fill=(148, 163, 184), font=card_sub_font
+        )
 
         # Tool Box inside Agent
         draw.rounded_rectangle(
@@ -1274,7 +1322,12 @@ def create_png():
             outline=stroke_c,
             width=1,
         )
-        draw.text((px + 14, 1245), ptitle, fill=(255, 255, 255), font=get_font("sans", 12.5, bold=True))
+        draw.text(
+            (px + 14, 1245),
+            ptitle,
+            fill=(255, 255, 255),
+            font=get_font("sans", 12.5, bold=True),
+        )
         draw.text((px + 14, 1267), pt1, fill=text_c, font=pill_mono_font)
         draw.text((px + 14, 1285), pt2, fill=(203, 213, 225), font=card_sub_font)
         draw.text((px + 14, 1301), pt3, fill=(148, 163, 184), font=card_sub_font)

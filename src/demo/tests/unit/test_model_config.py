@@ -29,10 +29,26 @@ def test_dynamic_model_name():
 def test_dynamic_agent_models():
     """Verify that all sub-agents are initialized with the dynamic configured model."""
     expected_model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
-    assert google_search_agent.model == expected_model
-    assert bq_investigation_agent.model == expected_model
-    assert visual_analysis_agent.model == expected_model
-    assert soc_ticketing_agent.model == expected_model
+    for agent in (
+        google_search_agent,
+        bq_investigation_agent,
+        visual_analysis_agent,
+        soc_ticketing_agent,
+    ):
+        assert agent.model.model == expected_model
+
+
+def test_agents_retry_vertex_ai_resource_exhausted():
+    """A Vertex AI 429 is retried with backoff instead of failing the investigation."""
+    for agent in (
+        google_search_agent,
+        bq_investigation_agent,
+        visual_analysis_agent,
+        soc_ticketing_agent,
+    ):
+        retry = agent.model.retry_options
+        assert retry is not None and retry.attempts >= 2
+        assert 429 in retry.http_status_codes
 
 
 def test_dynamic_project_id():

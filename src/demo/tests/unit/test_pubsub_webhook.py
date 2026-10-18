@@ -165,6 +165,49 @@ def test_pubsub_push_endpoint_failure_allows_retry():
     app.state.runner = None
 
 
+def test_pubsub_push_endpoint_model_rate_limit_returns_429():
+    """A Vertex AI 429 that outlasts the model retries is a 429 for Pub/Sub, not a 500."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from google.genai import errors as genai_errors
+
+    mock_runner = MagicMock()
+    mock_session = MagicMock()
+    mock_runner.session_service.get_session = AsyncMock(return_value=mock_session)
+
+    async def mock_rate_limited_run(*args, **kwargs):
+        raise genai_errors.ClientError(
+            429,
+            {
+                "error": {
+                    "code": 429,
+                    "message": "Resource exhausted.",
+                    "status": "RESOURCE_EXHAUSTED",
+                }
+            },
+        )
+        yield None
+
+    mock_runner.run_async = mock_rate_limited_run
+    app.state.runner = mock_runner
+    app.state.agent_app_name = "adk_agent"
+    client = TestClient(app)
+
+    payload = {
+        "message": {
+            "data": base64.b64encode(b'{"user_id": "r.patel"}').decode("utf-8"),
+            "messageId": "test-rate-limited-msg",
+        }
+    }
+    r1 = client.post("/apps/adk_agent/trigger/pubsub", json=payload)
+    assert r1.status_code == 429
+    assert r1.json()["status"] == "RATE_LIMITED"
+    # The redelivery runs again rather than being swallowed by dedup.
+    r2 = client.post("/apps/adk_agent/trigger/pubsub", json=payload)
+    assert r2.status_code == 429
+    app.state.runner = None
+
+
 def test_pubsub_push_endpoint_with_mock_runner():
     """Test successful synchronous investigation execution when runner is ready."""
     from unittest.mock import AsyncMock, MagicMock

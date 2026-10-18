@@ -9,13 +9,16 @@ Defines the structure and orchestration logic of the ADK multi-agent system:
 - Sub-Agent 4: soc_ticketing_agent (Consolidates findings and passes tickets to the SOC ticketing system)
 """
 
+import os
 import warnings
 
 # --- ADK Imports ---
 from google.adk.agents import Agent, ParallelAgent, SequentialAgent
 from google.adk.apps import App
+from google.adk.models.google_llm import Gemini
 from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.tools import google_search
+from google.genai import types
 
 try:
     from google.adk.plugins.bigquery_agent_analytics_plugin import (
@@ -93,6 +96,23 @@ from adk_agent.settings import (  # noqa: F401
 # --- Configuration ---
 
 warnings.filterwarnings("ignore", category=UserWarning, module="vertexai")
+
+# Vertex AI answers 429 RESOURCE_EXHAUSTED when shared Gemini capacity is busy, and
+# without retries one 429 fails the whole investigation. Retrying with exponential
+# backoff and jitter (2, 4, 8, 16 s, capped at 30 s) absorbs short bursts inside the
+# request; a longer outage still fails and Pub/Sub redelivers with its own backoff.
+GEMINI_RETRY_ATTEMPTS = int(os.getenv("GEMINI_RETRY_ATTEMPTS", "5"))
+GEMINI_MODEL = Gemini(
+    model=MODEL_NAME,
+    retry_options=types.HttpRetryOptions(
+        attempts=GEMINI_RETRY_ATTEMPTS,
+        initial_delay=2.0,
+        max_delay=30.0,
+        exp_base=2.0,
+        jitter=1.0,
+        http_status_codes=[408, 429, 500, 502, 503, 504],
+    ),
+)
 warnings.filterwarnings("ignore", category=UserWarning, module="google.adk")
 
 
@@ -135,7 +155,7 @@ class ParallelOrchestratorAgent(ParallelAgent):
 # SUB-AGENT 1: Google Search Investigator
 # ==============================================================================
 google_search_agent = Agent(
-    model=MODEL_NAME,
+    model=GEMINI_MODEL,
     name="google_search_agent",
     description="Agent that researches IP addresses from security alerts.",
     instruction=GOOGLE_SEARCH_INSTRUCTION,
@@ -152,7 +172,7 @@ google_search_agent = Agent(
 # SUB-AGENT 2: BigQuery Data Investigator
 # ==============================================================================
 bq_investigation_agent = Agent(
-    model=MODEL_NAME,
+    model=GEMINI_MODEL,
     name="bq_investigation_agent",
     description="Agent that analyzes BigQuery behavioral telemetry by querying historical access and network events.",
     instruction=BQ_INVESTIGATION_INSTRUCTION,
@@ -169,7 +189,7 @@ bq_investigation_agent = Agent(
 # SUB-AGENT 3: Visual Analysis Agent (Multimodal Vision)
 # ==============================================================================
 visual_analysis_agent = Agent(
-    model=MODEL_NAME,
+    model=GEMINI_MODEL,
     name="visual_analysis_agent",
     description="Agent that analyzes user desktop screenshots using multi-modal AI to uncover forensic visual evidence.",
     instruction=VISUAL_ANALYSIS_INSTRUCTION,
@@ -195,7 +215,7 @@ visual_analysis_agent = Agent(
 # SUB-AGENT 4: SOC Ticketing & Decision Agent
 # ==============================================================================
 soc_ticketing_agent = Agent(
-    model=MODEL_NAME,
+    model=GEMINI_MODEL,
     name="soc_ticketing_agent",
     description="Agent that consolidates findings, decides on best action to take, and passes tickets to the SOC ticketing system.",
     instruction=SOC_TICKETING_INSTRUCTION,

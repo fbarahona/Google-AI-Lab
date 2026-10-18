@@ -10,12 +10,30 @@ logger = logging.getLogger("CymbalCyberADK")
 
 
 def setup_logging():
-    """Initializes console logging and optional Google Cloud Logging."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)],
-    )
+    """
+    Configures root logging once. On Cloud Run (K_SERVICE is set) every record is a
+    one-line JSON entry with a real severity, so Cloud Logging can filter on
+    severity>=ERROR and keeps a traceback in one entry instead of one per line.
+    Elsewhere it is plain text on stdout. Optional Google Cloud Logging API export
+    stays behind ENABLE_CLOUD_LOGGING.
+    """
+    root = logging.getLogger()
+    if getattr(root, "_cymbal_logging_configured", False):
+        return
+    if os.getenv("K_SERVICE"):
+        from google.cloud.logging.handlers import StructuredLogHandler
+
+        handler: logging.Handler = StructuredLogHandler(
+            stream=sys.stdout, project_id=os.getenv("GOOGLE_CLOUD_PROJECT")
+        )
+    else:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+        )
+    root.handlers = [handler]
+    root.setLevel(logging.INFO)
+    root._cymbal_logging_configured = True
 
     if os.getenv("ENABLE_CLOUD_LOGGING", "false").lower() == "true":
         try:

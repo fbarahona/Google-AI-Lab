@@ -265,7 +265,9 @@ def main():
     if "--http" in sys.argv or os.getenv("MCP_TRANSPORT") == "streamable-http":
         import uvicorn
 
-        logging.basicConfig(level=logging.INFO)
+        from adk_agent.logging_utils import setup_logging
+
+        setup_logging()
         uvicorn.run(
             build_http_app(),
             host="0.0.0.0",

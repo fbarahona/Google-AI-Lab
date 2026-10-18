@@ -51,10 +51,14 @@ from adk_agent.app_utils.webhook import (  # noqa: F401
     _run_agent_investigation,
     handle_pubsub_trigger,
 )
+from adk_agent.logging_utils import setup_logging
 
 logger = logging.getLogger("CymbalCyberADK.Webhook")
 
 load_dotenv()
+# Without this the app's loggers had no handler, so INFO lines were dropped and
+# errors reached Cloud Logging only as unstructured stderr text.
+setup_logging()
 allow_origins = (
     os.getenv("ALLOW_ORIGINS", "").split(",") if os.getenv("ALLOW_ORIGINS") else None
 )
