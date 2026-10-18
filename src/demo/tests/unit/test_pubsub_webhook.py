@@ -283,7 +283,7 @@ def test_investigating_alert_staleness_reads_string_timestamps(
     from datetime import UTC, datetime, timedelta
     from unittest.mock import AsyncMock, MagicMock
 
-    import adk_agent.fast_api_app as webhook
+    from adk_agent.app_utils import webhook
 
     updated_at = (datetime.now(UTC) - timedelta(minutes=minutes_ago)).isoformat()
     monkeypatch.setattr(

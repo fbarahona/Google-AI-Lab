@@ -42,12 +42,16 @@ Detailed system documentation is organized under [`docs/`](docs/):
 /workspaces/Google/
 ├── adk_agent/                      # Canonical ADK Multi-Agent package
 │   ├── agent.py                    # Multi-agent orchestrator, parallel team & guardrail callbacks
+│   ├── guardrails/                 # Guardrail callbacks (security gate, evidence state, search privacy, lifecycle)
+│   ├── prompts.py                  # Sub-agent instructions
+│   ├── mcp_client.py               # Scoped MCP toolsets
 │   ├── detection_rules.py          # Python parity twin of BigQuery threat detection UDFs
 │   ├── fast_api_app.py             # FastAPI backend server (Pub/Sub webhook + optional A2A/dev UI)
 │   ├── logging_utils.py            # Structured logging utilities
 │   ├── privacy_guard.py            # Deterministic PII masking engine & search privacy audit
 │   ├── threat_detector.py          # Scheduled micro-batch detector Cloud Run Job
-│   ├── tools.py                    # Investigation, vision, and ticketing tool implementations
+│   ├── settings.py                 # Shared project, dataset and model settings
+│   ├── tools/                      # Investigation, vision, and ticketing tool implementations
 │   ├── app_utils/                  # Service initialization and A2A helpers
 │   └── mcp_server/                 # Model Context Protocol (MCP) tool server ("cymbal-cyber-mcp")
 │       ├── __init__.py             # Package init and server factory

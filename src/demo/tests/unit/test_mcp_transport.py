@@ -20,6 +20,7 @@ from google.adk.tools.mcp_tool.mcp_session_manager import (
 from starlette.testclient import TestClient
 
 import adk_agent.agent as ag
+from adk_agent import mcp_client
 from adk_agent.mcp_server import server
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -28,7 +29,7 @@ AGENT_SA = "cymbal-adk-agent-sa@proj.iam.gserviceaccount.com"
 
 
 def test_stdio_without_server_url(monkeypatch):
-    monkeypatch.setattr(ag, "MCP_SERVER_URL", "")
+    monkeypatch.setattr(mcp_client, "MCP_SERVER_URL", "")
     toolset = ag.create_mcp_toolset(["create_rich_ticket_id"])
     assert isinstance(toolset._connection_params, StdioConnectionParams)
     assert toolset.header_provider is None
@@ -36,8 +37,8 @@ def test_stdio_without_server_url(monkeypatch):
 
 def test_streamable_http_with_server_url(monkeypatch):
     provider = ag.McpIdTokenProvider(ag.mcp_audience(MCP_URL))
-    monkeypatch.setattr(ag, "MCP_SERVER_URL", MCP_URL)
-    monkeypatch.setattr(ag, "_mcp_header_provider", provider)
+    monkeypatch.setattr(mcp_client, "MCP_SERVER_URL", MCP_URL)
+    monkeypatch.setattr(mcp_client, "_mcp_header_provider", provider)
     toolset = ag.create_mcp_toolset(["create_rich_ticket_id"])
     params = toolset._connection_params
     assert isinstance(params, StreamableHTTPConnectionParams)
@@ -57,7 +58,7 @@ def test_id_token_is_minted_for_the_service_and_cached(monkeypatch):
     creds = MagicMock(valid=True, token="tok-1")
     fetch = MagicMock(return_value=creds)
     monkeypatch.setattr(id_token, "fetch_id_token_credentials", fetch)
-    monkeypatch.setattr(ag, "LOCAL_MODE", False)
+    monkeypatch.setattr(mcp_client, "LOCAL_MODE", False)
     provider = ag.McpIdTokenProvider("https://mcp.example")
 
     assert provider() == {"Authorization": "Bearer tok-1"}
@@ -72,7 +73,7 @@ def test_id_token_is_minted_for_the_service_and_cached(monkeypatch):
 
 
 def test_no_token_in_local_mode(monkeypatch):
-    monkeypatch.setattr(ag, "LOCAL_MODE", True)
+    monkeypatch.setattr(mcp_client, "LOCAL_MODE", True)
     assert ag.McpIdTokenProvider("https://mcp.example")() == {}
 
 
@@ -181,8 +182,8 @@ def http_mcp_server(tmp_path):
 @pytest.mark.asyncio
 async def test_agent_toolset_calls_tools_over_http(http_mcp_server, monkeypatch):
     """The agent's scoped toolset lists only its filtered tools and calls them over HTTP."""
-    monkeypatch.setattr(ag, "MCP_SERVER_URL", http_mcp_server)
-    monkeypatch.setattr(ag, "_mcp_header_provider", None)
+    monkeypatch.setattr(mcp_client, "MCP_SERVER_URL", http_mcp_server)
+    monkeypatch.setattr(mcp_client, "_mcp_header_provider", None)
     toolset = ag.create_mcp_toolset(
         ["create_rich_ticket_id", "generate_signed_url"], toolset_name="soc_mcp"
     )

@@ -178,7 +178,7 @@ def test_default_mcp_timeout_is_raised_above_adk_default():
 )
 def test_cloud_mode_rejects_disallowed_uris(monkeypatch, uri):
     monkeypatch.setenv("LOCAL_MODE", "false")
-    with patch("adk_agent.tools.get_genai_client") as mock_client:
+    with patch("adk_agent.tools.clients.get_genai_client") as mock_client:
         res = get_visual_analysis_for_user(uri)
         mock_client.assert_not_called()
     assert res["security_flags"]["evidence_unavailable"] is True
@@ -202,7 +202,7 @@ def test_cloud_mode_accepts_screenshots_bucket_uri(monkeypatch):
     monkeypatch.setenv("LOCAL_MODE", "false")
     client = MagicMock()
     client.models.generate_content.return_value.text = "Benign developer activity."
-    with patch("adk_agent.tools.get_genai_client", return_value=client):
+    with patch("adk_agent.tools.clients.get_genai_client", return_value=client):
         res = get_visual_analysis_for_user(f"gs://{SCREENSHOTS_BUCKET}/u.lewis.png")
     client.models.generate_content.assert_called_once()
     assert res["security_flags"]["evidence_unavailable"] is False
@@ -214,7 +214,7 @@ def test_cloud_mode_empty_gemini_answer_is_unavailable(monkeypatch):
     client = MagicMock()
     client.models.generate_content.return_value.text = ""
     ctx = _ctx()
-    with patch("adk_agent.tools.get_genai_client", return_value=client):
+    with patch("adk_agent.tools.clients.get_genai_client", return_value=client):
         get_visual_analysis_for_user(
             f"gs://{SCREENSHOTS_BUCKET}/u.lewis.png", tool_context=ctx
         )
@@ -236,7 +236,9 @@ def test_local_mode_still_reads_file_uri_ocr(monkeypatch):
 
 def test_gcs_uri_lookup_bigquery_error_fails_closed(monkeypatch):
     monkeypatch.setenv("LOCAL_MODE", "false")
-    with patch("adk_agent.tools.get_bq_client", side_effect=RuntimeError("denied")):
+    with patch(
+        "adk_agent.tools.clients.get_bq_client", side_effect=RuntimeError("denied")
+    ):
         res = get_gcs_uri_for_user("u.lewis")
     assert res["security_flags"]["evidence_unavailable"] is True
     assert "gcs_uri" not in res
@@ -248,7 +250,7 @@ def test_gcs_uri_lookup_returns_structured_uri(monkeypatch):
     row.gcs_uri = f"gs://{SCREENSHOTS_BUCKET}/u.lewis.png"
     bq = MagicMock()
     bq.query.return_value.result.return_value = [row]
-    with patch("adk_agent.tools.get_bq_client", return_value=bq):
+    with patch("adk_agent.tools.clients.get_bq_client", return_value=bq):
         res = get_gcs_uri_for_user("u.lewis")
     assert res == {
         "gcs_uri": f"gs://{SCREENSHOTS_BUCKET}/u.lewis.png",
@@ -258,7 +260,7 @@ def test_gcs_uri_lookup_returns_structured_uri(monkeypatch):
 
 def test_gcs_uri_lookup_local_mode_skips_bigquery(monkeypatch):
     monkeypatch.setenv("LOCAL_MODE", "true")
-    with patch("adk_agent.tools.get_bq_client") as mock_bq:
+    with patch("adk_agent.tools.clients.get_bq_client") as mock_bq:
         res = get_gcs_uri_for_user("u.lewis")
         mock_bq.assert_not_called()
     assert res["gcs_uri"] == f"gs://{SCREENSHOTS_BUCKET}/u.lewis.png"

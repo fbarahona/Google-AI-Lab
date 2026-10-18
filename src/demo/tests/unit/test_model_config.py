@@ -49,8 +49,10 @@ def test_project_id_fallback_to_project_id_env(monkeypatch):
     monkeypatch.setattr("dotenv.load_dotenv", lambda *args, **kwargs: None)
     monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
     monkeypatch.setenv("PROJECT_ID", "custom-fallback-project")
-    reloaded_tools = importlib.reload(tools)
-    assert reloaded_tools.PROJECT_ID == "custom-fallback-project"
+    import adk_agent.settings as settings
+
+    reloaded_settings = importlib.reload(settings)
+    assert reloaded_settings.PROJECT_ID == "custom-fallback-project"
     # Restore original module state
     monkeypatch.undo()
-    importlib.reload(tools)
+    importlib.reload(settings)

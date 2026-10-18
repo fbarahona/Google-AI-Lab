@@ -476,7 +476,7 @@ uv run pytest src/demo/tests/unit/test_privacy_guard.py -v
 The multi-agent framework implements deterministic privacy guardrails to protect corporate employee privacy, prevent data exfiltration, and sanitize personal data without compromising cybersecurity threat investigation:
 
 ### 1. Google Search Privacy: Input Minimization plus Query Audit
-* **Location:** [`adk_agent/agent.py`](../adk_agent/agent.py) (`search_input_minimization_callback`, `search_query_audit_callback`) and [`adk_agent/privacy_guard.py`](../adk_agent/privacy_guard.py).
+* **Location:** [`adk_agent/guardrails/search_privacy.py`](../adk_agent/guardrails/search_privacy.py) (`search_input_minimization_callback`, `search_query_audit_callback`) and [`adk_agent/privacy_guard.py`](../adk_agent/privacy_guard.py).
 * **Problem Addressed:** A prompt instruction such as *"do not search internal names"* is not a control. An adversarial alert or a model mistake can send corporate usernames, internal hostnames or private network topology to an external search engine.
 * **Why not a tool callback:** `google_search` is a Gemini built-in tool. Gemini writes and runs the queries itself, inside the model call, so ADK never sees a function call and a `before_tool_callback` never fires. The control has to act on what the model can see.
 * **Architectural Defense:**
@@ -497,8 +497,8 @@ The multi-agent framework implements deterministic privacy guardrails to protect
   * **External egress (Google Search):** strictest. The search model only sees public IPs, and its queries are audited (§1).
   * **Internal analyst audience (OCR evidence, tickets):** internal IPs, hostnames and the investigated user stay visible, because they are the evidence an analyst works from (lateral movement, source host). Only third-party personal data and secrets are masked.
 * **Masking Touchpoints:**
-  * **Desktop OCR Forensics ([`adk_agent/tools.py`](../adk_agent/tools.py)):** the deterministic prompt-injection scan runs on the raw OCR text first, so masking can never hide an injection phrase; the text is then masked before it enters agent prompts or session state.
-  * **Ticket text ([`adk_agent/tools.py`](../adk_agent/tools.py)):** the agent's rationale and the structured report are masked in `dispatch_to_soc_ticketing_system`, `escalate_to_human`, `log_false_positive` and `auto_escalate_unresolved_alert` before they reach BigQuery or the analyst queue. Structured fields (user, device, source IP) and the IOC list are evidence and are kept.
+  * **Desktop OCR Forensics ([`adk_agent/tools/visual.py`](../adk_agent/tools/visual.py)):** the deterministic prompt-injection scan runs on the raw OCR text first, so masking can never hide an injection phrase; the text is then masked before it enters agent prompts or session state.
+  * **Ticket text ([`adk_agent/tools/ticketing.py`](../adk_agent/tools/ticketing.py)):** the agent's rationale and the structured report are masked in `dispatch_to_soc_ticketing_system`, `escalate_to_human`, `log_false_positive` and `auto_escalate_unresolved_alert` before they reach BigQuery or the analyst queue. Structured fields (user, device, source IP) and the IOC list are evidence and are kept.
 * **Precision:** phone numbers must have separators, so process IDs, byte counts and epoch timestamps are not redacted; IPv4 and IPv6 are both classified (public vs. private/ULA/link-local).
 * **Enterprise Google Cloud DLP Extension:** In enterprise production, the engine can be paired with Google Cloud Sensitive Data Protection (DLP API) for automated classification across regional data governance policies.
 
@@ -510,16 +510,16 @@ To ensure the primary objective of investigating security alerts and malicious t
 
 ## 8. Agent Guardrails: Deterministic Controls Around the Model
 
-The model decides what to investigate and how to summarize it. It does not get the final word on whether an alert is closed. Each control below is ordinary Python in [`adk_agent/agent.py`](../adk_agent/agent.py) that runs on every investigation, whatever the model says.
+The model decides what to investigate and how to summarize it. It does not get the final word on whether an alert is closed. Each control below is ordinary Python in [`adk_agent/guardrails/`](../adk_agent/guardrails/) that runs on every investigation, whatever the model says.
 
 | Control | Where | What it enforces |
 | :--- | :--- | :--- |
-| **Security gate** | `security_gate_callback` (before every ticketing tool call) | Blocks `log_false_positive` when the screenshot showed a prompt injection, when telemetry recorded malicious indicators, when any evidence tool failed, or when telemetry or visual evidence was never gathered. The model is told to escalate instead. An escalation with injection or malicious indicators is forced to `CRITICAL`. |
-| **Fail-closed evidence** | `sync_mcp_security_state_callback`, `mcp_tool_error_callback` | An evidence tool that errors, times out (90 s, `MCP_TOOL_TIMEOUT_SECONDS`) or returns no structured security flags marks evidence unavailable, which the gate treats as a reason to escalate. Skipping an evidence tool has the same effect. |
+| **Security gate** | `security_gate_callback` in [`security_gate.py`](../adk_agent/guardrails/security_gate.py) (before every ticketing tool call) | Blocks `log_false_positive` when the screenshot showed a prompt injection, when telemetry recorded malicious indicators, when any evidence tool failed, or when telemetry or visual evidence was never gathered. The model is told to escalate instead. An escalation with injection or malicious indicators is forced to `CRITICAL`. |
+| **Fail-closed evidence** | `sync_mcp_security_state_callback`, `mcp_tool_error_callback` in [`evidence_state.py`](../adk_agent/guardrails/evidence_state.py) | An evidence tool that errors, times out (90 s, `MCP_TOOL_TIMEOUT_SECONDS`) or returns no structured security flags marks evidence unavailable, which the gate treats as a reason to escalate. Skipping an evidence tool has the same effect. |
 | **Flags only tighten** | `_EVIDENCE_FLAGS`, `_LIFECYCLE_FLAG_BY_TOOL` | Any tool may raise a flag that makes the gate stricter. A flag that marks an alert resolved can only be set by the tool that actually performed that resolution, so tool output cannot fake a closure. |
-| **Default deny** | `default_deny_soc_callback` (after the ticketing agent) | If the model finishes without dispatching, escalating or closing the alert, the platform escalates it to a human through the platform-only MCP tool `auto_escalate_unresolved_alert`. |
+| **Default deny** | `default_deny_soc_callback` in [`security_gate.py`](../adk_agent/guardrails/security_gate.py) (after the ticketing agent) | If the model finishes without dispatching, escalating or closing the alert, the platform escalates it to a human through the platform-only MCP tool `auto_escalate_unresolved_alert`. |
 | **Alert identity pinning** | `_pin_alert_identity`, `_assign_ticket_id` | User, device, source IP, score and ticket ID on the ticket come from the original alert, not from the model. A redelivered alert maps to the same ticket. |
-| **Prompt-injection scan** | `get_visual_analysis_for_user` in [`adk_agent/tools.py`](../adk_agent/tools.py) | Screenshot OCR text is scanned for injection phrases before PII masking, so masking cannot hide one. |
-| **Webhook caller check** | `verify_incoming_oidc_token` in [`adk_agent/fast_api_app.py`](../adk_agent/fast_api_app.py) | The agent webhook accepts only Pub/Sub pushes signed for `pubsub-invoker-sa`, on top of Cloud Run IAM. |
+| **Prompt-injection scan** | `get_visual_analysis_for_user` in [`adk_agent/tools/visual.py`](../adk_agent/tools/visual.py) | Screenshot OCR text is scanned for injection phrases before PII masking, so masking cannot hide one. |
+| **Webhook caller check** | `verify_incoming_oidc_token` in [`adk_agent/app_utils/oidc.py`](../adk_agent/app_utils/oidc.py) | The agent webhook accepts only Pub/Sub pushes signed for `pubsub-invoker-sa`, on top of Cloud Run IAM. |
 
 These controls are exercised without a cloud project by the end-to-end test in `src/demo/tests/e2e/` (a scripted model deliberately tries to close the injection and false-positive scenarios) and by the unit tests `test_evidence_fail_closed.py`, `test_mcp_callbacks.py` and `test_security_hardening.py`. CI runs both on every pull request.
