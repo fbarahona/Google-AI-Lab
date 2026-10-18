@@ -273,9 +273,11 @@ def test_current_view_classifies_with_the_model_constants():
 
 
 def test_service_reads_tickets_only_through_the_current_view():
-    source = (
-        Path(__file__).resolve().parents[2] / "soc_ticketing" / "ticketing_service.py"
-    ).read_text()
+    package = Path(__file__).resolve().parents[2] / "soc_ticketing"
+    source = "\n".join(
+        path.read_text()
+        for path in [package / "ticketing_service.py", *package.glob("service/*.py")]
+    )
     assert ".soc_tickets`" not in source  # every read goes through soc_tickets_current
     assert "PARSE_TIMESTAMP" not in source  # created_at is a TIMESTAMP now
 
