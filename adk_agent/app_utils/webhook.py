@@ -273,8 +273,14 @@ async def handle_pubsub_trigger(request: Request):
             },
         )
     except Exception as exc:
-        logger.error(
-            "Pub/Sub agent investigation failed for session %s: %s", session_id, exc
+        # logger.exception keeps the traceback: the 500 in the request log carries no
+        # error detail, so this line is the only record of what failed.
+        logger.exception(
+            "Pub/Sub agent investigation failed for session %s (alert %s): %s: %s",
+            session_id,
+            alert_id,
+            type(exc).__name__,
+            exc,
         )
         # On failure: reset status back to RETRY_PENDING so Pub/Sub retries are not rejected with 409
         # while preventing the scheduled threat detector from republishing the alert prematurely.
