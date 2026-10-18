@@ -341,7 +341,7 @@ Open **`http://localhost:8080/dev-ui/`** for the playground, pick `adk_agent`, a
 
 ### Agent Webhook: Not Callable by Humans
 
-The agent's `/apps/adk_agent/trigger/pubsub` endpoint is the Pub/Sub push target, and nothing else may call it. Cloud Run checks the ID token's audience (a plain `gcloud auth print-identity-token` user token gets `401`), and the app itself then rejects any caller other than `pubsub-invoker-sa` with `403` (`verify_incoming_oidc_token` in `adk_agent/fast_api_app.py`). The body must also be a Pub/Sub push envelope carrying an alert. A hand-made `curl` therefore cannot succeed, by design.
+The agent's `/apps/adk_agent/trigger/pubsub` endpoint is the Pub/Sub push target, and nothing else may call it. Cloud Run checks the ID token's audience (a plain `gcloud auth print-identity-token` user token gets `401`), and the app itself then rejects any caller other than `pubsub-invoker-sa` with `403` (`verify_incoming_oidc_token` in `adk_agent/app_utils/oidc.py`). The body must also be a Pub/Sub push envelope carrying an alert. A hand-made `curl` therefore cannot succeed, by design.
 
 To exercise the webhook, run the [Live Cloud Verification Workflow](#4-live-cloud-verification-workflow): the detector publishes the alert, Pub/Sub pushes it as `pubsub-invoker-sa`, and the alert reaching `DONE` in Step F proves the agent received and adjudicated it. The agent's request logs are in Cloud Logging:
 

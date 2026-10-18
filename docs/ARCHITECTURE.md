@@ -91,8 +91,8 @@ What runs where in the cloud:
 | Telemetry bus | Pub/Sub topics and BigQuery subscriptions | `src/demo/terraform/pubsub.tf` |
 | Warehouse and system of record | BigQuery dataset `Cymbal_Cyber` | `src/demo/terraform/bigquery.tf` |
 | Threat detector | Cloud Run job `threat-detector`, started by Cloud Scheduler | [`adk_agent/threat_detector.py`](../adk_agent/threat_detector.py) |
-| Multi-agent investigator | Cloud Run service `cymbal-cyber-adk-agent` | [`adk_agent/agent.py`](../adk_agent/agent.py), [`adk_agent/fast_api_app.py`](../adk_agent/fast_api_app.py) |
-| Tool service | Cloud Run service `cymbal-cyber-mcp` | [`adk_agent/mcp_server/`](../adk_agent/mcp_server/), [`adk_agent/tools.py`](../adk_agent/tools.py) |
+| Multi-agent investigator | Cloud Run service `cymbal-cyber-adk-agent` | [`adk_agent/agent.py`](../adk_agent/agent.py), [`adk_agent/guardrails/`](../adk_agent/guardrails/), [`adk_agent/fast_api_app.py`](../adk_agent/fast_api_app.py) |
+| Tool service | Cloud Run service `cymbal-cyber-mcp` | [`adk_agent/mcp_server/`](../adk_agent/mcp_server/), [`adk_agent/tools/`](../adk_agent/tools/) |
 | Analyst console | Cloud Run service `cymbal-cyber-soc-console` | [`src/demo/soc_ticketing/`](../src/demo/soc_ticketing/) |
 | Evidence storage | Cloud Storage (screenshots, escalations, raw logs) | `src/demo/terraform/storage.tf` |
 | Models | Gemini through Vertex AI | `GEMINI_MODEL`, default `gemini-3.8-flash` |
@@ -224,8 +224,8 @@ Registered tools (8 agent tools and 1 platform tool):
 
 ## 6. SOC ticketing and analyst console
 
-- **Ticketing service** ([`ticketing_service.py`](../src/demo/soc_ticketing/ticketing_service.py)): ticket creation, BigQuery storage (`soc_tickets`, `adk_threat_assessment`), the Cloud Storage escalation queue, and fail-closed writes (a failed write is an error, never a silent success).
-- **Analyst console** ([`streamlit_soc_console.py`](../src/demo/soc_ticketing/streamlit_soc_console.py)): a Streamlit app with a live triage queue, a ticket dossier (agent findings, screenshot evidence through signed URLs, recommendations), an archive of auto-closed false positives, KPI dashboards, and an "Ask the Agent" assistant for questions about a ticket.
+- **Ticketing service** ([`ticketing_service.py`](../src/demo/soc_ticketing/ticketing_service.py), parts in [`service/`](../src/demo/soc_ticketing/service/)): ticket creation, BigQuery storage (`soc_tickets`, `adk_threat_assessment`), the Cloud Storage escalation queue, and fail-closed writes (a failed write is an error, never a silent success).
+- **Analyst console** ([`streamlit_soc_console.py`](../src/demo/soc_ticketing/streamlit_soc_console.py), pages in [`console/`](../src/demo/soc_ticketing/console/)): a Streamlit app with a live triage queue, a ticket dossier (agent findings, screenshot evidence through signed URLs, recommendations), an archive of auto-closed false positives, KPI dashboards, and an "Ask the Agent" assistant for questions about a ticket.
 - **Demo controls** ([`demo_actions.py`](../src/demo/soc_ticketing/demo_actions.py)): "Inject scenario" and "Stream logs" publish to the raw topic as the console's own service account, so injected events take the real path (subscription, detector, agent). A scripted ticket marked **Simulated** is added so there is something to triage immediately; it is badged and excluded from every metric.
 
 ---
@@ -263,14 +263,18 @@ The [CI workflow](../.github/workflows/ci.yml) runs on pushes and pull requests 
 ```text
 .
 ├── adk_agent/                      # ADK multi-agent package (agents-cli agent_directory)
-│   ├── agent.py                    # Orchestrator, investigation team, 4 sub-agents, guardrail callbacks
-│   ├── tools.py                    # Tool implementations behind the MCP server
+│   ├── agent.py                    # Composition root: orchestrator, investigation team, 4 sub-agents
+│   ├── guardrails/                 # Security gate, fail-closed evidence state, search privacy, lifecycle
+│   ├── prompts.py                  # Sub-agent instructions
+│   ├── mcp_client.py               # Scoped MCP toolsets, stdio or HTTP with an ID token
+│   ├── settings.py                 # Project, dataset and model settings shared by agent and tools
+│   ├── tools/                      # Tool implementations behind the MCP server, one module per data source
 │   ├── privacy_guard.py            # Public-IP extraction, search audit rules, PII masking
 │   ├── mcp_server/                 # MCP tool server ("cymbal-cyber-mcp"): stdio or HTTP
 │   ├── threat_detector.py          # Scheduled micro-batch detector (Cloud Run job)
 │   ├── detection_rules.py          # Python twin of the BigQuery detection UDFs
 │   ├── fast_api_app.py             # FastAPI backend (Pub/Sub webhook)
-│   └── app_utils/                  # Service and A2A helpers
+│   └── app_utils/                  # Webhook, OIDC check, Pub/Sub parsing, dedup, alert status, A2A
 ├── src/demo/
 │   ├── data_generator/             # Synthetic log generator and threat scenarios
 │   ├── data_pipeline/              # Continuous query, Dataflow and GCS loader (optional paths)
