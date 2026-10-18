@@ -28,6 +28,7 @@ from datetime import UTC, datetime
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 from google.adk.runners import Runner
+from google.genai import errors as genai_errors
 from google.genai import types
 
 from adk_agent.app_utils.alert_status import (
@@ -84,6 +85,17 @@ async def _run_agent_investigation(
 
     logger.info("Pub/Sub agent investigation completed for session %s", session_id)
     return "\n".join(outputs)
+
+
+def _is_model_rate_limited(exc: BaseException) -> bool:
+    """True when the run failed on a Gemini 429 (RESOURCE_EXHAUSTED), however wrapped."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, genai_errors.APIError) and exc.code == 429:
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
 
 
 async def handle_pubsub_trigger(request: Request):
@@ -273,15 +285,26 @@ async def handle_pubsub_trigger(request: Request):
             },
         )
     except Exception as exc:
-        # logger.exception keeps the traceback: the 500 in the request log carries no
-        # error detail, so this line is the only record of what failed.
-        logger.exception(
-            "Pub/Sub agent investigation failed for session %s (alert %s): %s: %s",
-            session_id,
-            alert_id,
-            type(exc).__name__,
-            exc,
-        )
+        rate_limited = _is_model_rate_limited(exc)
+        if rate_limited:
+            # Vertex AI capacity, not a bug: the model already retried with backoff.
+            # Answer 429 so Pub/Sub redelivers on its retry policy's backoff.
+            logger.warning(
+                "Pub/Sub agent investigation for session %s (alert %s) hit Vertex AI "
+                "429 RESOURCE_EXHAUSTED after model retries; Pub/Sub will redeliver.",
+                session_id,
+                alert_id,
+            )
+        else:
+            # logger.exception keeps the traceback: the 500 in the request log carries
+            # no error detail, so this line is the only record of what failed.
+            logger.exception(
+                "Pub/Sub agent investigation failed for session %s (alert %s): %s: %s",
+                session_id,
+                alert_id,
+                type(exc).__name__,
+                exc,
+            )
         # On failure: reset status back to RETRY_PENDING so Pub/Sub retries are not rejected with 409
         # while preventing the scheduled threat detector from republishing the alert prematurely.
         if alert_id:
@@ -294,6 +317,15 @@ async def handle_pubsub_trigger(request: Request):
                     "Could not reset alert status to RETRY_PENDING on failure: %s",
                     reset_err,
                 )
+        if rate_limited:
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "status": "RATE_LIMITED",
+                    "message": "Model capacity exhausted; Pub/Sub will retry.",
+                    "alert_id": alert_id,
+                },
+            )
         raise HTTPException(
             status_code=500,
             detail="Internal server error during alert investigation.",

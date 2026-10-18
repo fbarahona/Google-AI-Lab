@@ -281,7 +281,7 @@ To enforce the principle of least privilege, background automation is split into
 
 ### 4B. ADK Multi-Agent Runtime Identity (`cymbal-adk-agent-sa`)
 - **Purpose:** Runs the ADK multi-agent team and the Pub/Sub webhook. Every tool call goes to the MCP tool service (4B1).
-- **Project Roles:** `roles/aiplatform.user` (the agents' Gemini calls through Vertex AI; there is no API key), `roles/bigquery.jobUser` (alert status queries), `roles/logging.logWriter`, `roles/serviceusage.serviceUsageConsumer`.
+- **Project Roles:** `roles/aiplatform.user` (the agents' Gemini calls through Vertex AI; there is no API key), `roles/bigquery.jobUser` (alert status queries), `roles/logging.logWriter`, `roles/telemetry.tracesWriter` and `roles/monitoring.metricWriter` (ADK OpenTelemetry spans and metrics to Cloud Trace and Cloud Monitoring; write-only), `roles/serviceusage.serviceUsageConsumer`.
 - **Resource Bindings (Least-Privilege Scoped):**
   - Table-level `roles/bigquery.dataEditor` on `alerts` (dedupe and status updates) and `agent_events` (ADK analytics plugin rows; its per-event views are disabled because they would need dataset-level create).
   - `roles/run.invoker` on `cymbal-cyber-mcp`, its only path to evidence and tickets.

@@ -84,11 +84,16 @@ resource "google_service_account" "agent_sa" {
 # Project-level least-privilege roles for Agent Runtime SA. aiplatform.user serves the
 # agents' Gemini calls through Vertex AI; bigquery.jobUser runs the alert status queries.
 locals {
+  # telemetry.tracesWriter and monitoring.metricWriter: ADK exports its OpenTelemetry
+  # spans and metrics to telemetry.googleapis.com (otel_to_cloud); without them every
+  # export batch is a 403 in the service log.
   agent_project_roles = toset([
     "roles/aiplatform.user",
     "roles/bigquery.jobUser",
     "roles/logging.logWriter",
+    "roles/monitoring.metricWriter",
     "roles/serviceusage.serviceUsageConsumer",
+    "roles/telemetry.tracesWriter",
   ])
 }
 
