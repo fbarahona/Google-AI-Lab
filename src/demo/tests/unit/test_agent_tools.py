@@ -58,7 +58,7 @@ def test_get_entity_behavioral_profile():
         assert "risky_file_transfers_24h" in profile
 
 
-@patch("adk_agent.tools.get_bq_client")
+@patch("adk_agent.tools.clients.get_bq_client")
 def test_get_entity_behavioral_profile_cloud_mode_success(mock_get_bq):
     """Verify that in cloud mode, query results are properly converted to metrics dict."""
     mock_bq = MagicMock()
@@ -194,8 +194,8 @@ def test_generate_signed_url_invalid_uri():
     assert "signed_url" not in err2
 
 
-@patch("adk_agent.tools.storage.Client")
-@patch("adk_agent.tools.google.auth.default")
+@patch("adk_agent.tools.visual.storage.Client")
+@patch("adk_agent.tools.visual.google.auth.default")
 def test_generate_signed_url_failure_returns_explicit_error(
     mock_auth_default, mock_storage_client_cls
 ):
@@ -218,8 +218,8 @@ def test_generate_signed_url_failure_returns_explicit_error(
     assert "signed_url" not in result
 
 
-@patch("adk_agent.tools.storage.Client")
-@patch("adk_agent.tools.google.auth.default")
+@patch("adk_agent.tools.visual.storage.Client")
+@patch("adk_agent.tools.visual.google.auth.default")
 def test_generate_signed_url_success(mock_auth_default, mock_storage_client_cls):
     """Verify that a successful signing operation returns the signed URL."""
     mock_auth_default.return_value = (MagicMock(), "project-id")
@@ -327,7 +327,7 @@ def test_log_false_positive_failed_write_does_not_set_flag(tmp_path, monkeypatch
     mock_ctx = MagicMock()
     mock_ctx.state = State({}, {})
     payload = '{"user_id": "l.taylor", "total_2_min_threat_score": 120}'
-    with patch("adk_agent.tools.get_soc_service", return_value=service):
+    with patch("adk_agent.tools.clients.get_soc_service", return_value=service):
         res = log_false_positive(payload, "Benign admin noise", tool_context=mock_ctx)
 
     assert res["status"] == "ERROR"
@@ -346,7 +346,7 @@ def test_log_false_positive_archives_auto_closed_ticket(tmp_path, monkeypatch):
     mock_ctx = MagicMock()
     mock_ctx.state = State({}, {})
     payload = '{"user_id": "l.taylor", "total_2_min_threat_score": 120}'
-    with patch("adk_agent.tools.get_soc_service", return_value=service):
+    with patch("adk_agent.tools.clients.get_soc_service", return_value=service):
         res = log_false_positive(
             payload,
             "Benign admin noise",
@@ -450,7 +450,7 @@ async def test_default_deny_callback_permits_clean_false_positive():
     assert state_obj.get("escalation_dispatched") is not True
 
 
-@patch("adk_agent.tools.get_bq_client")
+@patch("adk_agent.tools.clients.get_bq_client")
 def test_get_entity_behavioral_profile_cloud_mode_fails_closed(mock_get_bq):
     """Verify that in cloud mode (LOCAL_MODE=false), BigQuery failure returns ERROR and sets evidence_unavailable only."""
     mock_get_bq.side_effect = Exception(
@@ -501,7 +501,7 @@ def test_escalate_to_human_non_blocking():
     mock_service = MagicMock()
     mock_service.create_and_dispatch_ticket.return_value = "Ticket dispatched to queue"
 
-    with patch("adk_agent.tools.get_soc_service", return_value=mock_service):
+    with patch("adk_agent.tools.clients.get_soc_service", return_value=mock_service):
         start = time.time()
         payload = '{"user_id": "u.lewis", "total_2_min_threat_score": 1500}'
         mock_ctx = MagicMock()

@@ -164,7 +164,7 @@ async def test_mcp_server_call_dispatch_to_soc():
     mock_service = MagicMock()
     mock_service.create_and_dispatch_ticket.return_value = "DISPATCHED_TO_QUEUES"
 
-    with patch("adk_agent.tools.get_soc_service", return_value=mock_service):
+    with patch("adk_agent.tools.clients.get_soc_service", return_value=mock_service):
         res = await mcp_server.call_tool(
             "dispatch_to_soc_ticketing_system",
             {
@@ -265,7 +265,7 @@ async def test_mcp_tool_updates_real_adk_state_on_ticket_dispatch(monkeypatch):
     # Assert default-deny callback is correctly suppressed
     callback_ctx = MagicMock()
     callback_ctx.state = real_state
-    with patch("adk_agent.tools.get_soc_service") as mock_soc:
+    with patch("adk_agent.tools.clients.get_soc_service") as mock_soc:
         await default_deny_soc_callback(callback_ctx)
         mock_soc.assert_not_called()
     assert real_state.get("escalation_dispatched") is not True
@@ -312,7 +312,7 @@ async def test_mcp_tool_updates_real_adk_state_on_false_positive(monkeypatch):
     # Assert default-deny does not escalate
     callback_ctx = MagicMock()
     callback_ctx.state = real_state
-    with patch("adk_agent.tools.get_soc_service") as mock_soc:
+    with patch("adk_agent.tools.clients.get_soc_service") as mock_soc:
         await default_deny_soc_callback(callback_ctx)
         mock_soc.assert_not_called()
     assert real_state.get("escalation_dispatched") is not True
