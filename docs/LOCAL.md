@@ -12,7 +12,7 @@ Everything in this guide runs on your machine with **no Google Cloud project and
 - **About 600 MB of free disk.** The code and demo data are under 10 MB; almost all of it is the Python dependencies `uv sync` installs into `.venv` (Google Cloud and ADK libraries, pyarrow, pandas, Streamlit)
 - **Google Cloud SDK** with Application Default Credentials, only if you want to use a live Gemini model through Vertex AI or run the integration tests
 
-**GitHub Codespaces / Dev Containers:** the repo's `.devcontainer/` installs Python 3.12, uv, the Google Cloud SDK and Terraform 1.16.5 and runs `uv sync` when the container is created, so you can skip to step 3 (copy `.env` first if you need it). Sign in with `gcloud auth application-default login` only when you need Google Cloud.
+**GitHub Codespaces / Dev Containers:** the repo's `.devcontainer/` installs Python 3.12, uv, the Google Cloud CLI (with the Cloud Run proxy), Terraform 1.16.5, Node.js and the Gemini CLI, and runs `uv sync` when the container is created, so you can skip to step 3 (copy `.env` first if you need it). Sign in with `gcloud auth application-default login` only when you need Google Cloud. Behind a TLS-inspecting proxy (Docker Desktop on a corporate network), put the proxy's root certificate in `.devcontainer/certs/` before building; Codespaces needs none.
 
 ## 2. Install and configure
 
