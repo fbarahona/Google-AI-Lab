@@ -17,9 +17,9 @@ Contents:
 
 ## 1. End-to-end flow
 
-[![System Architecture (click to play the video)](../src/demo/system_architecture_poster.png)](../src/demo/system_architecture.mp4)
+https://github.com/user-attachments/assets/b57df497-0734-4f5c-a8de-8aa93e8ef88e
 
-*Click the diagram to play the [architecture walkthrough video](../src/demo/system_architecture.mp4) (10 s).*
+
 
 ```
                                   ┌───────────────────────────┐
