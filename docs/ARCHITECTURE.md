@@ -97,7 +97,7 @@ What runs where in the cloud:
 | Tool service | Cloud Run service `cymbal-cyber-mcp` | [`adk_agent/mcp_server/`](../adk_agent/mcp_server/), [`adk_agent/tools/`](../adk_agent/tools/) |
 | Analyst console | Cloud Run service `cymbal-cyber-soc-console` | [`src/demo/soc_ticketing/`](../src/demo/soc_ticketing/) |
 | Evidence storage | Cloud Storage (screenshots, escalations, raw logs) | `src/demo/terraform/storage.tf` |
-| Models | Gemini through Vertex AI | `GEMINI_MODEL`, default `gemini-3.8-flash` |
+| Models | Gemini through Vertex AI, with retry and a fallback model on 429/5xx ([`model_resilience.py`](../adk_agent/model_resilience.py)) | `GEMINI_MODEL`, default `gemini-3.8-flash`; `GEMINI_FALLBACK_MODEL`, default `gemini-3.8-flash-lite` |
 
 Every service scales to zero. Nothing bills while no telemetry arrives except storage.
 

@@ -18,6 +18,7 @@ from google.cloud import storage
 from google.genai import types
 
 from adk_agent import detection_rules as rules
+from adk_agent.model_resilience import generate_content_with_fallback
 from adk_agent.privacy_guard import mask_pii
 from adk_agent.settings import DATASET_ID, MODEL_NAME, PROJECT_ID, REPO_ROOT
 from adk_agent.tools import clients
@@ -158,7 +159,8 @@ def get_visual_analysis_for_user(
     else:
         try:
             client = clients.get_genai_client()
-            response = client.models.generate_content(
+            response = generate_content_with_fallback(
+                client,
                 model=MODEL_NAME,
                 contents=[
                     types.Part.from_uri(file_uri=gcs_uri, mime_type="image/png"),
