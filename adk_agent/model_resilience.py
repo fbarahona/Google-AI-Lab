@@ -31,8 +31,10 @@ logger = logging.getLogger(__name__)
 RETRYABLE_STATUS_CODES = (408, 429, 500, 502, 503, 504)
 
 GEMINI_RETRY_ATTEMPTS = int(os.getenv("GEMINI_RETRY_ATTEMPTS", "5"))
+# The previous Flash generation: a separate model, so it draws on its own capacity
+# (listed in Model Garden for the project on 2026-10-26).
 # An empty value or "none" turns the fallback off.
-FALLBACK_MODEL_NAME = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.8-flash-lite")
+FALLBACK_MODEL_NAME = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.7-flash")
 FALLBACK_COOLDOWN_SECONDS = float(os.getenv("GEMINI_FALLBACK_COOLDOWN_SECONDS", "60"))
 
 
