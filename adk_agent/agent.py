@@ -9,16 +9,13 @@ Defines the structure and orchestration logic of the ADK multi-agent system:
 - Sub-Agent 4: soc_ticketing_agent (Consolidates findings and passes tickets to the SOC ticketing system)
 """
 
-import os
 import warnings
 
 # --- ADK Imports ---
 from google.adk.agents import Agent, ParallelAgent, SequentialAgent
 from google.adk.apps import App
-from google.adk.models.google_llm import Gemini
 from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.tools import google_search
-from google.genai import types
 
 try:
     from google.adk.plugins.bigquery_agent_analytics_plugin import (
@@ -79,6 +76,7 @@ from adk_agent.mcp_client import (  # noqa: F401
     mcp_audience,
     mcp_connection_params,
 )
+from adk_agent.model_resilience import GEMINI_RETRY_ATTEMPTS, build_gemini  # noqa: F401
 from adk_agent.prompts import (
     BQ_INVESTIGATION_INSTRUCTION,
     GOOGLE_SEARCH_INSTRUCTION,
@@ -97,22 +95,11 @@ from adk_agent.settings import (  # noqa: F401
 
 warnings.filterwarnings("ignore", category=UserWarning, module="vertexai")
 
-# Vertex AI answers 429 RESOURCE_EXHAUSTED when shared Gemini capacity is busy, and
-# without retries one 429 fails the whole investigation. Retrying with exponential
-# backoff and jitter (2, 4, 8, 16 s, capped at 30 s) absorbs short bursts inside the
-# request; a longer outage still fails and Pub/Sub redelivers with its own backoff.
-GEMINI_RETRY_ATTEMPTS = int(os.getenv("GEMINI_RETRY_ATTEMPTS", "5"))
-GEMINI_MODEL = Gemini(
-    model=MODEL_NAME,
-    retry_options=types.HttpRetryOptions(
-        attempts=GEMINI_RETRY_ATTEMPTS,
-        initial_delay=2.0,
-        max_delay=30.0,
-        exp_base=2.0,
-        jitter=1.0,
-        http_status_codes=[408, 429, 500, 502, 503, 504],
-    ),
-)
+# Vertex AI answers 429 RESOURCE_EXHAUSTED when shared Gemini capacity is busy. Every
+# sub-agent retries with backoff inside the request, then falls back to a secondary
+# model (adk_agent.model_resilience); a longer outage still fails and Pub/Sub
+# redelivers with its own backoff.
+GEMINI_MODEL = build_gemini(MODEL_NAME)
 warnings.filterwarnings("ignore", category=UserWarning, module="google.adk")
 
 

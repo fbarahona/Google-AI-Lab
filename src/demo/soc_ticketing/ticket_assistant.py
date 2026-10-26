@@ -17,6 +17,7 @@ APP_NAME = "soc_ticket_assistant"
 MODEL_NAME = os.getenv(
     "SOC_ASSISTANT_MODEL", os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 )
+ASSISTANT_RETRY_ATTEMPTS = int(os.getenv("SOC_ASSISTANT_RETRY_ATTEMPTS", "3"))
 
 # Fields worth showing the model; screenshots and internal bookkeeping are left out.
 _TICKET_FIELDS = (
@@ -85,13 +86,15 @@ def build_instruction(ticket: dict[str, Any]) -> str:
 
 
 def _build_model():
-    from google.adk.models import Gemini
+    from adk_agent.model_resilience import build_gemini
 
+    # An analyst is waiting on the answer, so fewer retries before the fallback model.
     if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
-        return Gemini(model=MODEL_NAME)
+        return build_gemini(MODEL_NAME, attempts=ASSISTANT_RETRY_ATTEMPTS)
     # The console has no API key on Cloud Run: use Vertex AI with its service account.
-    return Gemini(
-        model=MODEL_NAME,
+    return build_gemini(
+        MODEL_NAME,
+        attempts=ASSISTANT_RETRY_ATTEMPTS,
         client_kwargs={
             "vertexai": True,
             "project": os.getenv("GOOGLE_CLOUD_PROJECT")

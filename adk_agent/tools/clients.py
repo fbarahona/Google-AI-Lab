@@ -11,7 +11,9 @@ from typing import Any
 from google import genai
 from google.adk.tools import ToolContext
 from google.cloud import bigquery
+from google.genai import types
 
+from adk_agent.model_resilience import retry_options
 from adk_agent.settings import DATASET_ID, PROJECT_ID
 from src.demo.soc_ticketing.ticketing_service import SocTicketingService
 
@@ -37,10 +39,18 @@ _genai_client = None
 
 
 def get_genai_client():
+    """Vertex AI client for the screenshot tool, with retry and backoff.
+
+    Three attempts, not the agents' five: the tool answers over MCP within
+    MCP_TOOL_TIMEOUT_SECONDS, and the fallback model may need its own retries too.
+    """
     global _genai_client
     if _genai_client is None:
         _genai_client = genai.Client(
-            vertexai=True, project=PROJECT_ID, location=LOCATION
+            vertexai=True,
+            project=PROJECT_ID,
+            location=LOCATION,
+            http_options=types.HttpOptions(retry_options=retry_options(attempts=3)),
         )
     return _genai_client
 
